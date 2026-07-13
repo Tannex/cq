@@ -12,7 +12,7 @@ $ cq -c CUSTOMER.cpy -d customer.bin         # decode records to a JSON array
 $ cq -q 'select(.BALANCE < 0)' -c CUSTOMER.cpy -d customer.bin
 $ cq -where DTAR107-SALE -c DTAR107.cbl -d sales.bin
 $ zowe zos-files view data-set "HQ.CUSTOMER.DATA" --binary \
-    | cq -c CUSTOMER.cpy -d -
+    | cq -c CUSTOMER.cpy -
 ```
 
 ## Install
@@ -24,14 +24,14 @@ $ go install github.com/Tannex/cq@latest
 ## Usage
 
 ```
-cq [flags] -c COPYBOOK [-d DATA | DATA]
+cq [flags] -c COPYBOOK [-d DATA]
+cq [flags] -c COPYBOOK [DATA]
 ```
 
-With only `-c COPYBOOK`, cq prints the layout. Use either `-d DATA` or one
-trailing `DATA` argument to decode records; `-` reads data from stdin. The
-explicit `-d` form is preferred in scripts and examples. Records are
-fixed-length, derived from the copybook; use `-lrecl` if the physical records
-carry trailing padding.
+With only `-c COPYBOOK`, cq prints the layout. Use `-d DATA` for a named data
+file, or one trailing `DATA` argument to decode records. A trailing `-` is the
+canonical stdin form. Records are fixed-length, derived from the copybook; use
+`-lrecl` if the physical records carry trailing padding.
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
@@ -125,7 +125,7 @@ decoding:
 
 ```console
 $ zowe zos-files download data-set "HQ.COPYLIB(CUSTOMER)" --file CUSTOMER.cpy
-$ zowe zos-files view data-set "HQ.CUSTOMER.DATA" --binary | cq -c CUSTOMER.cpy -d -
+$ zowe zos-files view data-set "HQ.CUSTOMER.DATA" --binary | cq -c CUSTOMER.cpy -
 ```
 
 Everyday variations:
@@ -133,15 +133,15 @@ Everyday variations:
 ```console
 # Peek at the first few records of a big dataset
 $ zowe zos-files view data-set "HQ.CUSTOMER.DATA" --binary \
-    | cq -max 5 -pretty -c CUSTOMER.cpy -d -
+    | cq -max 5 -pretty -c CUSTOMER.cpy -
 
 # Pull only the sales out of a transaction file
 $ zowe zos-files view data-set "PROD.DAILY.TXNS" --binary \
-    | cq -where DTAR107-SALE -c DTAR107.cbl -d -
+    | cq -where DTAR107-SALE -c DTAR107.cbl -
 
 # Sum an amount field across the whole dataset
 $ zowe zos-files view data-set "PROD.DAILY.TXNS" --binary \
-    | cq -q '.["DTAR107-AMOUNT"]' -c DTAR107.cbl -d - | jq -s add
+    | cq -q '.["DTAR107-AMOUNT"]' -c DTAR107.cbl - | jq -s add
 
 # Download once, slice locally many times
 $ zowe zos-files download data-set "HQ.CUSTOMER.DATA" --binary --file customer.bin

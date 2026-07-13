@@ -4,7 +4,7 @@
 //
 //	cq -c CUSTOMER.cpy                             # layout as JSON
 //	cq -c CUSTOMER.cpy -d customer.bin | jq '.[0]' # decode records
-//	zowe zos-files view data-set "HQ.CUST" --binary | cq -c CUSTOMER.cpy -d -
+//	zowe zos-files view data-set "HQ.CUST" --binary | cq -c CUSTOMER.cpy -
 package main
 
 import (
@@ -53,7 +53,8 @@ func run() error {
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), `cq — jq for COBOL copybooks and EBCDIC data
 
-usage: cq [flags] -c COPYBOOK [-d DATA | DATA]
+usage: cq [flags] -c COPYBOOK [-d DATA]
+       cq [flags] -c COPYBOOK [DATA]
 
 With only -c COPYBOOK, prints the record layout (byte offset and length of
 every field) as JSON. With -d DATA, or one trailing DATA argument, decodes
@@ -70,7 +71,7 @@ examples:
   cq -q 'select(.BALANCE < 0)' -c CUSTOMER.cpy -d customer.bin
   cq -r -q '.["CUST-NAME"]' -c CUSTOMER.cpy -d customer.bin
   cq -where DTAR107-SALE -where 'not DTAR107-VOID' -c DTAR107.cbl -d sales.bin
-  zowe zos-files view data-set "HQ.CUSTOMER.DATA" --binary | cq -c CUSTOMER.cpy -d -
+  zowe zos-files view data-set "HQ.CUSTOMER.DATA" --binary | cq -c CUSTOMER.cpy -
 `)
 	}
 	fs.Parse(os.Args[1:])
