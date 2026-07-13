@@ -155,6 +155,9 @@ Create that file with the ordered library search path:
 }
 ```
 
+Run `cq config` to create this file when absent and open it in `$VISUAL`,
+`$EDITOR`, or the platform text editor.
+
 For `COPY ADDRESS.`, cq first requests `HQL.CPY.SRC(ADDRESS)`, then
 `HQL.COB.SRC(ADDRESS)`, stopping at the first successful result. Resolved
 members are cached for the command, nested `COPY` statements use the same

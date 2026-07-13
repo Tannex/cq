@@ -33,6 +33,13 @@ func main() {
 }
 
 func run() error {
+	if len(os.Args) > 1 && os.Args[1] == "config" {
+		if len(os.Args) != 2 {
+			return errors.New("usage: cq config")
+		}
+		return editConfig()
+	}
+
 	fs := flag.NewFlagSet("cq", flag.ExitOnError)
 	copybookPath := fs.String("c", "", "local copybook file")
 	copybookDSN := fs.String("copybook-dsn", "", "copybook data set or member to fetch through Zowe CLI")
@@ -57,10 +64,14 @@ func run() error {
 
 usage: cq [flags] (-c COPYBOOK | --copybook-dsn DSN[(MEMBER)])
                   [-d DATA | --data-dsn DSN | DATA]
+       cq config
 
 With only a copybook source, prints the record layout as JSON. A data source
 decodes fixed-length binary records into a UTF-8 JSON array. DSN sources are
 fetched through the installed Zowe CLI; use a trailing "-" for stdin.
+
+The config command creates the user configuration file when needed and opens
+it with $VISUAL, $EDITOR, or the platform text editor.
 
 flags:
 `)
