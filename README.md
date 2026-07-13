@@ -129,6 +129,11 @@ cross-platform form, including Windows PowerShell and Command Prompt:
 $ cq --copybook-dsn "HQ.COPYLIB(CUSTOMER)" --data-dsn "HQ.CUSTOMER.DATA"
 ```
 
+Zowe® CLI is not included with `cq` and must be installed and configured
+separately. `cq` is an independent project and is not affiliated with or
+endorsed by The Linux Foundation or the Zowe project. Zowe® is a registered
+trademark of The Linux Foundation.
+
 The copybook is fetched as text so z/OSMF converts its EBCDIC source, while
 the data set is streamed in binary mode to preserve packed and binary fields.
 Zowe authentication, profiles, certificates, and connection settings continue
