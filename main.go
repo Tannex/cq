@@ -1,9 +1,9 @@
-// cq — jq for COBOL. Parses a COBOL copybook and either prints the field
-// layout (offset/length per field) or decodes fixed-length EBCDIC records
-// (e.g. a binary dataset downloaded with Zowe CLI) into a UTF-8 JSON array.
+// cq — jq for COBOL. Parses a COBOL copybook, prints its resolved field
+// layout, and converts between fixed-length COBOL records and UTF-8 JSON.
 //
 //	cq -c CUSTOMER.cpy                             # layout as JSON
 //	cq -c CUSTOMER.cpy -d customer.bin | jq '.[0]' # decode records
+//	cq -c CUSTOMER.cpy -j records.json > customer.bin
 //	cq --copybook-dsn "HQ.CPY(CUSTOMER)" --data-dsn "HQ.CUST"
 package main
 
@@ -45,9 +45,10 @@ func run() error {
 	copybookDSN := fs.String("copybook-dsn", "", "copybook data set or member to fetch through Zowe CLI")
 	dataPath := fs.String("d", "", "data file to decode (use - for stdin; omit for layout output)")
 	dataDSN := fs.String("data-dsn", "", "data set to download in binary mode through Zowe CLI")
+	jsonPath := fs.String("j", "", "JSON object or array to encode as binary records (use - for stdin)")
 	codepage := fs.String("codepage", "cp037", "EBCDIC codepage of the data (cp037, cp277, cp1047, cp1140, cp1142; ascii/latin1 for testing)")
 	format := fs.String("format", "auto", "copybook source format: auto, fixed (cols 7-72), or free")
-	recName := fs.String("record", "", "01-level record to decode when the copybook has several (default: first)")
+	recName := fs.String("record", "", "01-level record to use when the copybook has several (default: first)")
 	pretty := fs.Bool("pretty", false, "indent JSON output")
 	fillers := fs.Bool("fillers", false, "include FILLER fields in decoded output")
 	maxRecs := fs.Int("max", 0, "decode at most this many records (0 = all)")
@@ -63,12 +64,12 @@ func run() error {
 		fmt.Fprintf(fs.Output(), `cq — jq for COBOL copybooks and EBCDIC data
 
 usage: cq [flags] (-c COPYBOOK | --copybook-dsn DSN[(MEMBER)])
-                  [-d DATA | --data-dsn DSN | DATA]
+                  [-d DATA | --data-dsn DSN | -j JSON | DATA]
        cq config
 
-With only a copybook source, prints the record layout as JSON. A data source
-decodes fixed-length binary records into a UTF-8 JSON array. DSN sources are
-fetched through the installed Zowe CLI; use a trailing "-" for stdin.
+With only a copybook source, prints the record layout as JSON. A binary data
+source decodes records into a UTF-8 JSON array. -j performs the reverse and
+writes binary records to stdout. DSN sources use the installed Zowe CLI.
 
 The config command creates the user configuration file when needed and opens
 it with $VISUAL, $EDITOR, or the platform text editor.
@@ -80,6 +81,7 @@ flags:
 examples:
   cq -c CUSTOMER.cpy
   cq -c CUSTOMER.cpy -d customer.bin | jq '.[] | .CUST-NAME'
+  cq -c CUSTOMER.cpy -d customer.bin | cq -c CUSTOMER.cpy -j - > rebuilt.bin
   cq -c CUSTOMER.cpy customer.bin
   cq --copybook-dsn "HQ.COPYLIB(CUSTOMER)" --data-dsn "HQ.CUSTOMER.DATA"
   cq -q 'select(.BALANCE < 0)' -c CUSTOMER.cpy -d customer.bin
@@ -90,6 +92,8 @@ examples:
 `)
 	}
 	fs.Parse(os.Args[1:])
+	setFlags := make(map[string]bool)
+	fs.Visit(func(f *flag.Flag) { setFlags[f.Name] = true })
 
 	if (*copybookPath == "") == (*copybookDSN == "") {
 		return errors.New("provide exactly one copybook source: -c COPYBOOK or --copybook-dsn DSN[(MEMBER)]")
@@ -106,6 +110,16 @@ examples:
 	}
 	if *dataPath != "" && *dataDSN != "" {
 		return errors.New("provide only one data source: -d DATA, --data-dsn DSN, or positional DATA")
+	}
+	if *jsonPath != "" && (*dataPath != "" || *dataDSN != "") {
+		return errors.New("-j cannot be combined with -d, --data-dsn, or positional DATA")
+	}
+	if *jsonPath != "" {
+		for _, name := range []string{"q", "r", "pretty", "fillers", "max", "where"} {
+			if setFlags[name] {
+				return fmt.Errorf("-%s cannot be combined with -j", name)
+			}
+		}
 	}
 	cfg, err := loadConfig()
 	if err != nil {
@@ -151,7 +165,7 @@ examples:
 		return err
 	}
 
-	if *dataPath == "" && *dataDSN == "" {
+	if *dataPath == "" && *dataDSN == "" && *jsonPath == "" {
 		if len(wheres) > 0 {
 			return fmt.Errorf("-where filters records, so it needs a data source to decode")
 		}
@@ -174,6 +188,25 @@ examples:
 	}
 	if *lrecl > 0 && rec.Variable() {
 		return fmt.Errorf("-lrecl cannot be combined with an OCCURS DEPENDING ON record")
+	}
+	if *jsonPath != "" {
+		e, err := record.NewEncoder(rec, cm)
+		if err != nil {
+			return err
+		}
+		e.Lrecl = *lrecl
+		var in io.Reader
+		if *jsonPath == "-" {
+			in = os.Stdin
+		} else {
+			f, err := os.Open(*jsonPath)
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+			in = f
+		}
+		return record.EncodeJSON(os.Stdout, e, in)
 	}
 	d, err := record.NewDecoder(rec, cm)
 	if err != nil {

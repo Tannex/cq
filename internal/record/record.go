@@ -1,5 +1,5 @@
-// Package record reads fixed-length (or tail-ODO variable) records and
-// decodes them to JSON using a copybook layout.
+// Package record converts fixed-length (or tail-ODO variable) records between
+// binary data and JSON using a copybook layout.
 package record
 
 import (

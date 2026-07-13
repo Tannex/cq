@@ -1,14 +1,14 @@
 # cq — jq for COBOL
 
-`cq` parses a COBOL copybook and either prints the record layout (byte
-offset and length of every field) or decodes fixed-length EBCDIC records —
-for example a binary dataset fetched with Zowe CLI — into UTF-8 JSON. The
-output is plain JSON on stdout; a built-in jq (`-q`) covers most filtering
-and reshaping, and anything else can be piped into the real `jq`.
+`cq` parses a COBOL copybook, prints its record layout, and converts between
+fixed-length COBOL records and UTF-8 JSON. Binary input can come from a local
+file or a data set fetched with Zowe CLI. A built-in jq (`-q`) covers most
+filtering and reshaping, and anything else can be piped into the real `jq`.
 
 ```console
 $ cq -c CUSTOMER.cpy                         # layout: offset/length of each field
 $ cq -c CUSTOMER.cpy -d customer.bin         # decode records to a JSON array
+$ cq -c CUSTOMER.cpy -j records.json > customer.bin
 $ cq --copybook-dsn "HQ.COPYLIB(CUSTOMER)" --data-dsn "HQ.CUSTOMER.DATA"
 $ cq -q 'select(.BALANCE < 0)' -c CUSTOMER.cpy -d customer.bin
 $ cq -where DTAR107-SALE -c DTAR107.cbl -d sales.bin
@@ -24,15 +24,15 @@ $ go install github.com/Tannex/cq@latest
 
 ```
 cq [flags] (-c COPYBOOK | --copybook-dsn DSN[(MEMBER)])
-           [-d DATA | --data-dsn DSN | DATA]
+           [-d DATA | --data-dsn DSN | -j JSON | DATA]
 ```
 
 Provide one copybook source: a local `-c COPYBOOK`, or `--copybook-dsn` to
 fetch a data set or PDS member through the installed Zowe CLI. Data can come
 from `-d DATA`, a trailing `DATA` argument, stdin via a trailing `-`, or a
-binary Zowe download selected by `--data-dsn`. Records are fixed-length,
-derived from the copybook; use `-lrecl` if the physical records carry trailing
-padding.
+binary Zowe download selected by `--data-dsn`. `-j JSON` reverses the conversion
+and writes binary records to stdout. Records are derived from the copybook; use
+`-lrecl` when fixed records require trailing padding.
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
@@ -40,9 +40,10 @@ padding.
 | `--copybook-dsn` | one copybook source required | data set or PDS member fetched as text through Zowe CLI |
 | `-d` | none | data file to decode (`-` for stdin); omit for layout output |
 | `--data-dsn` | none | data set downloaded in binary mode through Zowe CLI |
+| `-j` | none | JSON object or array to encode as binary records (`-` for stdin) |
 | `-codepage` | `cp037` | EBCDIC codepage of the data (`cp037`, `cp277`, `cp1047`, `cp1140`, `cp1142`; `ascii`/`latin1` for testing) |
 | `-format` | `auto` | copybook source format: `fixed` (cols 7–72), `free`, or `auto` |
-| `-record` | first | which 01-level record to decode when the copybook has several |
+| `-record` | first | which 01-level record to use when the copybook has several |
 | `-pretty` | off | indent JSON output |
 | `-fillers` | off | include FILLER fields in decoded output |
 | `-max` | all | decode at most N records |
@@ -71,6 +72,31 @@ One JSON object per record, fields in copybook order. Numbers (zoned,
 packed, binary) become JSON numbers with the implied decimal point applied;
 `PIC X` fields become strings with trailing spaces trimmed; `OCCURS` become
 arrays; groups become nested objects.
+
+### Encode JSON as binary
+
+`-j` accepts one cq-shaped JSON object or an array of objects. An object emits
+one record; an array is read incrementally and emits one record per element.
+Binary bytes are written directly to stdout:
+
+```console
+$ cq -c CUSTOMER.cpy -j customers.json > customer.bin
+$ cq -c CUSTOMER.cpy -d customer.bin \
+    | cq -c CUSTOMER.cpy -j - > rebuilt.bin
+```
+
+Encoding is strict: every non-FILLER field is required, unknown and duplicate
+keys are rejected, arrays must match their `OCCURS` count, and values must fit
+their picture without truncation, overflow, or decimal rounding. For ODO
+records, the `DEPENDING ON` value must equal the JSON array length. Omitted
+FILLER fields are initialized to spaces or zero, and `-lrecl` padding uses the
+selected codepage's space byte.
+
+For `REDEFINES`, cq validates every JSON view but writes only the original
+storage definition. A redefining item longer than its primary item is rejected
+in encode mode. The round trip is therefore value-equivalent for primary
+fields, not necessarily byte-identical: decoding trims text padding and
+normalizes numeric signs, while encoding regenerates canonical bytes.
 
 ### Queries (`-q`)
 
@@ -225,7 +251,8 @@ pass `-lrecl` with the dataset's record length. `-max` limits decoding, but a
 - `PIC` X/A/9/S/V/P and numeric-edited pictures (decoded as text)
 - `USAGE` DISPLAY, COMP/COMP-4/COMP-5/BINARY, COMP-3/PACKED-DECIMAL,
   COMP-1/COMP-2 (decoded as big-endian IEEE; IBM hex float not yet)
-- `REDEFINES` (all views are decoded), `SYNC` alignment,
+- `REDEFINES` (all views are decoded; encoding writes the primary view),
+  `SYNC` alignment,
   `SIGN LEADING/TRAILING [SEPARATE]`
 - `OCCURS`, including `OCCURS ... DEPENDING ON` when the variable table is
   the trailing storage of the record
