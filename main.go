@@ -34,8 +34,10 @@ func main() {
 
 func run() error {
 	fs := flag.NewFlagSet("cq", flag.ExitOnError)
-	copybookPath := fs.String("c", "", "copybook file (required)")
+	copybookPath := fs.String("c", "", "local copybook file")
+	copybookDSN := fs.String("copybook-dsn", "", "copybook data set or member to fetch through Zowe CLI")
 	dataPath := fs.String("d", "", "data file to decode (use - for stdin; omit for layout output)")
+	dataDSN := fs.String("data-dsn", "", "data set to stream in binary mode through Zowe CLI")
 	codepage := fs.String("codepage", "cp037", "EBCDIC codepage of the data (cp037, cp277, cp1047, cp1140, cp1142; ascii/latin1 for testing)")
 	format := fs.String("format", "auto", "copybook source format: auto, fixed (cols 7-72), or free")
 	recName := fs.String("record", "", "01-level record to decode when the copybook has several (default: first)")
@@ -53,12 +55,12 @@ func run() error {
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), `cq — jq for COBOL copybooks and EBCDIC data
 
-usage: cq [flags] -c COPYBOOK [-d DATA]
-       cq [flags] -c COPYBOOK [DATA]
+usage: cq [flags] (-c COPYBOOK | --copybook-dsn DSN[(MEMBER)])
+                  [-d DATA | --data-dsn DSN | DATA]
 
-With only -c COPYBOOK, prints the record layout (byte offset and length of
-every field) as JSON. With -d DATA, or one trailing DATA argument, decodes
-the fixed-length binary records into a UTF-8 JSON array. Use "-" for stdin.
+With only a copybook source, prints the record layout as JSON. A data source
+decodes fixed-length binary records into a UTF-8 JSON array. DSN sources are
+fetched through the installed Zowe CLI; use a trailing "-" for stdin.
 
 flags:
 `)
@@ -68,6 +70,7 @@ examples:
   cq -c CUSTOMER.cpy
   cq -c CUSTOMER.cpy -d customer.bin | jq '.[] | .CUST-NAME'
   cq -c CUSTOMER.cpy customer.bin
+  cq --copybook-dsn "HQ.COPYLIB(CUSTOMER)" --data-dsn "HQ.CUSTOMER.DATA"
   cq -q 'select(.BALANCE < 0)' -c CUSTOMER.cpy -d customer.bin
   cq -r -q '.["CUST-NAME"]' -c CUSTOMER.cpy -d customer.bin
   cq -where DTAR107-SALE -where 'not DTAR107-VOID' -c DTAR107.cbl -d sales.bin
@@ -76,18 +79,21 @@ examples:
 	}
 	fs.Parse(os.Args[1:])
 
-	if *copybookPath == "" {
-		return errors.New("-c COPYBOOK is required")
+	if (*copybookPath == "") == (*copybookDSN == "") {
+		return errors.New("provide exactly one copybook source: -c COPYBOOK or --copybook-dsn DSN[(MEMBER)]")
 	}
 	switch fs.NArg() {
 	case 0:
 	case 1:
-		if *dataPath != "" {
-			return errors.New("DATA was provided both with -d and as a positional argument")
+		if *dataPath != "" || *dataDSN != "" {
+			return errors.New("provide only one data source: -d DATA, --data-dsn DSN, or positional DATA")
 		}
 		*dataPath = fs.Arg(0)
 	default:
 		return fmt.Errorf("expected at most one positional DATA argument, got %q", fs.Args())
+	}
+	if *dataPath != "" && *dataDSN != "" {
+		return errors.New("provide only one data source: -d DATA, --data-dsn DSN, or positional DATA")
 	}
 
 	var cbFormat copybook.Format
@@ -110,7 +116,13 @@ examples:
 		}
 	}
 
-	src, err := os.ReadFile(*copybookPath)
+	var src []byte
+	var err error
+	if *copybookDSN != "" {
+		src, err = fetchZoweDataSet(*copybookDSN, false)
+	} else {
+		src, err = os.ReadFile(*copybookPath)
+	}
 	if err != nil {
 		return err
 	}
@@ -123,9 +135,9 @@ examples:
 		return err
 	}
 
-	if *dataPath == "" {
+	if *dataPath == "" && *dataDSN == "" {
 		if len(wheres) > 0 {
-			return fmt.Errorf("-where filters records, so it needs -d DATA to decode")
+			return fmt.Errorf("-where filters records, so it needs a data source to decode")
 		}
 		if q == nil {
 			return printLayout(os.Stdout, recs, *pretty)
@@ -157,6 +169,29 @@ examples:
 		if err := d.AddWhere(w); err != nil {
 			return err
 		}
+	}
+
+	if *dataDSN != "" {
+		stream, err := openZoweDataSet(*dataDSN, true)
+		if err != nil {
+			return err
+		}
+		tracked := &eofReader{Reader: stream}
+		if err := decodeAll(os.Stdout, d, tracked, *pretty, *maxRecs, q, *rawOut); err != nil {
+			if tracked.EOF {
+				if waitErr := stream.wait(); waitErr != nil {
+					return waitErr
+				}
+			} else {
+				stream.stop()
+			}
+			return err
+		}
+		if !tracked.EOF {
+			stream.stop()
+			return nil
+		}
+		return stream.wait()
 	}
 
 	var in io.Reader
