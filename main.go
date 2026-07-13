@@ -2,9 +2,9 @@
 // layout (offset/length per field) or decodes fixed-length EBCDIC records
 // (e.g. a binary dataset downloaded with Zowe CLI) into a UTF-8 JSON array.
 //
-//	cq CUSTOMER.cpy                          # layout as JSON
-//	cq CUSTOMER.cpy customer.bin | jq '.[0]' # decode records
-//	zowe zos-files view data-set "HQ.CUST" --binary | cq CUSTOMER.cpy -
+//	cq -c CUSTOMER.cpy                             # layout as JSON
+//	cq -c CUSTOMER.cpy -d customer.bin | jq '.[0]' # decode records
+//	zowe zos-files view data-set "HQ.CUST" --binary | cq -c CUSTOMER.cpy -d -
 package main
 
 import (
@@ -34,6 +34,8 @@ func main() {
 
 func run() error {
 	fs := flag.NewFlagSet("cq", flag.ExitOnError)
+	copybookPath := fs.String("c", "", "copybook file (required)")
+	dataPath := fs.String("d", "", "data file to decode (use - for stdin; omit for layout output)")
 	codepage := fs.String("codepage", "cp037", "EBCDIC codepage of the data (cp037, cp277, cp1047, cp1140, cp1142; ascii/latin1 for testing)")
 	format := fs.String("format", "auto", "copybook source format: auto, fixed (cols 7-72), or free")
 	recName := fs.String("record", "", "01-level record to decode when the copybook has several (default: first)")
@@ -51,10 +53,10 @@ func run() error {
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), `cq — jq for COBOL copybooks and EBCDIC data
 
-usage: cq [flags] COPYBOOK [DATA]
+usage: cq [flags] -c COPYBOOK [-d DATA]
 
-With only a COPYBOOK, prints the record layout (byte offset and length of
-every field) as JSON. With DATA (a file, or "-" for stdin), decodes the
+With only -c COPYBOOK, prints the record layout (byte offset and length of
+every field) as JSON. With -d DATA (a file, or "-" for stdin), decodes the
 fixed-length binary records into a UTF-8 JSON array.
 
 flags:
@@ -62,19 +64,21 @@ flags:
 		fs.PrintDefaults()
 		fmt.Fprintf(fs.Output(), `
 examples:
-  cq CUSTOMER.cpy
-  cq CUSTOMER.cpy customer.bin | jq '.[] | .CUST-NAME'
-  cq -q 'select(.BALANCE < 0)' CUSTOMER.cpy customer.bin
-  cq -r -q '.["CUST-NAME"]' CUSTOMER.cpy customer.bin
-  cq -where DTAR107-SALE -where 'not DTAR107-VOID' DTAR107.cbl sales.bin
-  zowe zos-files view data-set "HQ.CUSTOMER.DATA" --binary | cq CUSTOMER.cpy -
+  cq -c CUSTOMER.cpy
+  cq -c CUSTOMER.cpy -d customer.bin | jq '.[] | .CUST-NAME'
+  cq -q 'select(.BALANCE < 0)' -c CUSTOMER.cpy -d customer.bin
+  cq -r -q '.["CUST-NAME"]' -c CUSTOMER.cpy -d customer.bin
+  cq -where DTAR107-SALE -where 'not DTAR107-VOID' -c DTAR107.cbl -d sales.bin
+  zowe zos-files view data-set "HQ.CUSTOMER.DATA" --binary | cq -c CUSTOMER.cpy -d -
 `)
 	}
 	fs.Parse(os.Args[1:])
 
-	if fs.NArg() < 1 || fs.NArg() > 2 {
-		fs.Usage()
-		os.Exit(2)
+	if fs.NArg() != 0 {
+		return fmt.Errorf("unexpected positional arguments %q; use -c COPYBOOK and optional -d DATA", fs.Args())
+	}
+	if *copybookPath == "" {
+		return errors.New("-c COPYBOOK is required")
 	}
 
 	var cbFormat copybook.Format
@@ -97,7 +101,7 @@ examples:
 		}
 	}
 
-	src, err := os.ReadFile(fs.Arg(0))
+	src, err := os.ReadFile(*copybookPath)
 	if err != nil {
 		return err
 	}
@@ -110,9 +114,9 @@ examples:
 		return err
 	}
 
-	if fs.NArg() == 1 {
+	if *dataPath == "" {
 		if len(wheres) > 0 {
-			return fmt.Errorf("-where filters records, so it needs DATA to decode")
+			return fmt.Errorf("-where filters records, so it needs -d DATA to decode")
 		}
 		if q == nil {
 			return printLayout(os.Stdout, recs, *pretty)
@@ -147,10 +151,10 @@ examples:
 	}
 
 	var in io.Reader
-	if name := fs.Arg(1); name == "-" {
+	if *dataPath == "-" {
 		in = os.Stdin
 	} else {
-		f, err := os.Open(name)
+		f, err := os.Open(*dataPath)
 		if err != nil {
 			return err
 		}

@@ -7,12 +7,12 @@ output is plain JSON on stdout; a built-in jq (`-q`) covers most filtering
 and reshaping, and anything else can be piped into the real `jq`.
 
 ```console
-$ cq CUSTOMER.cpy                     # layout: offset/length of each field
-$ cq CUSTOMER.cpy customer.bin        # decode records to a JSON array
-$ cq -q 'select(.BALANCE < 0)' CUSTOMER.cpy customer.bin   # built-in jq
-$ cq -where DTAR107-SALE DTAR107.cbl sales.bin             # filter by level-88
+$ cq -c CUSTOMER.cpy                         # layout: offset/length of each field
+$ cq -c CUSTOMER.cpy -d customer.bin         # decode records to a JSON array
+$ cq -q 'select(.BALANCE < 0)' -c CUSTOMER.cpy -d customer.bin
+$ cq -where DTAR107-SALE -c DTAR107.cbl -d sales.bin
 $ zowe zos-files view data-set "HQ.CUSTOMER.DATA" --binary \
-    | cq CUSTOMER.cpy -
+    | cq -c CUSTOMER.cpy -d -
 ```
 
 ## Install
@@ -24,15 +24,17 @@ $ go install github.com/Tannex/cq@latest
 ## Usage
 
 ```
-cq [flags] COPYBOOK [DATA]
+cq [flags] -c COPYBOOK [-d DATA]
 ```
 
-With only a `COPYBOOK`, cq prints the layout. With `DATA` (a file, or `-`
-for stdin), it decodes the records. Records are fixed-length, derived from
-the copybook; use `-lrecl` if the physical records carry trailing padding.
+With only `-c COPYBOOK`, cq prints the layout. With `-d DATA` (a file, or
+`-` for stdin), it decodes the records. Records are fixed-length, derived
+from the copybook; use `-lrecl` if the physical records carry trailing padding.
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
+| `-c` | required | copybook file |
+| `-d` | none | data file to decode (`-` for stdin); omit for layout output |
 | `-codepage` | `cp037` | EBCDIC codepage of the data (`cp037`, `cp277`, `cp1047`, `cp1140`, `cp1142`; `ascii`/`latin1` for testing) |
 | `-format` | `auto` | copybook source format: `fixed` (cols 7–72), `free`, or `auto` |
 | `-record` | first | which 01-level record to decode when the copybook has several |
@@ -47,7 +49,7 @@ the copybook; use `-lrecl` if the physical records carry trailing padding.
 ### Layout output
 
 ```console
-$ cq CUSTOMER.cpy | jq '.[0].fields[] | {name, offset, length, kind}'
+$ cq -c CUSTOMER.cpy | jq '.[0].fields[] | {name, offset, length, kind}'
 {"name":"CUST-NO","offset":0,"length":5,"kind":"zoned"}
 {"name":"CUST-NAME","offset":5,"length":10,"kind":"text"}
 {"name":"BALANCE","offset":15,"length":4,"kind":"packed"}
@@ -73,8 +75,8 @@ the output is a stream of results, one per line, instead of a wrapped
 array — so `select()` filters millions of records without buffering:
 
 ```console
-$ cq -q 'select(.BALANCE < 0)' CUSTOMER.cpy customer.bin
-$ cq -r -q '.["CUST-NAME"]' CUSTOMER.cpy customer.bin
+$ cq -q 'select(.BALANCE < 0)' -c CUSTOMER.cpy -d customer.bin
+$ cq -r -q '.["CUST-NAME"]' -c CUSTOMER.cpy -d customer.bin
 ALICE
 BOB
 ```
@@ -82,7 +84,7 @@ BOB
 In layout mode the expression runs against the layout document:
 
 ```console
-$ cq -r -q '.[0].fields[] | "\(.offset)\t\(.length)\t\(.name)"' CUSTOMER.cpy
+$ cq -r -q '.[0].fields[] | "\(.offset)\t\(.length)\t\(.name)"' -c CUSTOMER.cpy
 0	5	CUST-NO
 5	10	CUST-NAME
 ```
@@ -99,9 +101,9 @@ names — `cq` lets you filter by them directly, so nobody has to remember
 that a sale is `TRANS-TYPE = 1`:
 
 ```console
-$ cq -where DTAR107-SALE DTAR107.cbl sales.bin      # 88 ... VALUE 1
-$ cq -where 'not DTAR107-VOID' DTAR107.cbl sales.bin
-$ cq -where NSW-POSTCODE VENDOR.cbl vendors.bin     # VALUE 2000 THRU 2999
+$ cq -where DTAR107-SALE -c DTAR107.cbl -d sales.bin      # 88 ... VALUE 1
+$ cq -where 'not DTAR107-VOID' -c DTAR107.cbl -d sales.bin
+$ cq -where NSW-POSTCODE -c VENDOR.cbl -d vendors.bin     # VALUE 2000 THRU 2999
 ```
 
 Negate with a leading `!` or `not `; repeat the flag to AND conditions.
@@ -121,7 +123,7 @@ decoding:
 
 ```console
 $ zowe zos-files download data-set "HQ.COPYLIB(CUSTOMER)" --file CUSTOMER.cpy
-$ zowe zos-files view data-set "HQ.CUSTOMER.DATA" --binary | cq CUSTOMER.cpy -
+$ zowe zos-files view data-set "HQ.CUSTOMER.DATA" --binary | cq -c CUSTOMER.cpy -d -
 ```
 
 Everyday variations:
@@ -129,19 +131,19 @@ Everyday variations:
 ```console
 # Peek at the first few records of a big dataset
 $ zowe zos-files view data-set "HQ.CUSTOMER.DATA" --binary \
-    | cq -max 5 -pretty CUSTOMER.cpy -
+    | cq -max 5 -pretty -c CUSTOMER.cpy -d -
 
 # Pull only the sales out of a transaction file
 $ zowe zos-files view data-set "PROD.DAILY.TXNS" --binary \
-    | cq -where DTAR107-SALE DTAR107.cbl -
+    | cq -where DTAR107-SALE -c DTAR107.cbl -d -
 
 # Sum an amount field across the whole dataset
 $ zowe zos-files view data-set "PROD.DAILY.TXNS" --binary \
-    | cq -q '.["DTAR107-AMOUNT"]' DTAR107.cbl - | jq -s add
+    | cq -q '.["DTAR107-AMOUNT"]' -c DTAR107.cbl -d - | jq -s add
 
 # Download once, slice locally many times
 $ zowe zos-files download data-set "HQ.CUSTOMER.DATA" --binary --file customer.bin
-$ cq -r -q '.["CUST-NAME"]' CUSTOMER.cpy customer.bin
+$ cq -r -q '.["CUST-NAME"]' -c CUSTOMER.cpy -d customer.bin
 ```
 
 Two things to keep straight: always use `--binary` for the data (without it
@@ -174,7 +176,8 @@ open an issue.
 
 ## Test data
 
-Copybooks under `testdata/copybooks/cb2xml/` are borrowed from the
-[cb2xml](https://github.com/bmTas/cb2xml) project (LGPL) as test fixtures;
-its expected-XML outputs are used to cross-check field offsets. See
+Copybooks and expected XML under `testdata/copybooks/cb2xml/` are unmodified
+fixtures from the [cb2xml](https://github.com/bmTas/cb2xml) project under
+LGPL-2.1. They are used to cross-check field offsets; the pinned source
+revision, per-file origins, and complete license text are recorded in
 `testdata/copybooks/cb2xml/SOURCES.md`.
