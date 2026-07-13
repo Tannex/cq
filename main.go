@@ -10,14 +10,18 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 
+	"github.com/itchyny/gojq"
+
 	"github.com/Tannex/cq/internal/copybook"
 	"github.com/Tannex/cq/internal/decode"
 	"github.com/Tannex/cq/internal/layout"
+	"github.com/Tannex/cq/internal/query"
 	"github.com/Tannex/cq/internal/record"
 )
 
@@ -37,6 +41,8 @@ func run() error {
 	fillers := fs.Bool("fillers", false, "include FILLER fields in decoded output")
 	maxRecs := fs.Int("max", 0, "decode at most this many records (0 = all)")
 	lrecl := fs.Int("lrecl", 0, "physical record length when it exceeds the layout (extra bytes are padding)")
+	expr := fs.String("q", "", "jq expression: run per record when decoding (output becomes a result stream, not an array), or against the layout document")
+	rawOut := fs.Bool("r", false, "with -q, print string results raw instead of JSON-quoted")
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), `cq — jq for COBOL copybooks and EBCDIC data
 
@@ -53,6 +59,8 @@ flags:
 examples:
   cq CUSTOMER.cpy
   cq CUSTOMER.cpy customer.bin | jq '.[] | .CUST-NAME'
+  cq -q 'select(.BALANCE < 0)' CUSTOMER.cpy customer.bin
+  cq -r -q '.["CUST-NAME"]' CUSTOMER.cpy customer.bin
   zowe zos-files download ds "HQ.CUSTOMER.DATA" --binary --file - | cq CUSTOMER.cpy -
 `)
 	}
@@ -75,6 +83,14 @@ examples:
 		return fmt.Errorf("unknown -format %q (want auto, fixed, or free)", *format)
 	}
 
+	var q *query.Query
+	if *expr != "" {
+		var err error
+		if q, err = query.Compile(*expr); err != nil {
+			return err
+		}
+	}
+
 	src, err := os.ReadFile(fs.Arg(0))
 	if err != nil {
 		return err
@@ -89,7 +105,10 @@ examples:
 	}
 
 	if fs.NArg() == 1 {
-		return printLayout(os.Stdout, recs, *pretty)
+		if q == nil {
+			return printLayout(os.Stdout, recs, *pretty)
+		}
+		return queryLayout(os.Stdout, recs, q, *rawOut, *pretty)
 	}
 
 	rec, err := pickRecord(recs, *recName)
@@ -124,7 +143,7 @@ examples:
 		defer f.Close()
 		in = f
 	}
-	return decodeAll(os.Stdout, d, in, *pretty, *maxRecs)
+	return decodeAll(os.Stdout, d, in, *pretty, *maxRecs, q, *rawOut)
 }
 
 func pickRecord(recs []*layout.Record, name string) (*layout.Record, error) {
@@ -167,10 +186,12 @@ func printLayout(w io.Writer, recs []*layout.Record, pretty bool) error {
 	return enc.Encode(docs)
 }
 
-func decodeAll(w io.Writer, d *record.Decoder, in io.Reader, pretty bool, max int) error {
-	out := []byte("[")
-	if _, err := w.Write(out); err != nil {
-		return err
+func decodeAll(w io.Writer, d *record.Decoder, in io.Reader, pretty bool, max int, q *query.Query, rawOut bool) error {
+	emit := emitter(w, rawOut, pretty)
+	if q == nil {
+		if _, err := io.WriteString(w, "["); err != nil {
+			return err
+		}
 	}
 	n := 0
 	for max == 0 || n < max {
@@ -185,6 +206,20 @@ func decodeAll(w io.Writer, d *record.Decoder, in io.Reader, pretty bool, max in
 		if err != nil {
 			return fmt.Errorf("record %d: %w", n+1, err)
 		}
+		n++
+		if q != nil {
+			v, err := query.FromJSON(js)
+			if err != nil {
+				return err
+			}
+			if err := q.Run(v, emit); err != nil {
+				if halted(err) {
+					return haltErr(err)
+				}
+				return fmt.Errorf("record %d: %w", n, err)
+			}
+			continue
+		}
 		if pretty {
 			var buf bytes.Buffer
 			if err := json.Indent(&buf, js, "", "  "); err != nil {
@@ -193,14 +228,75 @@ func decodeAll(w io.Writer, d *record.Decoder, in io.Reader, pretty bool, max in
 			js = buf.Bytes()
 		}
 		sep := ",\n"
-		if n == 0 {
+		if n == 1 {
 			sep = "\n"
 		}
 		if _, err := fmt.Fprintf(w, "%s%s", sep, js); err != nil {
 			return err
 		}
-		n++
+	}
+	if q != nil {
+		return nil
 	}
 	_, err := io.WriteString(w, "\n]\n")
 	return err
+}
+
+// queryLayout runs the jq expression against the layout document (the same
+// array printLayout writes).
+func queryLayout(w io.Writer, recs []*layout.Record, q *query.Query, rawOut, pretty bool) error {
+	var buf bytes.Buffer
+	if err := printLayout(&buf, recs, false); err != nil {
+		return err
+	}
+	v, err := query.FromJSON(buf.Bytes())
+	if err != nil {
+		return err
+	}
+	if err := q.Run(v, emitter(w, rawOut, pretty)); err != nil {
+		if halted(err) {
+			return haltErr(err)
+		}
+		return err
+	}
+	return nil
+}
+
+// emitter prints one query result per line, jq-style.
+func emitter(w io.Writer, rawOut, pretty bool) func(any) error {
+	return func(v any) error {
+		if s, ok := v.(string); ok && rawOut {
+			_, err := fmt.Fprintln(w, s)
+			return err
+		}
+		b, err := gojq.Marshal(v)
+		if err != nil {
+			return err
+		}
+		if pretty {
+			var buf bytes.Buffer
+			if err := json.Indent(&buf, b, "", "  "); err == nil {
+				b = buf.Bytes()
+			}
+		}
+		_, err = fmt.Fprintf(w, "%s\n", b)
+		return err
+	}
+}
+
+// halted reports whether err is a halt/halt_error from the expression.
+func halted(err error) bool {
+	var h *query.Halt
+	return errors.As(err, &h)
+}
+
+// haltErr maps a halt to the process outcome: plain halt ends cleanly,
+// halt_error(msg) surfaces the message.
+func haltErr(err error) error {
+	var h *query.Halt
+	errors.As(err, &h)
+	if h.Value == nil && h.ExitCode == 0 {
+		return nil
+	}
+	return h
 }

@@ -8,6 +8,7 @@ array. The output is plain JSON on stdout, made to be piped into `jq`.
 ```console
 $ cq CUSTOMER.cpy                     # layout: offset/length of each field
 $ cq CUSTOMER.cpy customer.bin        # decode records to a JSON array
+$ cq -q 'select(.BALANCE < 0)' CUSTOMER.cpy customer.bin   # built-in jq
 $ zowe zos-files download ds "HQ.CUSTOMER.DATA" --binary --file - \
     | cq CUSTOMER.cpy - | jq '.[] | select(.BALANCE < 0)'
 ```
@@ -37,6 +38,8 @@ the copybook; use `-lrecl` if the physical records carry trailing padding.
 | `-fillers` | off | include FILLER fields in decoded output |
 | `-max` | all | decode at most N records |
 | `-lrecl` | layout | physical record length when it exceeds the layout |
+| `-q` | none | jq expression (full jq language via [gojq](https://github.com/itchyny/gojq)) |
+| `-r` | off | with `-q`, print string results raw instead of JSON-quoted |
 
 ### Layout output
 
@@ -57,6 +60,33 @@ One JSON object per record, fields in copybook order. Numbers (zoned,
 packed, binary) become JSON numbers with the implied decimal point applied;
 `PIC X` fields become strings with trailing spaces trimmed; `OCCURS` become
 arrays; groups become nested objects.
+
+### Queries (`-q`)
+
+`-q` embeds the full jq language, so no external `jq` is needed. When
+decoding, the expression runs **per record** (`.` is one record object) and
+the output is a stream of results, one per line, instead of a wrapped
+array — so `select()` filters millions of records without buffering:
+
+```console
+$ cq -q 'select(.BALANCE < 0)' CUSTOMER.cpy customer.bin
+$ cq -r -q '.["CUST-NAME"]' CUSTOMER.cpy customer.bin
+ALICE
+BOB
+```
+
+In layout mode the expression runs against the layout document:
+
+```console
+$ cq -r -q '.[0].fields[] | "\(.offset)\t\(.length)\t\(.name)"' CUSTOMER.cpy
+0	5	CUST-NO
+5	10	CUST-NAME
+```
+
+Note that COBOL names need `.["CUST-NAME"]` (or `."CUST-NAME"`) syntax,
+since `-` is subtraction in jq. `halt` and `halt_error` work; query results
+print object keys in sorted order (plain decode output keeps copybook
+order).
 
 ## Supported COBOL
 
