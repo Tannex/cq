@@ -1,10 +1,9 @@
 package main
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
-	"io"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -13,16 +12,8 @@ var zoweCommand = func(args ...string) *exec.Cmd {
 	return exec.Command("zowe", args...)
 }
 
-func zoweDataSetArgs(dsn string, binary bool) []string {
-	args := []string{"zos-files", "view", "data-set", dsn}
-	if binary {
-		args = append(args, "--binary")
-	}
-	return args
-}
-
-func fetchZoweDataSet(dsn string, binary bool) ([]byte, error) {
-	cmd := zoweCommand(zoweDataSetArgs(dsn, binary)...)
+func fetchZoweCopybook(dsn string) ([]byte, error) {
+	cmd := zoweCommand("zos-files", "view", "data-set", dsn)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, zoweCommandError(dsn, err, exitStderr(err))
@@ -51,7 +42,7 @@ func (r *dsnCopyResolver) Resolve(member string) (string, error) {
 	var failures []string
 	for _, library := range r.searchPaths {
 		dsn := fmt.Sprintf("%s(%s)", library, member)
-		src, err := fetchZoweDataSet(dsn, false)
+		src, err := fetchZoweCopybook(dsn)
 		if err == nil {
 			text := string(src)
 			r.cache[member] = text
@@ -62,57 +53,48 @@ func (r *dsnCopyResolver) Resolve(member string) (string, error) {
 	return "", fmt.Errorf("COPY %s was not resolved through DSNSearchPath:\n  %s", member, strings.Join(failures, "\n  "))
 }
 
-type zoweDataStream struct {
-	dsn    string
-	cmd    *exec.Cmd
-	stdout io.ReadCloser
-	stderr bytes.Buffer
+type temporaryDataFile struct {
+	*os.File
+	path string
 }
 
-func openZoweDataSet(dsn string, binary bool) (*zoweDataStream, error) {
-	s := &zoweDataStream{dsn: dsn, cmd: zoweCommand(zoweDataSetArgs(dsn, binary)...)}
-	s.cmd.Stderr = &s.stderr
-	stdout, err := s.cmd.StdoutPipe()
+func downloadZoweDataSet(dsn string) (*temporaryDataFile, error) {
+	temp, err := os.CreateTemp("", "cq-zowe-*.bin")
 	if err != nil {
-		return nil, fmt.Errorf("prepare Zowe data set %q: %w", dsn, err)
+		return nil, fmt.Errorf("create temporary file for Zowe data set %q: %w", dsn, err)
 	}
-	s.stdout = stdout
-	if err := s.cmd.Start(); err != nil {
-		return nil, zoweCommandError(dsn, err, s.stderr.String())
+	path := temp.Name()
+	if err := temp.Close(); err != nil {
+		_ = os.Remove(path)
+		return nil, fmt.Errorf("prepare temporary file for Zowe data set %q: %w", dsn, err)
 	}
-	return s, nil
+	ok := false
+	defer func() {
+		if !ok {
+			_ = os.Remove(path)
+		}
+	}()
+
+	cmd := zoweCommand("zos-files", "download", "data-set", dsn,
+		"--binary", "--file", path, "--overwrite")
+	if _, err := cmd.Output(); err != nil {
+		return nil, zoweCommandError(dsn, err, exitStderr(err))
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open downloaded Zowe data set %q: %w", dsn, err)
+	}
+	ok = true
+	return &temporaryDataFile{File: f, path: path}, nil
 }
 
-func (s *zoweDataStream) Read(p []byte) (int, error) {
-	return s.stdout.Read(p)
-}
-
-func (s *zoweDataStream) wait() error {
-	if err := s.cmd.Wait(); err != nil {
-		return zoweCommandError(s.dsn, err, s.stderr.String())
+func (f *temporaryDataFile) Close() error {
+	closeErr := f.File.Close()
+	removeErr := os.Remove(f.path)
+	if errors.Is(removeErr, os.ErrNotExist) {
+		removeErr = nil
 	}
-	return nil
-}
-
-func (s *zoweDataStream) stop() {
-	_ = s.stdout.Close()
-	if s.cmd.Process != nil {
-		_ = s.cmd.Process.Kill()
-	}
-	_ = s.cmd.Wait()
-}
-
-type eofReader struct {
-	io.Reader
-	EOF bool
-}
-
-func (r *eofReader) Read(p []byte) (int, error) {
-	n, err := r.Reader.Read(p)
-	if err == io.EOF {
-		r.EOF = true
-	}
-	return n, err
+	return errors.Join(closeErr, removeErr)
 }
 
 func exitStderr(err error) string {

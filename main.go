@@ -4,7 +4,7 @@
 //
 //	cq -c CUSTOMER.cpy                             # layout as JSON
 //	cq -c CUSTOMER.cpy -d customer.bin | jq '.[0]' # decode records
-//	zowe zos-files view data-set "HQ.CUST" --binary | cq -c CUSTOMER.cpy -
+//	cq --copybook-dsn "HQ.CPY(CUSTOMER)" --data-dsn "HQ.CUST"
 package main
 
 import (
@@ -44,7 +44,7 @@ func run() error {
 	copybookPath := fs.String("c", "", "local copybook file")
 	copybookDSN := fs.String("copybook-dsn", "", "copybook data set or member to fetch through Zowe CLI")
 	dataPath := fs.String("d", "", "data file to decode (use - for stdin; omit for layout output)")
-	dataDSN := fs.String("data-dsn", "", "data set to stream in binary mode through Zowe CLI")
+	dataDSN := fs.String("data-dsn", "", "data set to download in binary mode through Zowe CLI")
 	codepage := fs.String("codepage", "cp037", "EBCDIC codepage of the data (cp037, cp277, cp1047, cp1140, cp1142; ascii/latin1 for testing)")
 	format := fs.String("format", "auto", "copybook source format: auto, fixed (cols 7-72), or free")
 	recName := fs.String("record", "", "01-level record to decode when the copybook has several (default: first)")
@@ -85,7 +85,8 @@ examples:
   cq -q 'select(.BALANCE < 0)' -c CUSTOMER.cpy -d customer.bin
   cq -r -q '.["CUST-NAME"]' -c CUSTOMER.cpy -d customer.bin
   cq -where DTAR107-SALE -where 'not DTAR107-VOID' -c DTAR107.cbl -d sales.bin
-  zowe zos-files view data-set "HQ.CUSTOMER.DATA" --binary | cq -c CUSTOMER.cpy -
+  zowe zos-files download data-set "HQ.CUSTOMER.DATA" --binary --file customer.bin
+  cq -c CUSTOMER.cpy -d customer.bin
 `)
 	}
 	fs.Parse(os.Args[1:])
@@ -133,7 +134,7 @@ examples:
 
 	var src []byte
 	if *copybookDSN != "" {
-		src, err = fetchZoweDataSet(*copybookDSN, false)
+		src, err = fetchZoweCopybook(*copybookDSN)
 	} else {
 		src, err = os.ReadFile(*copybookPath)
 	}
@@ -187,26 +188,12 @@ examples:
 	}
 
 	if *dataDSN != "" {
-		stream, err := openZoweDataSet(*dataDSN, true)
+		data, err := downloadZoweDataSet(*dataDSN)
 		if err != nil {
 			return err
 		}
-		tracked := &eofReader{Reader: stream}
-		if err := decodeAll(os.Stdout, d, tracked, *pretty, *maxRecs, q, *rawOut); err != nil {
-			if tracked.EOF {
-				if waitErr := stream.wait(); waitErr != nil {
-					return waitErr
-				}
-			} else {
-				stream.stop()
-			}
-			return err
-		}
-		if !tracked.EOF {
-			stream.stop()
-			return nil
-		}
-		return stream.wait()
+		decodeErr := decodeAll(os.Stdout, d, data, *pretty, *maxRecs, q, *rawOut)
+		return errors.Join(decodeErr, data.Close())
 	}
 
 	var in io.Reader

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/base64"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -36,9 +38,38 @@ func zoweHelperCommand(stdout, stderr string, exitCode int) *exec.Cmd {
 	return cmd
 }
 
+func zoweDownloadHelperCommand(path string, data []byte, stderr string, exitCode int) *exec.Cmd {
+	cmd := zoweHelperCommand("", stderr, exitCode)
+	cmd.Env = append(cmd.Env,
+		"CQ_ZOWE_FILE="+path,
+		"CQ_ZOWE_FILE_DATA="+base64.StdEncoding.EncodeToString(data),
+	)
+	return cmd
+}
+
+func zoweDownloadPath(args []string, dsn string) (string, bool) {
+	if len(args) != 8 {
+		return "", false
+	}
+	want := []string{"zos-files", "download", "data-set", dsn,
+		"--binary", "--file", args[6], "--overwrite"}
+	return args[6], reflect.DeepEqual(args, want)
+}
+
 func TestZoweHelperProcess(t *testing.T) {
 	if os.Getenv("CQ_ZOWE_HELPER") != "1" {
 		return
+	}
+	if path := os.Getenv("CQ_ZOWE_FILE"); path != "" {
+		data, err := base64.StdEncoding.DecodeString(os.Getenv("CQ_ZOWE_FILE_DATA"))
+		if err != nil {
+			_, _ = fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			_, _ = fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
 	}
 	_, _ = io.WriteString(os.Stdout, os.Getenv("CQ_ZOWE_STDOUT"))
 	_, _ = io.WriteString(os.Stderr, os.Getenv("CQ_ZOWE_STDERR"))
@@ -54,35 +85,45 @@ func TestFetchZoweCopybook(t *testing.T) {
 		copybook, "", 0,
 	)
 
-	got, err := fetchZoweDataSet(dsn, false)
+	got, err := fetchZoweCopybook(dsn)
 	if err != nil {
-		t.Fatalf("fetchZoweDataSet() error = %v", err)
+		t.Fatalf("fetchZoweCopybook() error = %v", err)
 	}
 	if string(got) != copybook {
-		t.Fatalf("fetchZoweDataSet() = %q, want %q", got, copybook)
+		t.Fatalf("fetchZoweCopybook() = %q, want %q", got, copybook)
 	}
 }
 
-func TestStreamZoweDataBinary(t *testing.T) {
+func TestDownloadZoweDataBinary(t *testing.T) {
 	const dsn = "HQ.CUSTOMER.DATA"
-	useZoweHelper(t,
-		[]string{"zos-files", "view", "data-set", dsn, "--binary"},
-		"raw-record-data", "", 0,
-	)
+	wantData := []byte{0x00, 0x0e, 0xff, '\n'}
+	original := zoweCommand
+	zoweCommand = func(args ...string) *exec.Cmd {
+		path, ok := zoweDownloadPath(args, dsn)
+		if !ok {
+			t.Fatalf("unexpected zowe args: %q", args)
+		}
+		return zoweDownloadHelperCommand(path, wantData, "", 0)
+	}
+	t.Cleanup(func() { zoweCommand = original })
 
-	stream, err := openZoweDataSet(dsn, true)
+	data, err := downloadZoweDataSet(dsn)
 	if err != nil {
-		t.Fatalf("openZoweDataSet() error = %v", err)
+		t.Fatalf("downloadZoweDataSet() error = %v", err)
 	}
-	got, err := io.ReadAll(stream)
+	path := data.Name()
+	got, err := io.ReadAll(data)
 	if err != nil {
-		t.Fatalf("reading stream: %v", err)
+		t.Fatalf("reading download: %v", err)
 	}
-	if err := stream.wait(); err != nil {
-		t.Fatalf("waiting for stream: %v", err)
+	if !reflect.DeepEqual(got, wantData) {
+		t.Fatalf("download = %v, want %v", got, wantData)
 	}
-	if string(got) != "raw-record-data" {
-		t.Fatalf("stream = %q, want raw-record-data", got)
+	if err := data.Close(); err != nil {
+		t.Fatalf("closing download: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("temporary download still exists at %q", path)
 	}
 }
 
@@ -93,28 +134,32 @@ func TestZoweErrorIncludesStderr(t *testing.T) {
 		"", "dataset not found", 8,
 	)
 
-	_, err := fetchZoweDataSet(dsn, false)
+	_, err := fetchZoweCopybook(dsn)
 	if err == nil || !strings.Contains(err.Error(), "dataset not found") {
-		t.Fatalf("fetchZoweDataSet() error = %v, want Zowe stderr", err)
+		t.Fatalf("fetchZoweCopybook() error = %v, want Zowe stderr", err)
 	}
 }
 
-func TestZoweStreamErrorIncludesStderr(t *testing.T) {
+func TestZoweDownloadErrorIncludesStderrAndRemovesTemporaryFile(t *testing.T) {
 	const dsn = "HQ.MISSING.DATA"
-	useZoweHelper(t,
-		[]string{"zos-files", "view", "data-set", dsn, "--binary"},
-		"", "not authorized", 8,
-	)
+	original := zoweCommand
+	var path string
+	zoweCommand = func(args ...string) *exec.Cmd {
+		var ok bool
+		path, ok = zoweDownloadPath(args, dsn)
+		if !ok {
+			t.Fatalf("unexpected zowe args: %q", args)
+		}
+		return zoweDownloadHelperCommand(path, []byte("partial"), "not authorized", 8)
+	}
+	t.Cleanup(func() { zoweCommand = original })
 
-	stream, err := openZoweDataSet(dsn, true)
-	if err != nil {
-		t.Fatalf("openZoweDataSet() error = %v", err)
+	_, err := downloadZoweDataSet(dsn)
+	if err == nil || !strings.Contains(err.Error(), "not authorized") {
+		t.Fatalf("downloadZoweDataSet() error = %v, want Zowe stderr", err)
 	}
-	if _, err := io.ReadAll(stream); err != nil {
-		t.Fatalf("reading stream: %v", err)
-	}
-	if err := stream.wait(); err == nil || !strings.Contains(err.Error(), "not authorized") {
-		t.Fatalf("stream.wait() error = %v, want Zowe stderr", err)
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("partial temporary download still exists at %q", path)
 	}
 }
 
@@ -165,12 +210,12 @@ func TestRunWithZoweDataSets(t *testing.T) {
 		switch {
 		case reflect.DeepEqual(args, []string{"zos-files", "view", "data-set", copybookDSN}):
 			return zoweHelperCommand("01 CUSTOMER.\n   05 NAME PIC X(3).\n", "", 0)
-		case reflect.DeepEqual(args, []string{"zos-files", "view", "data-set", dataDSN, "--binary"}):
-			return zoweHelperCommand("BOB", "", 0)
-		default:
-			t.Fatalf("unexpected zowe args: %q", args)
-			return nil
 		}
+		if path, ok := zoweDownloadPath(args, dataDSN); ok {
+			return zoweDownloadHelperCommand(path, []byte("BOB"), "", 0)
+		}
+		t.Fatalf("unexpected zowe args: %q", args)
+		return nil
 	}
 	t.Cleanup(func() { zoweCommand = originalCommand })
 
@@ -211,22 +256,40 @@ func TestRunPrefersZoweErrorForPartialRecord(t *testing.T) {
 		switch {
 		case reflect.DeepEqual(args, []string{"zos-files", "view", "data-set", copybookDSN}):
 			return zoweHelperCommand("01 CUSTOMER.\n   05 NAME PIC X(3).\n", "", 0)
-		case reflect.DeepEqual(args, []string{"zos-files", "view", "data-set", dataDSN, "--binary"}):
-			return zoweHelperCommand("BO", "connection lost", 8)
-		default:
-			t.Fatalf("unexpected zowe args: %q", args)
-			return nil
 		}
+		if path, ok := zoweDownloadPath(args, dataDSN); ok {
+			return zoweDownloadHelperCommand(path, []byte("BO"), "connection lost", 8)
+		}
+		t.Fatalf("unexpected zowe args: %q", args)
+		return nil
 	}
 	t.Cleanup(func() { zoweCommand = originalCommand })
+	out, err := os.CreateTemp(t.TempDir(), "cq-output-*.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = out.Close() })
+	originalStdout := os.Stdout
+	os.Stdout = out
+	t.Cleanup(func() { os.Stdout = originalStdout })
 
-	err := runWithArgs(t,
+	err = runWithArgs(t,
 		"--copybook-dsn", copybookDSN,
 		"--data-dsn", dataDSN,
 		"-codepage", "ascii",
 	)
 	if err == nil || !strings.Contains(err.Error(), "connection lost") {
 		t.Fatalf("run() error = %v, want Zowe failure", err)
+	}
+	if err := out.Close(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(out.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("run() output = %q, want none before Zowe download succeeds", got)
 	}
 }
 
@@ -259,7 +322,11 @@ func TestRunExpandsNestedCopiesThroughSearchPath(t *testing.T) {
 		case "HQL.CPY.SRC(FLAGS)":
 			return zoweHelperCommand("05 FLAG PIC X(1).\n", "", 0)
 		case dataDSN:
-			return zoweHelperCommand("BOBY", "", 0)
+			path, ok := zoweDownloadPath(args, dataDSN)
+			if !ok {
+				t.Fatalf("unexpected zowe download args: %q", args)
+			}
+			return zoweDownloadHelperCommand(path, []byte("BOBY"), "", 0)
 		default:
 			t.Fatalf("unexpected zowe args: %q", args)
 			return nil
