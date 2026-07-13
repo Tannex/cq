@@ -9,10 +9,9 @@ and reshaping, and anything else can be piped into the real `jq`.
 ```console
 $ cq -c CUSTOMER.cpy                         # layout: offset/length of each field
 $ cq -c CUSTOMER.cpy -d customer.bin         # decode records to a JSON array
+$ cq --copybook-dsn "HQ.COPYLIB(CUSTOMER)" --data-dsn "HQ.CUSTOMER.DATA"
 $ cq -q 'select(.BALANCE < 0)' -c CUSTOMER.cpy -d customer.bin
 $ cq -where DTAR107-SALE -c DTAR107.cbl -d sales.bin
-$ zowe zos-files view data-set "HQ.CUSTOMER.DATA" --binary \
-    | cq -c CUSTOMER.cpy -
 ```
 
 ## Install
@@ -24,19 +23,23 @@ $ go install github.com/Tannex/cq@latest
 ## Usage
 
 ```
-cq [flags] -c COPYBOOK [-d DATA]
-cq [flags] -c COPYBOOK [DATA]
+cq [flags] (-c COPYBOOK | --copybook-dsn DSN[(MEMBER)])
+           [-d DATA | --data-dsn DSN | DATA]
 ```
 
-With only `-c COPYBOOK`, cq prints the layout. Use `-d DATA` for a named data
-file, or one trailing `DATA` argument to decode records. A trailing `-` is the
-canonical stdin form. Records are fixed-length, derived from the copybook; use
-`-lrecl` if the physical records carry trailing padding.
+Provide one copybook source: a local `-c COPYBOOK`, or `--copybook-dsn` to
+fetch a data set or PDS member through the installed Zowe CLI. Data can come
+from `-d DATA`, a trailing `DATA` argument, stdin via a trailing `-`, or a
+binary Zowe download selected by `--data-dsn`. Records are fixed-length,
+derived from the copybook; use `-lrecl` if the physical records carry trailing
+padding.
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
-| `-c` | required | copybook file |
+| `-c` | one copybook source required | local copybook file |
+| `--copybook-dsn` | one copybook source required | data set or PDS member fetched as text through Zowe CLI |
 | `-d` | none | data file to decode (`-` for stdin); omit for layout output |
+| `--data-dsn` | none | data set downloaded in binary mode through Zowe CLI |
 | `-codepage` | `cp037` | EBCDIC codepage of the data (`cp037`, `cp277`, `cp1047`, `cp1140`, `cp1142`; `ascii`/`latin1` for testing) |
 | `-format` | `auto` | copybook source format: `fixed` (cols 7–72), `free`, or `auto` |
 | `-record` | first | which 01-level record to decode when the copybook has several |
@@ -116,42 +119,104 @@ the raw bytes before any JSON is built, and combines with `-q` (filter
 first, query after). Conditions inside `OCCURS` tables aren't supported
 yet.
 
-## Piping with Zowe CLI
+## Using Zowe CLI
 
-`cq` is built to sit at the end of a Zowe pipe. Fetch the copybook once —
-as **text**, so Zowe converts the EBCDIC source to UTF-8 — then stream the
-data as **binary**, so the bytes arrive untouched and `cq` does the
-decoding:
+`cq` can invoke an installed and configured Zowe CLI directly. This is the
+cross-platform form, including Windows PowerShell and Command Prompt:
+
+```console
+$ cq --copybook-dsn "HQ.COPYLIB(CUSTOMER)" --data-dsn "HQ.CUSTOMER.DATA"
+```
+
+Zowe® CLI is not included with `cq` and must be installed and configured
+separately. `cq` is an independent project and is not affiliated with or
+endorsed by The Linux Foundation or the Zowe project. Zowe® is a registered
+trademark of The Linux Foundation.
+
+The copybook is fetched as text so z/OSMF converts its EBCDIC source, while
+the data set is downloaded in binary mode to preserve packed and binary
+fields. The download uses an OS temporary file that is removed after decoding.
+Zowe authentication, profiles, certificates, and connection settings continue
+to come from the user's normal Zowe configuration; binary mode takes precedence
+over a profile-level encoding on this download path.
+
+### Nested copybooks
+
+When a copybook contains `COPY MEMBER.`, cq resolves the member recursively
+through the ordered libraries in `DSNSearchPath`. By default, `cq` reads
+`config.json` from its platform user configuration directory:
+
+- Linux: `$XDG_CONFIG_HOME/cq/config.json`, or `$HOME/.config/cq/config.json`
+- macOS: `$HOME/Library/Application Support/cq/config.json`
+- Windows: `%AppData%\cq\config.json`
+
+Create that file with the ordered library search path:
+
+```json
+{
+  "DSNSearchPath": [
+    "HQL.CPY.SRC",
+    "HQL.COB.SRC"
+  ]
+}
+```
+
+Run `cq config` to create this file when absent and open it in `$VISUAL`,
+`$EDITOR`, or the platform text editor.
+
+For `COPY ADDRESS.`, cq first requests `HQL.CPY.SRC(ADDRESS)`, then
+`HQL.COB.SRC(ADDRESS)`, stopping at the first successful result. Resolved
+members are cached for the command, nested `COPY` statements use the same
+search order, and cycles are reported with the full member chain. The current
+scope supports plain `COPY MEMBER.` statements; `REPLACING`, `OF`, and `IN`
+clauses are rejected explicitly.
+
+Input containing a non-comment `PROCEDURE DIVISION` is rejected as `Not a
+copybook` before its `COPY` statements are expanded.
+
+Local files remain available:
 
 ```console
 $ zowe zos-files download data-set "HQ.COPYLIB(CUSTOMER)" --file CUSTOMER.cpy
-$ zowe zos-files view data-set "HQ.CUSTOMER.DATA" --binary | cq -c CUSTOMER.cpy -
+$ zowe zos-files download data-set "HQ.CUSTOMER.DATA" --binary --file customer.bin
+$ cq -c CUSTOMER.cpy -d customer.bin
 ```
 
 Everyday variations:
 
 ```console
 # Peek at the first few records of a big dataset
-$ zowe zos-files view data-set "HQ.CUSTOMER.DATA" --binary \
-    | cq -max 5 -pretty -c CUSTOMER.cpy -
+$ cq -max 5 -pretty --copybook-dsn "HQ.COPYLIB(CUSTOMER)" \
+    --data-dsn "HQ.CUSTOMER.DATA"
 
 # Pull only the sales out of a transaction file
-$ zowe zos-files view data-set "PROD.DAILY.TXNS" --binary \
-    | cq -where DTAR107-SALE -c DTAR107.cbl -
+$ cq -where DTAR107-SALE -c DTAR107.cbl --data-dsn "PROD.DAILY.TXNS"
 
 # Sum an amount field across the whole dataset
-$ zowe zos-files view data-set "PROD.DAILY.TXNS" --binary \
-    | cq -q '.["DTAR107-AMOUNT"]' -c DTAR107.cbl - | jq -s add
+$ cq -q '.["DTAR107-AMOUNT"]' -c DTAR107.cbl \
+    --data-dsn "PROD.DAILY.TXNS" | jq -s add
 
 # Download once, slice locally many times
 $ zowe zos-files download data-set "HQ.CUSTOMER.DATA" --binary --file customer.bin
 $ cq -r -q '.["CUST-NAME"]' -c CUSTOMER.cpy -d customer.bin
 ```
 
-Two things to keep straight: always use `--binary` for the data (without it
-Zowe converts EBCDIC to ASCII and inserts newlines, corrupting packed and
-binary fields), and if the dataset's LRECL is larger than the copybook
-layout (padded FB records), pass `-lrecl` with the dataset's record length.
+Do not pipe `zowe zos-files view data-set --binary` into `cq`: the view path can
+alter packed and binary bytes. Use `--data-dsn` or `zowe zos-files download
+data-set --binary --file` instead. For a manual POSIX pipeline, download to
+`/dev/stdout` and enable `pipefail`, because `cq` cannot observe an upstream
+process failure through stdin:
+
+```console
+$ set -o pipefail
+$ zowe zos-files download data-set "HQ.CUSTOMER.DATA" --binary \
+    --file /dev/stdout --overwrite \
+    | cq -c CUSTOMER.cpy -
+```
+
+If the dataset's LRECL is larger than the copybook layout (padded FB records),
+pass `-lrecl` with the dataset's record length. `-max` limits decoding, but a
+`--data-dsn` source is downloaded in full first.
 
 ## Supported COBOL
 
@@ -164,6 +229,7 @@ layout (padded FB records), pass `-lrecl` with the dataset's record length.
   `SIGN LEADING/TRAILING [SEPARATE]`
 - `OCCURS`, including `OCCURS ... DEPENDING ON` when the variable table is
   the trailing storage of the record
+- Recursive `COPY MEMBER.` expansion through configured Zowe DSN search paths
 - Fixed (columns 7–72) and free source formats, auto-detected; sequence
   numbers and comment lines handled
 
