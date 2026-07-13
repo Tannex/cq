@@ -4,7 +4,7 @@
 //
 //	cq CUSTOMER.cpy                          # layout as JSON
 //	cq CUSTOMER.cpy customer.bin | jq '.[0]' # decode records
-//	zowe files download ds "HQ.CUST" --binary --file - | cq CUSTOMER.cpy -
+//	zowe zos-files view data-set "HQ.CUST" --binary | cq CUSTOMER.cpy -
 package main
 
 import (
@@ -67,7 +67,7 @@ examples:
   cq -q 'select(.BALANCE < 0)' CUSTOMER.cpy customer.bin
   cq -r -q '.["CUST-NAME"]' CUSTOMER.cpy customer.bin
   cq -where DTAR107-SALE -where 'not DTAR107-VOID' DTAR107.cbl sales.bin
-  zowe zos-files download ds "HQ.CUSTOMER.DATA" --binary --file - | cq CUSTOMER.cpy -
+  zowe zos-files view data-set "HQ.CUSTOMER.DATA" --binary | cq CUSTOMER.cpy -
 `)
 	}
 	fs.Parse(os.Args[1:])

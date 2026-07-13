@@ -2,16 +2,17 @@
 
 `cq` parses a COBOL copybook and either prints the record layout (byte
 offset and length of every field) or decodes fixed-length EBCDIC records —
-for example a binary dataset downloaded with Zowe CLI — into a UTF-8 JSON
-array. The output is plain JSON on stdout, made to be piped into `jq`.
+for example a binary dataset fetched with Zowe CLI — into UTF-8 JSON. The
+output is plain JSON on stdout; a built-in jq (`-q`) covers most filtering
+and reshaping, and anything else can be piped into the real `jq`.
 
 ```console
 $ cq CUSTOMER.cpy                     # layout: offset/length of each field
 $ cq CUSTOMER.cpy customer.bin        # decode records to a JSON array
 $ cq -q 'select(.BALANCE < 0)' CUSTOMER.cpy customer.bin   # built-in jq
 $ cq -where DTAR107-SALE DTAR107.cbl sales.bin             # filter by level-88
-$ zowe zos-files download ds "HQ.CUSTOMER.DATA" --binary --file - \
-    | cq CUSTOMER.cpy - | jq '.[] | select(.BALANCE < 0)'
+$ zowe zos-files view data-set "HQ.CUSTOMER.DATA" --binary \
+    | cq CUSTOMER.cpy -
 ```
 
 ## Install
@@ -38,7 +39,7 @@ the copybook; use `-lrecl` if the physical records carry trailing padding.
 | `-pretty` | off | indent JSON output |
 | `-fillers` | off | include FILLER fields in decoded output |
 | `-max` | all | decode at most N records |
-| `-lrecl` | layout | physical record length when it exceeds the layout |
+| `-lrecl` | layout size | physical record length when it exceeds the layout |
 | `-q` | none | jq expression (full jq language via [gojq](https://github.com/itchyny/gojq)) |
 | `-r` | off | with `-q`, print string results raw instead of JSON-quoted |
 | `-where` | none | keep only records satisfying a level-88 condition; `!`/`not ` negates; repeat to AND |
@@ -54,7 +55,8 @@ $ cq CUSTOMER.cpy | jq '.[0].fields[] | {name, offset, length, kind}'
 
 Offsets are 0-based. `length` is the size of one element; array fields also
 carry `occurs`. Kinds: `text`, `zoned`, `packed` (COMP-3), `binary` (COMP),
-`float` (COMP-1/2), `edited`, `group`.
+`float` (COMP-1/2), `edited`, `group`. Level-88 condition names appear on
+their field under `conditions`, with their VALUE literals and THRU ranges.
 
 ### Decode output
 
@@ -77,6 +79,19 @@ ALICE
 BOB
 ```
 
+In layout mode the expression runs against the layout document:
+
+```console
+$ cq -r -q '.[0].fields[] | "\(.offset)\t\(.length)\t\(.name)"' CUSTOMER.cpy
+0	5	CUST-NO
+5	10	CUST-NAME
+```
+
+Note that COBOL names need `.["CUST-NAME"]` (or `."CUST-NAME"`) syntax,
+since `-` is subtraction in jq. `halt` and `halt_error` work; query results
+print object keys in sorted order (plain decode output keeps copybook
+order).
+
 ### Level-88 filters (`-where`)
 
 Copybooks already define their business vocabulary as level-88 condition
@@ -95,21 +110,44 @@ supported; matching is exact for numeric fields (full packed-decimal
 precision) and trailing-space-insensitive for text. Filtering happens on
 the raw bytes before any JSON is built, and combines with `-q` (filter
 first, query after). Conditions inside `OCCURS` tables aren't supported
-yet. The layout output lists every condition with its values under
-`conditions`.
+yet.
 
-In layout mode the expression runs against the layout document:
+## Piping with Zowe CLI
+
+`cq` is built to sit at the end of a Zowe pipe. Fetch the copybook once —
+as **text**, so Zowe converts the EBCDIC source to UTF-8 — then stream the
+data as **binary**, so the bytes arrive untouched and `cq` does the
+decoding:
 
 ```console
-$ cq -r -q '.[0].fields[] | "\(.offset)\t\(.length)\t\(.name)"' CUSTOMER.cpy
-0	5	CUST-NO
-5	10	CUST-NAME
+$ zowe zos-files download data-set "HQ.COPYLIB(CUSTOMER)" --file CUSTOMER.cpy
+$ zowe zos-files view data-set "HQ.CUSTOMER.DATA" --binary | cq CUSTOMER.cpy -
 ```
 
-Note that COBOL names need `.["CUST-NAME"]` (or `."CUST-NAME"`) syntax,
-since `-` is subtraction in jq. `halt` and `halt_error` work; query results
-print object keys in sorted order (plain decode output keeps copybook
-order).
+Everyday variations:
+
+```console
+# Peek at the first few records of a big dataset
+$ zowe zos-files view data-set "HQ.CUSTOMER.DATA" --binary \
+    | cq -max 5 -pretty CUSTOMER.cpy -
+
+# Pull only the sales out of a transaction file
+$ zowe zos-files view data-set "PROD.DAILY.TXNS" --binary \
+    | cq -where DTAR107-SALE DTAR107.cbl -
+
+# Sum an amount field across the whole dataset
+$ zowe zos-files view data-set "PROD.DAILY.TXNS" --binary \
+    | cq -q '.["DTAR107-AMOUNT"]' DTAR107.cbl - | jq -s add
+
+# Download once, slice locally many times
+$ zowe zos-files download data-set "HQ.CUSTOMER.DATA" --binary --file customer.bin
+$ cq -r -q '.["CUST-NAME"]' CUSTOMER.cpy customer.bin
+```
+
+Two things to keep straight: always use `--binary` for the data (without it
+Zowe converts EBCDIC to ASCII and inserts newlines, corrupting packed and
+binary fields), and if the dataset's LRECL is larger than the copybook
+layout (padded FB records), pass `-lrecl` with the dataset's record length.
 
 ## Supported COBOL
 
