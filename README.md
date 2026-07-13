@@ -33,7 +33,7 @@ the copybook; use `-lrecl` if the physical records carry trailing padding.
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
-| `-codepage` | `cp037` | EBCDIC codepage of the data (`cp037`, `cp1047`, `cp1140`; `ascii`/`latin1` for testing) |
+| `-codepage` | `cp037` | EBCDIC codepage of the data (`cp037`, `cp277`, `cp1047`, `cp1140`, `cp1142`; `ascii`/`latin1` for testing) |
 | `-format` | `auto` | copybook source format: `fixed` (cols 7–72), `free`, or `auto` |
 | `-record` | first | which 01-level record to decode when the copybook has several |
 | `-pretty` | off | indent JSON output |
@@ -165,8 +165,12 @@ layout (padded FB records), pass `-lrecl` with the dataset's record length.
 
 Not yet: multiple `OCCURS DEPENDING ON` per record or ODO followed by other
 fields, IBM hexadecimal floating point, `USAGE POINTER/INDEX`, national
-(PIC N) widths, RDW-prefixed (VB) files, codepages beyond those shipped by
-`golang.org/x/text` (cp037, cp1047, cp1140).
+(PIC N) widths, RDW-prefixed (VB) files.
+
+Codepages: cp037 (default), cp277 (Denmark/Norway), cp1047, cp1140, and
+cp1142 (277 with euro). Names are matched loosely — `IBM-277`, `ibm277`,
+`cp277` and `277` all work. Other EBCDIC pages are a 256-entry table away;
+open an issue.
 
 ## Test data
 

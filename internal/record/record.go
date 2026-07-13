@@ -10,8 +10,6 @@ import (
 	"strconv"
 	"strings"
 
-	"golang.org/x/text/encoding/charmap"
-
 	"github.com/Tannex/cq/internal/decode"
 	"github.com/Tannex/cq/internal/layout"
 )
@@ -19,7 +17,7 @@ import (
 // Decoder decodes records described by a single record layout.
 type Decoder struct {
 	Rec            *layout.Record
-	CM             *charmap.Charmap
+	CM             *decode.Charmap
 	IncludeFillers bool
 	Lrecl          int // record length override; 0 = derive from layout
 
@@ -30,7 +28,7 @@ type Decoder struct {
 
 // NewDecoder validates that the record is decodable (at most one OCCURS
 // DEPENDING ON, and only as the trailing storage of the record).
-func NewDecoder(rec *layout.Record, cm *charmap.Charmap) (*Decoder, error) {
+func NewDecoder(rec *layout.Record, cm *decode.Charmap) (*Decoder, error) {
 	d := &Decoder{Rec: rec, CM: cm}
 	var odos []*layout.Field
 	layout.Walk(rec.Field, func(f *layout.Field) {

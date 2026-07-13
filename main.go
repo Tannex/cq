@@ -34,7 +34,7 @@ func main() {
 
 func run() error {
 	fs := flag.NewFlagSet("cq", flag.ExitOnError)
-	codepage := fs.String("codepage", "cp037", "EBCDIC codepage of the data (cp037, cp1047, cp1140; ascii/latin1 for testing)")
+	codepage := fs.String("codepage", "cp037", "EBCDIC codepage of the data (cp037, cp277, cp1047, cp1140, cp1142; ascii/latin1 for testing)")
 	format := fs.String("format", "auto", "copybook source format: auto, fixed (cols 7-72), or free")
 	recName := fs.String("record", "", "01-level record to decode when the copybook has several (default: first)")
 	pretty := fs.Bool("pretty", false, "indent JSON output")

@@ -4,8 +4,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-
-	"golang.org/x/text/encoding/charmap"
 )
 
 // --- Codepage -----------------------------------------------------------
@@ -13,23 +11,23 @@ import (
 func TestCodepageNormalization(t *testing.T) {
 	tests := []struct {
 		name string
-		want *charmap.Charmap
+		want *Charmap
 	}{
-		{"cp037", charmap.CodePage037},
-		{"CP037", charmap.CodePage037},
-		{"037", charmap.CodePage037},
-		{"IBM037", charmap.CodePage037},
-		{"IBM-037", charmap.CodePage037},
-		{"ibm-037", charmap.CodePage037},
-		{"1047", charmap.CodePage1047},
-		{"cp1047", charmap.CodePage1047},
-		{"IBM1047", charmap.CodePage1047},
-		{"1140", charmap.CodePage1140},
-		{"cp1140", charmap.CodePage1140},
-		{"ascii", charmap.ISO8859_1},
-		{"ASCII", charmap.ISO8859_1},
-		{"latin1", charmap.ISO8859_1},
-		{"LATIN1", charmap.ISO8859_1},
+		{"cp037", mustCM(t, "037")},
+		{"CP037", mustCM(t, "037")},
+		{"037", mustCM(t, "037")},
+		{"IBM037", mustCM(t, "037")},
+		{"IBM-037", mustCM(t, "037")},
+		{"ibm-037", mustCM(t, "037")},
+		{"1047", mustCM(t, "1047")},
+		{"cp1047", mustCM(t, "1047")},
+		{"IBM1047", mustCM(t, "1047")},
+		{"1140", mustCM(t, "1140")},
+		{"cp1140", mustCM(t, "1140")},
+		{"ascii", mustCM(t, "latin1")},
+		{"ASCII", mustCM(t, "latin1")},
+		{"latin1", mustCM(t, "latin1")},
+		{"LATIN1", mustCM(t, "latin1")},
 	}
 
 	for _, tc := range tests {
@@ -68,12 +66,12 @@ func TestCodepageUnknown(t *testing.T) {
 // --- String ---------------------------------------------------------------
 
 func TestString(t *testing.T) {
-	cp037 := charmap.CodePage037
+	cp037 := mustCM(t, "037")
 
 	tests := []struct {
 		name string
 		b    []byte
-		cm   *charmap.Charmap
+		cm   *Charmap
 		want string
 	}{
 		{
@@ -109,7 +107,7 @@ func TestString(t *testing.T) {
 		{
 			name: "ascii round trip",
 			b:    []byte("HELLO   "),
-			cm:   charmap.ISO8859_1,
+			cm:   mustCM(t, "latin1"),
 			want: "HELLO",
 		},
 	}
@@ -127,7 +125,7 @@ func TestString(t *testing.T) {
 // --- EncodeString -----------------------------------------------------------
 
 func TestEncodeString(t *testing.T) {
-	cp037 := charmap.CodePage037
+	cp037 := mustCM(t, "037")
 
 	t.Run("pads with cp037 space", func(t *testing.T) {
 		got, err := EncodeString("AB1", 4, cp037)
@@ -175,7 +173,7 @@ func TestEncodeString(t *testing.T) {
 	})
 
 	t.Run("ascii padding", func(t *testing.T) {
-		got, err := EncodeString("HI", 5, charmap.ISO8859_1)
+		got, err := EncodeString("HI", 5, mustCM(t, "latin1"))
 		if err != nil {
 			t.Fatalf("EncodeString: %v", err)
 		}
@@ -679,5 +677,42 @@ func assertValidJSONNumber(t *testing.T, s string) {
 	// Also verify strconv can parse it as a float, as a sanity backstop.
 	if _, err := strconv.ParseFloat(s, 64); err != nil {
 		t.Fatalf("%q failed strconv.ParseFloat: %v", s, err)
+	}
+}
+
+func mustCM(t *testing.T, name string) *Charmap {
+	t.Helper()
+	cm, err := Codepage(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cm
+}
+
+func TestCP277Danish(t *testing.T) {
+	cm := mustCM(t, "cp277")
+	// Æ Ø Å live where cp037 keeps # @ $; verified against glibc iconv.
+	if got := String([]byte{0x7B, 0x7C, 0x5B, 0xC0, 0x6A, 0xD0}, cm); got != "ÆØÅæøå" {
+		t.Errorf("String = %q, want ÆØÅæøå", got)
+	}
+	enc, err := EncodeString("ÅRHUS", 8, cm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []byte{0x5B, 0xD9, 0xC8, 0xE4, 0xE2, 0x40, 0x40, 0x40}
+	if string(enc) != string(want) {
+		t.Errorf("EncodeString(ÅRHUS) = % X, want % X", enc, want)
+	}
+	if got := String(enc, cm); got != "ÅRHUS" {
+		t.Errorf("round trip = %q", got)
+	}
+
+	// cp1142 is cp277 with the euro at 0x5A (replacing ¤).
+	cm1142 := mustCM(t, "IBM-1142")
+	if got := String([]byte{0x5A}, cm1142); got != "€" {
+		t.Errorf("cp1142 0x5A = %q, want €", got)
+	}
+	if got := String([]byte{0x5A}, cm); got != "¤" {
+		t.Errorf("cp277 0x5A = %q, want ¤", got)
 	}
 }

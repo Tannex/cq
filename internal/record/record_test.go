@@ -6,8 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"golang.org/x/text/encoding/charmap"
-
 	"github.com/Tannex/cq/internal/copybook"
 	"github.com/Tannex/cq/internal/decode"
 	"github.com/Tannex/cq/internal/layout"
@@ -23,7 +21,7 @@ func mustDecoder(t *testing.T, src string) *Decoder {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d, err := NewDecoder(recs[0], charmap.CodePage037)
+	d, err := NewDecoder(recs[0], cp037(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +31,7 @@ func mustDecoder(t *testing.T, src string) *Decoder {
 // ebc encodes text as cp037, padded to width.
 func ebc(t *testing.T, s string, width int) []byte {
 	t.Helper()
-	b, err := decode.EncodeString(s, width, charmap.CodePage037)
+	b, err := decode.EncodeString(s, width, cp037(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,4 +238,13 @@ func zonedUnsigned(digits string) []byte {
 		b[i] = 0xF0 | (digits[i] - '0')
 	}
 	return b
+}
+
+func cp037(t *testing.T) *decode.Charmap {
+	t.Helper()
+	cm, err := decode.Codepage("037")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cm
 }

@@ -17,38 +17,71 @@ import (
 	"golang.org/x/text/encoding/charmap"
 )
 
-// codepages maps normalized codepage names to their charmap.
-//
-// golang.org/x/text/encoding/charmap only ships a small subset of the IBM
-// EBCDIC code pages as prebuilt tables: CodePage037, CodePage1047 and
-// CodePage1140. Common z/OS code pages such as 500, 273, 285, 297, 870 and
-// 1141-1149 are not provided by that package and therefore cannot be
-// supported here without shipping custom translation tables. Names for
-// those code pages are intentionally not registered so that an unknown
-// name produces a clear error rather than silently mapping to the wrong
-// table.
-var codepages = map[string]*charmap.Charmap{
-	"037":  charmap.CodePage037,
-	"1047": charmap.CodePage1047,
-	"1140": charmap.CodePage1140,
+// Charmap is a single-byte codepage: a byte-to-rune table with its
+// reverse map for encoding. It replaces golang.org/x/text's *Charmap so
+// that codepages that package does not ship (e.g. IBM-277) can be added
+// as plain tables.
+type Charmap struct {
+	name string
+	to   [256]rune
+	from map[rune]byte
+}
 
-	// Not true EBCDIC, but useful for testing with plain ASCII/Latin-1
-	// fixtures instead of real mainframe extracts.
-	"ascii":  charmap.ISO8859_1,
-	"latin1": charmap.ISO8859_1,
+// Name returns the canonical name of the codepage, e.g. "cp277".
+func (c *Charmap) Name() string { return c.name }
+
+func newCharmap(name string, to [256]rune) *Charmap {
+	c := &Charmap{name: name, to: to}
+	c.from = make(map[rune]byte, 256)
+	for b, r := range to {
+		if _, dup := c.from[r]; !dup { // first mapping wins on duplicates
+			c.from[r] = byte(b)
+		}
+	}
+	return c
+}
+
+// fromXText builds a table by interrogating a golang.org/x/text charmap.
+func fromXText(name string, cm *charmap.Charmap) *Charmap {
+	var to [256]rune
+	for i := 0; i < 256; i++ {
+		to[i] = cm.DecodeByte(byte(i))
+	}
+	return newCharmap(name, to)
+}
+
+// codepages maps normalized codepage names to their table.
+//
+// 037, 1047 and 1140 come from golang.org/x/text/encoding/charmap; 277
+// (Denmark/Norway) and 1142 (277 with the euro sign) are shipped as tables
+// in tables.go because x/text does not provide them. Other z/OS code pages
+// (500, 273, 285, 297, 870, ...) are intentionally not registered so that
+// an unknown name produces a clear error rather than silently mapping to
+// the wrong table; they can be added the same way as 277.
+// latin1 is not true EBCDIC, but useful for testing with plain
+// ASCII/Latin-1 fixtures instead of real mainframe extracts.
+var latin1 = fromXText("latin1", charmap.ISO8859_1)
+
+var codepages = map[string]*Charmap{
+	"037":  fromXText("cp037", charmap.CodePage037),
+	"1047": fromXText("cp1047", charmap.CodePage1047),
+	"1140": fromXText("cp1140", charmap.CodePage1140),
+	"277":  newCharmap("cp277", tableCP277),
+	"1142": newCharmap("cp1142", tableCP1142),
+
+	"ascii":  latin1,
+	"latin1": latin1,
 }
 
 // Codepage maps a user-supplied name to a charmap. Names are matched
 // case-insensitively, with optional "cp", "ibm" or "ibm-" prefixes
-// stripped before lookup, e.g. "cp037", "037", "IBM037", "cp1047",
-// "IBM-1047", "cp1140" all resolve. "ascii" and "latin1" map to
-// charmap.ISO8859_1, which is useful for exercising this package with
-// plain-ASCII test fixtures.
+// stripped before lookup, e.g. "cp037", "037", "IBM037", "cp277",
+// "IBM-277", "cp1047", "cp1140", "cp1142" all resolve. "ascii" and
+// "latin1" map to ISO 8859-1, which is useful for exercising this package
+// with plain-ASCII test fixtures.
 //
-// Only the EBCDIC code pages actually shipped by
-// golang.org/x/text/encoding/charmap are supported: 037, 1047 and 1140.
 // An unknown name returns an error listing the supported names.
-func Codepage(name string) (*charmap.Charmap, error) {
+func Codepage(name string) (*Charmap, error) {
 	key := normalizeCodepageName(name)
 	if cm, ok := codepages[key]; ok {
 		return cm, nil
@@ -76,36 +109,34 @@ func normalizeCodepageName(name string) string {
 
 // String decodes a fixed-width text field to UTF-8 using cm, then trims
 // trailing spaces and NUL bytes. cm may not be nil.
-func String(b []byte, cm *charmap.Charmap) string {
-	s, err := cm.NewDecoder().Bytes(b)
-	if err != nil {
-		// charmap decoders do not return errors for byte-oriented
-		// Charmap tables (unmapped bytes become U+FFFD), but guard
-		// against future/alternate encodings defensively.
-		s = b
+func String(b []byte, cm *Charmap) string {
+	var sb strings.Builder
+	sb.Grow(len(b))
+	for _, c := range b {
+		sb.WriteRune(cm.to[c])
 	}
-	return strings.TrimRight(string(s), " \x00")
+	return strings.TrimRight(sb.String(), " \x00")
 }
 
 // EncodeString encodes a UTF-8 string to the given charmap, padding with
-// the charmap's space character (encode " ") to width. The result is
-// truncated if it is longer than width. It is intended as a test and
-// round-trip helper.
-func EncodeString(s string, width int, cm *charmap.Charmap) ([]byte, error) {
-	enc, err := cm.NewEncoder().Bytes([]byte(s))
-	if err != nil {
-		return nil, fmt.Errorf("decode: EncodeString: %w", err)
+// the charmap's space character to width. The result is truncated if it
+// is longer than width. It is intended as a test and round-trip helper.
+// A rune with no mapping in the codepage is an error.
+func EncodeString(s string, width int, cm *Charmap) ([]byte, error) {
+	enc := make([]byte, 0, width)
+	for _, r := range s {
+		b, ok := cm.from[r]
+		if !ok {
+			return nil, fmt.Errorf("decode: EncodeString: %q cannot be encoded in %s", r, cm.name)
+		}
+		enc = append(enc, b)
 	}
 	if len(enc) >= width {
 		return enc[:width], nil
 	}
-	sp, err := cm.NewEncoder().Bytes([]byte(" "))
-	if err != nil {
-		return nil, fmt.Errorf("decode: EncodeString: encode pad space: %w", err)
-	}
-	padByte := byte(' ')
-	if len(sp) == 1 {
-		padByte = sp[0]
+	padByte, ok := cm.from[' ']
+	if !ok {
+		padByte = ' '
 	}
 	out := make([]byte, width)
 	copy(out, enc)
