@@ -1,10 +1,19 @@
 # COBOL Copybook Test Fixtures - cb2xml Source Collection
 
-This directory contains COBOL copybook test fixtures collected from the [bmTas/cb2xml](https://github.com/bmTas/cb2xml) open-source repository. These copybooks are used as test fixtures to validate COBOL parsing functionality.
+This directory contains unmodified COBOL copybooks and expected XML outputs
+from the [bmTas/cb2xml](https://github.com/bmTas/cb2xml) open-source
+repository. They are used as test fixtures to validate COBOL parsing.
+
+The files were verified byte-for-byte against upstream commit
+[`f71bf3be2ec720be8b0154475226aaba575a6311`](https://github.com/bmTas/cb2xml/tree/f71bf3be2ec720be8b0154475226aaba575a6311).
+Copyright and authorship remain with the cb2xml contributors.
 
 ## License
 
-All files in this directory are sourced from the cb2xml project, which is licensed under the **GNU Lesser General Public License v2.1 (LGPL-2.1)**. These files are used solely as test fixtures for parser validation and testing purposes. For complete license details, see: https://github.com/bmTas/cb2xml/blob/master/LICENSE
+The upstream project distributes these files under the **GNU Lesser General
+Public License v2.1 (LGPL-2.1)**. The complete upstream license text is
+included in [`LICENSE`](LICENSE). This notice does not change the license of
+the rest of cq, which is covered by the repository-root `LICENSE`.
 
 ## Copybook Files and Features
 
@@ -167,7 +176,7 @@ These XML files contain the expected parsed field structure, including:
 - **Repository**: https://github.com/bmTas/cb2xml
 - **Default Branch**: master
 - **License**: GNU Lesser General Public License v2.1 (LGPL-2.1)
-- **Latest Update**: 2026-07-13
+- **Source Revision**: f71bf3be2ec720be8b0154475226aaba575a6311 (2026-07-07)
 
 ## Usage Notes
 
