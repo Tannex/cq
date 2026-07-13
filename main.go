@@ -36,6 +36,7 @@ func run() error {
 	fs := flag.NewFlagSet("cq", flag.ExitOnError)
 	copybookPath := fs.String("c", "", "local copybook file")
 	copybookDSN := fs.String("copybook-dsn", "", "copybook data set or member to fetch through Zowe CLI")
+	configPath := fs.String("config", "", "JSON config file (default: cq.json when present)")
 	dataPath := fs.String("d", "", "data file to decode (use - for stdin; omit for layout output)")
 	dataDSN := fs.String("data-dsn", "", "data set to stream in binary mode through Zowe CLI")
 	codepage := fs.String("codepage", "cp037", "EBCDIC codepage of the data (cp037, cp277, cp1047, cp1140, cp1142; ascii/latin1 for testing)")
@@ -95,6 +96,10 @@ examples:
 	if *dataPath != "" && *dataDSN != "" {
 		return errors.New("provide only one data source: -d DATA, --data-dsn DSN, or positional DATA")
 	}
+	cfg, err := loadConfig(*configPath)
+	if err != nil {
+		return err
+	}
 
 	var cbFormat copybook.Format
 	switch *format {
@@ -117,7 +122,6 @@ examples:
 	}
 
 	var src []byte
-	var err error
 	if *copybookDSN != "" {
 		src, err = fetchZoweDataSet(*copybookDSN, false)
 	} else {
@@ -126,7 +130,8 @@ examples:
 	if err != nil {
 		return err
 	}
-	items, err := copybook.Parse(string(src), cbFormat)
+	resolver := newDSNCopyResolver(cfg.DSNSearchPath)
+	items, err := copybook.ParseWithCopies(string(src), cbFormat, resolver.Resolve)
 	if err != nil {
 		return err
 	}

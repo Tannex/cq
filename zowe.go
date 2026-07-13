@@ -30,6 +30,38 @@ func fetchZoweDataSet(dsn string, binary bool) ([]byte, error) {
 	return out, nil
 }
 
+type dsnCopyResolver struct {
+	searchPaths []string
+	cache       map[string]string
+}
+
+func newDSNCopyResolver(searchPaths []string) *dsnCopyResolver {
+	return &dsnCopyResolver{searchPaths: searchPaths, cache: make(map[string]string)}
+}
+
+func (r *dsnCopyResolver) Resolve(member string) (string, error) {
+	member = strings.ToUpper(strings.TrimSpace(member))
+	if src, ok := r.cache[member]; ok {
+		return src, nil
+	}
+	if len(r.searchPaths) == 0 {
+		return "", fmt.Errorf("COPY %s requires DSNSearchPath in %s or --config FILE", member, defaultConfigPath)
+	}
+
+	var failures []string
+	for _, library := range r.searchPaths {
+		dsn := fmt.Sprintf("%s(%s)", library, member)
+		src, err := fetchZoweDataSet(dsn, false)
+		if err == nil {
+			text := string(src)
+			r.cache[member] = text
+			return text, nil
+		}
+		failures = append(failures, err.Error())
+	}
+	return "", fmt.Errorf("COPY %s was not resolved through DSNSearchPath:\n  %s", member, strings.Join(failures, "\n  "))
+}
+
 type zoweDataStream struct {
 	dsn    string
 	cmd    *exec.Cmd

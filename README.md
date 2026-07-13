@@ -39,6 +39,7 @@ from the copybook; use `-lrecl` if the physical records carry trailing padding.
 | --- | --- | --- |
 | `-c` | one copybook source required | local copybook file |
 | `--copybook-dsn` | one copybook source required | data set or PDS member fetched as text through Zowe CLI |
+| `--config` | `cq.json` when present | JSON configuration file |
 | `-d` | none | data file to decode (`-` for stdin); omit for layout output |
 | `--data-dsn` | none | data set streamed in binary mode through Zowe CLI |
 | `-codepage` | `cp037` | EBCDIC codepage of the data (`cp037`, `cp277`, `cp1047`, `cp1140`, `cp1142`; `ascii`/`latin1` for testing) |
@@ -134,6 +135,28 @@ the data set is streamed in binary mode to preserve packed and binary fields.
 Zowe authentication, profiles, certificates, and connection settings continue
 to come from the user's normal Zowe configuration.
 
+### Nested copybooks
+
+When a copybook contains `COPY MEMBER.`, cq resolves the member recursively
+through the ordered libraries in `DSNSearchPath`. Put `cq.json` in the current
+directory, or select another file with `--config`:
+
+```json
+{
+  "DSNSearchPath": [
+    "HQL.CPY.SRC",
+    "HQL.COB.SRC"
+  ]
+}
+```
+
+For `COPY ADDRESS.`, cq first requests `HQL.CPY.SRC(ADDRESS)`, then
+`HQL.COB.SRC(ADDRESS)`, stopping at the first successful result. Resolved
+members are cached for the command, nested `COPY` statements use the same
+search order, and cycles are reported with the full member chain. The current
+scope supports plain `COPY MEMBER.` statements; `REPLACING`, `OF`, and `IN`
+clauses are rejected explicitly.
+
 Local files and explicit pipelines remain available:
 
 ```console
@@ -178,6 +201,7 @@ pass `-lrecl` with the dataset's record length.
   `SIGN LEADING/TRAILING [SEPARATE]`
 - `OCCURS`, including `OCCURS ... DEPENDING ON` when the variable table is
   the trailing storage of the record
+- Recursive `COPY MEMBER.` expansion through configured Zowe DSN search paths
 - Fixed (columns 7–72) and free source formats, auto-detected; sequence
   numbers and comment lines handled
 

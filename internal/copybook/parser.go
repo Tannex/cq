@@ -10,7 +10,10 @@ import (
 // records). Level-88 entries attach to their data item; level-66 RENAMES
 // entries are skipped.
 func Parse(src string, f Format) ([]*Item, error) {
-	toks := lex(src, f)
+	return parseTokens(lex(src, f))
+}
+
+func parseTokens(toks []token) ([]*Item, error) {
 	p := &parser{toks: toks}
 	var roots []*Item
 	var stack []*Item // open group items, innermost last

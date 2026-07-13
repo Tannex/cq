@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -117,6 +118,45 @@ func TestZoweStreamErrorIncludesStderr(t *testing.T) {
 	}
 }
 
+func TestDSNCopyResolverUsesSearchOrderAndCache(t *testing.T) {
+	original := zoweCommand
+	var calls []string
+	zoweCommand = func(args ...string) *exec.Cmd {
+		dsn := args[3]
+		calls = append(calls, dsn)
+		switch dsn {
+		case "HQL.CPY.SRC(ADDRESS)":
+			return zoweHelperCommand("", "member not found", 8)
+		case "HQL.COB.SRC(ADDRESS)":
+			return zoweHelperCommand("05 ADDRESS PIC X(10).\n", "", 0)
+		default:
+			t.Fatalf("unexpected DSN %q", dsn)
+			return nil
+		}
+	}
+	t.Cleanup(func() { zoweCommand = original })
+	resolver := newDSNCopyResolver([]string{"HQL.CPY.SRC", "HQL.COB.SRC"})
+
+	for range 2 {
+		if _, err := resolver.Resolve("ADDRESS"); err != nil {
+			t.Fatalf("Resolve() error = %v", err)
+		}
+	}
+	want := []string{"HQL.CPY.SRC(ADDRESS)", "HQL.COB.SRC(ADDRESS)"}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("Zowe calls = %q, want %q", calls, want)
+	}
+}
+
+func TestDSNCopyResolverRequiresSearchPath(t *testing.T) {
+	resolver := newDSNCopyResolver(nil)
+
+	_, err := resolver.Resolve("ADDRESS")
+	if err == nil || !strings.Contains(err.Error(), "DSNSearchPath") {
+		t.Fatalf("Resolve() error = %v, want config guidance", err)
+	}
+}
+
 func TestRunWithZoweDataSets(t *testing.T) {
 	const copybookDSN = "HQ.COPYLIB(CUSTOMER)"
 	const dataDSN = "HQ.CUSTOMER.DATA"
@@ -187,5 +227,76 @@ func TestRunPrefersZoweErrorForPartialRecord(t *testing.T) {
 	)
 	if err == nil || !strings.Contains(err.Error(), "connection lost") {
 		t.Fatalf("run() error = %v, want Zowe failure", err)
+	}
+}
+
+func TestRunExpandsNestedCopiesThroughSearchPath(t *testing.T) {
+	const copybookDSN = "HQ.COPYLIB(CUSTOMER)"
+	const dataDSN = "HQ.CUSTOMER.DATA"
+	configPath := filepath.Join(t.TempDir(), "cq.json")
+	if err := os.WriteFile(configPath, []byte(`{"DSNSearchPath":["HQL.CPY.SRC","HQL.COB.SRC"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	originalCommand := zoweCommand
+	var calls []string
+	zoweCommand = func(args ...string) *exec.Cmd {
+		dsn := args[3]
+		calls = append(calls, dsn)
+		switch dsn {
+		case copybookDSN:
+			return zoweHelperCommand("01 CUSTOMER.\n   COPY DETAILS.\n", "", 0)
+		case "HQL.CPY.SRC(DETAILS)":
+			return zoweHelperCommand("", "member not found", 8)
+		case "HQL.COB.SRC(DETAILS)":
+			return zoweHelperCommand("05 NAME PIC X(3).\n COPY FLAGS.\n", "", 0)
+		case "HQL.CPY.SRC(FLAGS)":
+			return zoweHelperCommand("05 FLAG PIC X(1).\n", "", 0)
+		case dataDSN:
+			return zoweHelperCommand("BOBY", "", 0)
+		default:
+			t.Fatalf("unexpected zowe args: %q", args)
+			return nil
+		}
+	}
+	t.Cleanup(func() { zoweCommand = originalCommand })
+
+	out, err := os.CreateTemp(t.TempDir(), "cq-output-*.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = out.Close() })
+	originalStdout := os.Stdout
+	os.Stdout = out
+	t.Cleanup(func() { os.Stdout = originalStdout })
+
+	err = runWithArgs(t,
+		"--config", configPath,
+		"--copybook-dsn", copybookDSN,
+		"--data-dsn", dataDSN,
+		"-codepage", "ascii",
+	)
+	if err != nil {
+		t.Fatalf("run() error = %v", err)
+	}
+	if err := out.Close(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(out.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), `"NAME":"BOB"`) || !strings.Contains(string(got), `"FLAG":"Y"`) {
+		t.Fatalf("run() output = %s, want nested COPY fields", got)
+	}
+	wantCalls := []string{
+		copybookDSN,
+		"HQL.CPY.SRC(DETAILS)",
+		"HQL.COB.SRC(DETAILS)",
+		"HQL.CPY.SRC(FLAGS)",
+		dataDSN,
+	}
+	if !reflect.DeepEqual(calls, wantCalls) {
+		t.Fatalf("Zowe calls = %q, want %q", calls, wantCalls)
 	}
 }
