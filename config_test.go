@@ -9,12 +9,18 @@ import (
 )
 
 func TestLoadConfig(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "cq.json")
+	dir := t.TempDir()
+	stubUserConfigDir(t, dir, nil)
+	configDir := filepath.Join(dir, "cq")
+	if err := os.Mkdir(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(configDir, "config.json")
 	if err := os.WriteFile(path, []byte(`{"DSNSearchPath":[" HQL.CPY.SRC ","HQL.COB.SRC"]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	cfg, err := loadConfig(path)
+	cfg, err := loadConfig()
 	if err != nil {
 		t.Fatalf("loadConfig() error = %v", err)
 	}
@@ -28,7 +34,7 @@ func TestLoadConfigMissingDefaultIsOptional(t *testing.T) {
 	dir := t.TempDir()
 	stubUserConfigDir(t, dir, nil)
 
-	cfg, err := loadConfig("")
+	cfg, err := loadConfig()
 	if err != nil {
 		t.Fatalf("loadConfig() error = %v", err)
 	}
@@ -37,32 +43,10 @@ func TestLoadConfigMissingDefaultIsOptional(t *testing.T) {
 	}
 }
 
-func TestLoadConfigUsesUserConfigDirectory(t *testing.T) {
-	dir := t.TempDir()
-	stubUserConfigDir(t, dir, nil)
-	configDir := filepath.Join(dir, "cq")
-	if err := os.Mkdir(configDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(configDir, "config.json")
-	if err := os.WriteFile(path, []byte(`{"DSNSearchPath":["HQL.CPY.SRC"]}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, err := loadConfig("")
-	if err != nil {
-		t.Fatalf("loadConfig() error = %v", err)
-	}
-	want := []string{"HQL.CPY.SRC"}
-	if !reflect.DeepEqual(cfg.DSNSearchPath, want) {
-		t.Fatalf("DSNSearchPath = %q, want %q", cfg.DSNSearchPath, want)
-	}
-}
-
 func TestLoadConfigWithoutUserConfigDirectoryIsOptional(t *testing.T) {
 	stubUserConfigDir(t, "", os.ErrNotExist)
 
-	cfg, err := loadConfig("")
+	cfg, err := loadConfig()
 	if err != nil {
 		t.Fatalf("loadConfig() error = %v", err)
 	}
@@ -72,12 +56,18 @@ func TestLoadConfigWithoutUserConfigDirectoryIsOptional(t *testing.T) {
 }
 
 func TestLoadConfigRejectsMemberInSearchPath(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "cq.json")
+	dir := t.TempDir()
+	stubUserConfigDir(t, dir, nil)
+	configDir := filepath.Join(dir, "cq")
+	if err := os.Mkdir(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(configDir, "config.json")
 	if err := os.WriteFile(path, []byte(`{"DSNSearchPath":["HQL.CPY.SRC(MEMBER)"]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	_, err := loadConfig(path)
+	_, err := loadConfig()
 	if err == nil || !strings.Contains(err.Error(), "without a member") {
 		t.Fatalf("loadConfig() error = %v, want library validation", err)
 	}

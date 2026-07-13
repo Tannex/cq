@@ -45,7 +45,7 @@ func (r *dsnCopyResolver) Resolve(member string) (string, error) {
 		return src, nil
 	}
 	if len(r.searchPaths) == 0 {
-		return "", fmt.Errorf("COPY %s requires DSNSearchPath in the user config file or --config FILE", member)
+		return "", fmt.Errorf("COPY %s requires DSNSearchPath in the user config file", member)
 	}
 
 	var failures []string

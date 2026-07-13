@@ -15,18 +15,14 @@ type config struct {
 	DSNSearchPath []string `json:"DSNSearchPath"`
 }
 
-func loadConfig(path string) (config, error) {
-	explicit := path != ""
-	if path == "" {
-		var err error
-		path, err = defaultConfigFile()
-		if err != nil {
-			return config{}, nil
-		}
+func loadConfig() (config, error) {
+	path, err := defaultConfigFile()
+	if err != nil {
+		return config{}, nil
 	}
 	b, err := os.ReadFile(path)
 	if err != nil {
-		if !explicit && errors.Is(err, os.ErrNotExist) {
+		if errors.Is(err, os.ErrNotExist) {
 			return config{}, nil
 		}
 		return config{}, fmt.Errorf("read config %q: %w", path, err)

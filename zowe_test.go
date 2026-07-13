@@ -233,7 +233,13 @@ func TestRunPrefersZoweErrorForPartialRecord(t *testing.T) {
 func TestRunExpandsNestedCopiesThroughSearchPath(t *testing.T) {
 	const copybookDSN = "HQ.COPYLIB(CUSTOMER)"
 	const dataDSN = "HQ.CUSTOMER.DATA"
-	configPath := filepath.Join(t.TempDir(), "cq.json")
+	configRoot := t.TempDir()
+	stubUserConfigDir(t, configRoot, nil)
+	configDir := filepath.Join(configRoot, "cq")
+	if err := os.Mkdir(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(configDir, "config.json")
 	if err := os.WriteFile(configPath, []byte(`{"DSNSearchPath":["HQL.CPY.SRC","HQL.COB.SRC"]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -271,7 +277,6 @@ func TestRunExpandsNestedCopiesThroughSearchPath(t *testing.T) {
 	t.Cleanup(func() { os.Stdout = originalStdout })
 
 	err = runWithArgs(t,
-		"--config", configPath,
 		"--copybook-dsn", copybookDSN,
 		"--data-dsn", dataDSN,
 		"-codepage", "ascii",

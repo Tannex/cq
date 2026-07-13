@@ -39,7 +39,6 @@ from the copybook; use `-lrecl` if the physical records carry trailing padding.
 | --- | --- | --- |
 | `-c` | one copybook source required | local copybook file |
 | `--copybook-dsn` | one copybook source required | data set or PDS member fetched as text through Zowe CLI |
-| `--config` | Platform user config | JSON configuration file |
 | `-d` | none | data file to decode (`-` for stdin); omit for layout output |
 | `--data-dsn` | none | data set streamed in binary mode through Zowe CLI |
 | `-codepage` | `cp037` | EBCDIC codepage of the data (`cp037`, `cp277`, `cp1047`, `cp1140`, `cp1142`; `ascii`/`latin1` for testing) |
@@ -145,7 +144,7 @@ through the ordered libraries in `DSNSearchPath`. By default, `cq` reads
 - macOS: `$HOME/Library/Application Support/cq/config.json`
 - Windows: `%AppData%\cq\config.json`
 
-Select another file with `--config`:
+Create that file with the ordered library search path:
 
 ```json
 {
