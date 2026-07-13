@@ -165,6 +165,9 @@ search order, and cycles are reported with the full member chain. The current
 scope supports plain `COPY MEMBER.` statements; `REPLACING`, `OF`, and `IN`
 clauses are rejected explicitly.
 
+Input containing a non-comment `PROCEDURE DIVISION` is rejected as `Not a
+copybook` before its `COPY` statements are expanded.
+
 Local files and explicit pipelines remain available:
 
 ```console

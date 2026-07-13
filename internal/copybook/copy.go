@@ -13,7 +13,11 @@ type CopyResolver func(name string) (string, error)
 // ParseWithCopies expands plain COPY member statements recursively before
 // parsing the resulting data-description entries.
 func ParseWithCopies(src string, f Format, resolve CopyResolver) ([]*Item, error) {
-	toks, err := expandCopies(lex(src, f), resolve, nil)
+	toks := lex(src, f)
+	if err := rejectProgramSource(toks); err != nil {
+		return nil, err
+	}
+	toks, err := expandCopies(toks, resolve, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -66,4 +70,14 @@ func expandCopies(toks []token, resolve CopyResolver, stack []string) ([]token, 
 		i += 3
 	}
 	return out, nil
+}
+
+func rejectProgramSource(toks []token) error {
+	for i := 0; i+1 < len(toks); i++ {
+		if !toks[i].lit && toks[i].text == "PROCEDURE" &&
+			!toks[i+1].lit && toks[i+1].text == "DIVISION" {
+			return fmt.Errorf("Not a copybook: PROCEDURE DIVISION at line %d", toks[i].line)
+		}
+	}
+	return nil
 }

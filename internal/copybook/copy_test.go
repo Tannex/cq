@@ -68,3 +68,71 @@ func TestParseWithCopiesRejectsClauses(t *testing.T) {
 		t.Fatalf("ParseWithCopies() error = %v, want unsupported clause", err)
 	}
 }
+
+func TestParseWithCopiesRejectsProcedureDivisionBeforeExpansion(t *testing.T) {
+	resolveCalls := 0
+	resolve := func(name string) (string, error) {
+		resolveCalls++
+		return "05 FIELD PIC X(1).", nil
+	}
+	src := `IDENTIFICATION DIVISION.
+PROGRAM-ID. EXAMPLE.
+DATA DIVISION.
+WORKING-STORAGE SECTION.
+01 RECORD.
+   COPY FIELD.
+PROCEDURE DIVISION.
+   GOBACK.
+`
+
+	_, err := ParseWithCopies(src, FormatFree, resolve)
+	if err == nil || !strings.Contains(err.Error(), "Not a copybook") {
+		t.Fatalf("ParseWithCopies() error = %v, want Not a copybook", err)
+	}
+	if resolveCalls != 0 {
+		t.Fatalf("resolver called %d times, want 0", resolveCalls)
+	}
+}
+
+func TestParseWithCopiesIgnoresCommentedProcedureDivision(t *testing.T) {
+	tests := []struct {
+		name   string
+		src    string
+		format Format
+	}{
+		{
+			name: "free",
+			src: `01 RECORD.
+*> PROCEDURE DIVISION.
+   05 FIELD PIC X(1). *> PROCEDURE DIVISION.
+`,
+			format: FormatFree,
+		},
+		{
+			name: "fixed",
+			src: "000100 01 RECORD.\n" +
+				"000200*PROCEDURE DIVISION.\n" +
+				"000300     05 FIELD PIC X(1).\n",
+			format: FormatFixed,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			items, err := ParseWithCopies(tt.src, tt.format, nil)
+			if err != nil {
+				t.Fatalf("ParseWithCopies() error = %v", err)
+			}
+			if got := items[0].Children[0].Name; got != "FIELD" {
+				t.Fatalf("child name = %q, want FIELD", got)
+			}
+		})
+	}
+}
+
+func TestParseWithCopiesAllowsProcedureDivisionLiteral(t *testing.T) {
+	src := "01 RECORD.\n 05 TEXT PIC X(18) VALUE 'PROCEDURE DIVISION'.\n"
+
+	if _, err := ParseWithCopies(src, FormatFree, nil); err != nil {
+		t.Fatalf("ParseWithCopies() error = %v", err)
+	}
+}
