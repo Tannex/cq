@@ -24,12 +24,14 @@ $ go install github.com/Tannex/cq@latest
 ## Usage
 
 ```
-cq [flags] -c COPYBOOK [-d DATA]
+cq [flags] -c COPYBOOK [-d DATA | DATA]
 ```
 
-With only `-c COPYBOOK`, cq prints the layout. With `-d DATA` (a file, or
-`-` for stdin), it decodes the records. Records are fixed-length, derived
-from the copybook; use `-lrecl` if the physical records carry trailing padding.
+With only `-c COPYBOOK`, cq prints the layout. Use either `-d DATA` or one
+trailing `DATA` argument to decode records; `-` reads data from stdin. The
+explicit `-d` form is preferred in scripts and examples. Records are
+fixed-length, derived from the copybook; use `-lrecl` if the physical records
+carry trailing padding.
 
 | Flag | Default | Meaning |
 | --- | --- | --- |

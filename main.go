@@ -53,11 +53,11 @@ func run() error {
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), `cq — jq for COBOL copybooks and EBCDIC data
 
-usage: cq [flags] -c COPYBOOK [-d DATA]
+usage: cq [flags] -c COPYBOOK [-d DATA | DATA]
 
 With only -c COPYBOOK, prints the record layout (byte offset and length of
-every field) as JSON. With -d DATA (a file, or "-" for stdin), decodes the
-fixed-length binary records into a UTF-8 JSON array.
+every field) as JSON. With -d DATA, or one trailing DATA argument, decodes
+the fixed-length binary records into a UTF-8 JSON array. Use "-" for stdin.
 
 flags:
 `)
@@ -66,6 +66,7 @@ flags:
 examples:
   cq -c CUSTOMER.cpy
   cq -c CUSTOMER.cpy -d customer.bin | jq '.[] | .CUST-NAME'
+  cq -c CUSTOMER.cpy customer.bin
   cq -q 'select(.BALANCE < 0)' -c CUSTOMER.cpy -d customer.bin
   cq -r -q '.["CUST-NAME"]' -c CUSTOMER.cpy -d customer.bin
   cq -where DTAR107-SALE -where 'not DTAR107-VOID' -c DTAR107.cbl -d sales.bin
@@ -74,11 +75,18 @@ examples:
 	}
 	fs.Parse(os.Args[1:])
 
-	if fs.NArg() != 0 {
-		return fmt.Errorf("unexpected positional arguments %q; use -c COPYBOOK and optional -d DATA", fs.Args())
-	}
 	if *copybookPath == "" {
 		return errors.New("-c COPYBOOK is required")
+	}
+	switch fs.NArg() {
+	case 0:
+	case 1:
+		if *dataPath != "" {
+			return errors.New("DATA was provided both with -d and as a positional argument")
+		}
+		*dataPath = fs.Arg(0)
+	default:
+		return fmt.Errorf("expected at most one positional DATA argument, got %q", fs.Args())
 	}
 
 	var cbFormat copybook.Format
