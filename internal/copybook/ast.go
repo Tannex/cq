@@ -48,10 +48,18 @@ type Picture struct {
 	Signed   bool // leading S present
 }
 
+// ValueRange is one literal of a VALUE clause; To is empty for a single
+// value, non-empty for a THRU range. Figurative constants (ZERO, SPACES,
+// ...) are kept as their keyword.
+type ValueRange struct {
+	From string
+	To   string
+}
+
 // Condition is a level-88 condition name attached to a data item.
 type Condition struct {
 	Name   string
-	Values []string
+	Values []ValueRange
 }
 
 // Item is one data-description entry.
@@ -75,7 +83,7 @@ type Item struct {
 	Children     []*Item
 	Line         int // 1-based source line of the entry
 
-	condValues []string // literals from this entry's own VALUE clause
+	condValues []ValueRange // literals from this entry's own VALUE clause
 }
 
 // Group reports whether the item is a group (no PICTURE, has or may have children).

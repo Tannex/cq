@@ -23,27 +23,40 @@ const (
 
 // Field is one resolved copybook item.
 type Field struct {
-	Name         string   `json:"name"`
-	Level        int      `json:"level"`
-	Offset       int      `json:"offset"`
-	Length       int      `json:"length"` // one element; total storage = Length*max(Occurs,1)
-	Kind         Kind     `json:"kind"`
-	Picture      string   `json:"picture,omitempty"`
-	Digits       int      `json:"digits,omitempty"`
-	Scale        int      `json:"scale,omitempty"`
-	Signed       bool     `json:"signed,omitempty"`
-	SignSeparate bool     `json:"signSeparate,omitempty"`
-	SignLeading  bool     `json:"signLeading,omitempty"`
-	Occurs       int      `json:"occurs,omitempty"`
-	OccursMin    int      `json:"occursMin,omitempty"`
-	DependingOn  string   `json:"dependingOn,omitempty"`
-	Redefines    string   `json:"redefines,omitempty"`
-	Filler       bool     `json:"filler,omitempty"`
-	Conditions   []string `json:"conditions,omitempty"` // level-88 names
-	Children     []*Field `json:"children,omitempty"`
+	Name         string      `json:"name"`
+	Level        int         `json:"level"`
+	Offset       int         `json:"offset"`
+	Length       int         `json:"length"` // one element; total storage = Length*max(Occurs,1)
+	Kind         Kind        `json:"kind"`
+	Picture      string      `json:"picture,omitempty"`
+	Digits       int         `json:"digits,omitempty"`
+	Scale        int         `json:"scale,omitempty"`
+	Signed       bool        `json:"signed,omitempty"`
+	SignSeparate bool        `json:"signSeparate,omitempty"`
+	SignLeading  bool        `json:"signLeading,omitempty"`
+	Occurs       int         `json:"occurs,omitempty"`
+	OccursMin    int         `json:"occursMin,omitempty"`
+	DependingOn  string      `json:"dependingOn,omitempty"`
+	Redefines    string      `json:"redefines,omitempty"`
+	Filler       bool        `json:"filler,omitempty"`
+	Conditions   []Condition `json:"conditions,omitempty"` // level-88 entries
+	Children     []*Field    `json:"children,omitempty"`
 
 	align  int // SYNC boundary (0/1 = none)
 	picMin int // minimum group length from a PICTURE on the group itself
+}
+
+// Condition is a level-88 condition name with its VALUE literals.
+type Condition struct {
+	Name   string  `json:"name"`
+	Values []Value `json:"values"`
+}
+
+// Value is one condition literal; To is set for THRU ranges. Figurative
+// constants (ZERO, SPACES, ...) appear as their keyword.
+type Value struct {
+	From string `json:"value"`
+	To   string `json:"thru,omitempty"`
 }
 
 // Record is a top-level (01) layout.
@@ -110,7 +123,11 @@ func (b *builder) resolve(it *copybook.Item, usage copybook.Usage, sep, lead, sy
 		DependingOn: it.DependingOn, Redefines: it.Redefines, Filler: it.Filler,
 	}
 	for _, c := range it.Conditions {
-		f.Conditions = append(f.Conditions, c.Name)
+		lc := Condition{Name: c.Name}
+		for _, v := range c.Values {
+			lc.Values = append(lc.Values, Value{From: v.From, To: v.To})
+		}
+		f.Conditions = append(f.Conditions, lc)
 	}
 	if len(it.Children) > 0 {
 		f.Kind = KindGroup

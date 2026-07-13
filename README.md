@@ -9,6 +9,7 @@ array. The output is plain JSON on stdout, made to be piped into `jq`.
 $ cq CUSTOMER.cpy                     # layout: offset/length of each field
 $ cq CUSTOMER.cpy customer.bin        # decode records to a JSON array
 $ cq -q 'select(.BALANCE < 0)' CUSTOMER.cpy customer.bin   # built-in jq
+$ cq -where DTAR107-SALE DTAR107.cbl sales.bin             # filter by level-88
 $ zowe zos-files download ds "HQ.CUSTOMER.DATA" --binary --file - \
     | cq CUSTOMER.cpy - | jq '.[] | select(.BALANCE < 0)'
 ```
@@ -40,6 +41,7 @@ the copybook; use `-lrecl` if the physical records carry trailing padding.
 | `-lrecl` | layout | physical record length when it exceeds the layout |
 | `-q` | none | jq expression (full jq language via [gojq](https://github.com/itchyny/gojq)) |
 | `-r` | off | with `-q`, print string results raw instead of JSON-quoted |
+| `-where` | none | keep only records satisfying a level-88 condition; `!`/`not ` negates; repeat to AND |
 
 ### Layout output
 
@@ -75,6 +77,27 @@ ALICE
 BOB
 ```
 
+### Level-88 filters (`-where`)
+
+Copybooks already define their business vocabulary as level-88 condition
+names — `cq` lets you filter by them directly, so nobody has to remember
+that a sale is `TRANS-TYPE = 1`:
+
+```console
+$ cq -where DTAR107-SALE DTAR107.cbl sales.bin      # 88 ... VALUE 1
+$ cq -where 'not DTAR107-VOID' DTAR107.cbl sales.bin
+$ cq -where NSW-POSTCODE VENDOR.cbl vendors.bin     # VALUE 2000 THRU 2999
+```
+
+Negate with a leading `!` or `not `; repeat the flag to AND conditions.
+`VALUE a THRU b` ranges and the figurative constants ZERO/SPACES/QUOTE are
+supported; matching is exact for numeric fields (full packed-decimal
+precision) and trailing-space-insensitive for text. Filtering happens on
+the raw bytes before any JSON is built, and combines with `-q` (filter
+first, query after). Conditions inside `OCCURS` tables aren't supported
+yet. The layout output lists every condition with its values under
+`conditions`.
+
 In layout mode the expression runs against the layout document:
 
 ```console
@@ -90,8 +113,8 @@ order).
 
 ## Supported COBOL
 
-- Levels 01–49 and 77, FILLER, level-88 (reported in the layout as
-  `conditions`), level-66 RENAMES (skipped)
+- Levels 01–49 and 77, FILLER, level-88 (listed in the layout and usable
+  as `-where` filters), level-66 RENAMES (skipped)
 - `PIC` X/A/9/S/V/P and numeric-edited pictures (decoded as text)
 - `USAGE` DISPLAY, COMP/COMP-4/COMP-5/BINARY, COMP-3/PACKED-DECIMAL,
   COMP-1/COMP-2 (decoded as big-endian IEEE; IBM hex float not yet)

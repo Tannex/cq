@@ -25,6 +25,7 @@ type Decoder struct {
 
 	odo     *layout.Field // the single ODO table, when the record is variable
 	counter *layout.Field // its DEPENDING ON field
+	wheres  []*where      // -where clauses, ANDed
 }
 
 // NewDecoder validates that the record is decodable (at most one OCCURS

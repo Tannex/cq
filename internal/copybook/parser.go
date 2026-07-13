@@ -303,6 +303,7 @@ func (p *parser) occurs(it *Item, at token) error {
 }
 
 // values consumes a VALUE clause; the literals are only kept for level 88.
+// "a THRU b" becomes a single ValueRange{a, b}.
 func (p *parser) values(it *Item) error {
 	if w := p.peek().text; w == "IS" || w == "ARE" {
 		p.next()
@@ -317,14 +318,26 @@ func (p *parser) values(it *Item) error {
 		}
 		if t.text == "THRU" || t.text == "THROUGH" {
 			p.next()
+			hi := p.peek()
+			if hi.isTerm() || hi.text == "" {
+				return p.errf(t, "THRU requires a second literal")
+			}
+			p.next()
+			if len(it.condValues) == 0 {
+				return p.errf(t, "THRU with no preceding literal")
+			}
+			it.condValues[len(it.condValues)-1].To = litText(hi)
 			continue
 		}
 		p.next()
-		v := t.text
-		if t.lit {
-			v = strings.Trim(v, `'"`)
-		}
-		it.condValues = append(it.condValues, v)
+		it.condValues = append(it.condValues, ValueRange{From: litText(t)})
 	}
 	return nil
+}
+
+func litText(t token) string {
+	if t.lit {
+		return strings.Trim(t.text, `'"`)
+	}
+	return t.text
 }

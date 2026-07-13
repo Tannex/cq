@@ -43,6 +43,11 @@ func run() error {
 	lrecl := fs.Int("lrecl", 0, "physical record length when it exceeds the layout (extra bytes are padding)")
 	expr := fs.String("q", "", "jq expression: run per record when decoding (output becomes a result stream, not an array), or against the layout document")
 	rawOut := fs.Bool("r", false, "with -q, print string results raw instead of JSON-quoted")
+	var wheres []string
+	fs.Func("where", "keep only records satisfying this level-88 `condition`; prefix with ! or \"not \" to negate; repeat to AND", func(s string) error {
+		wheres = append(wheres, s)
+		return nil
+	})
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), `cq — jq for COBOL copybooks and EBCDIC data
 
@@ -61,6 +66,7 @@ examples:
   cq CUSTOMER.cpy customer.bin | jq '.[] | .CUST-NAME'
   cq -q 'select(.BALANCE < 0)' CUSTOMER.cpy customer.bin
   cq -r -q '.["CUST-NAME"]' CUSTOMER.cpy customer.bin
+  cq -where DTAR107-SALE -where 'not DTAR107-VOID' DTAR107.cbl sales.bin
   zowe zos-files download ds "HQ.CUSTOMER.DATA" --binary --file - | cq CUSTOMER.cpy -
 `)
 	}
@@ -105,6 +111,9 @@ examples:
 	}
 
 	if fs.NArg() == 1 {
+		if len(wheres) > 0 {
+			return fmt.Errorf("-where filters records, so it needs DATA to decode")
+		}
 		if q == nil {
 			return printLayout(os.Stdout, recs, *pretty)
 		}
@@ -131,6 +140,11 @@ examples:
 	}
 	d.IncludeFillers = *fillers
 	d.Lrecl = *lrecl
+	for _, w := range wheres {
+		if err := d.AddWhere(w); err != nil {
+			return err
+		}
+	}
 
 	var in io.Reader
 	if name := fs.Arg(1); name == "-" {
@@ -201,6 +215,11 @@ func decodeAll(w io.Writer, d *record.Decoder, in io.Reader, pretty bool, max in
 		}
 		if err != nil {
 			return fmt.Errorf("record %d: %w", n+1, err)
+		}
+		if ok, err := d.Matches(raw); err != nil {
+			return fmt.Errorf("record %d: %w", n+1, err)
+		} else if !ok {
+			continue
 		}
 		js, err := d.Decode(raw)
 		if err != nil {

@@ -184,13 +184,13 @@ func TestLevel88ConditionsAttach(t *testing.T) {
 	if len(flag.Conditions) != 2 {
 		t.Fatalf("FLAG.Conditions = %d, want 2", len(flag.Conditions))
 	}
-	if flag.Conditions[0].Name != "FLAG-YES" || len(flag.Conditions[0].Values) != 1 || flag.Conditions[0].Values[0] != "1" {
+	if flag.Conditions[0].Name != "FLAG-YES" || len(flag.Conditions[0].Values) != 1 || flag.Conditions[0].Values[0] != (ValueRange{From: "1"}) {
 		t.Errorf("FLAG-YES condition = %+v", flag.Conditions[0])
 	}
 	if flag.Conditions[1].Name != "FLAG-NO" {
 		t.Errorf("FLAG-NO name = %q", flag.Conditions[1].Name)
 	}
-	if len(flag.Conditions[1].Values) != 2 || flag.Conditions[1].Values[0] != "0" || flag.Conditions[1].Values[1] != "9" {
+	if len(flag.Conditions[1].Values) != 2 || flag.Conditions[1].Values[0] != (ValueRange{From: "0"}) || flag.Conditions[1].Values[1] != (ValueRange{From: "9"}) {
 		t.Errorf("FLAG-NO values = %+v, want [0 9]", flag.Conditions[1].Values)
 	}
 }
