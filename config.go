@@ -5,10 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
-const defaultConfigPath = "cq.json"
+var userConfigDir = os.UserConfigDir
 
 type config struct {
 	DSNSearchPath []string `json:"DSNSearchPath"`
@@ -17,7 +18,11 @@ type config struct {
 func loadConfig(path string) (config, error) {
 	explicit := path != ""
 	if path == "" {
-		path = defaultConfigPath
+		var err error
+		path, err = defaultConfigFile()
+		if err != nil {
+			return config{}, nil
+		}
 	}
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -41,4 +46,12 @@ func loadConfig(path string) (config, error) {
 		cfg.DSNSearchPath[i] = dsn
 	}
 	return cfg, nil
+}
+
+func defaultConfigFile() (string, error) {
+	dir, err := userConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("locate user config directory: %w", err)
+	}
+	return filepath.Join(dir, "cq", "config.json"), nil
 }

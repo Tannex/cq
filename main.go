@@ -36,7 +36,7 @@ func run() error {
 	fs := flag.NewFlagSet("cq", flag.ExitOnError)
 	copybookPath := fs.String("c", "", "local copybook file")
 	copybookDSN := fs.String("copybook-dsn", "", "copybook data set or member to fetch through Zowe CLI")
-	configPath := fs.String("config", "", "JSON config file (default: cq.json when present)")
+	configPath := fs.String("config", "", "JSON config file (default: platform user config directory)")
 	dataPath := fs.String("d", "", "data file to decode (use - for stdin; omit for layout output)")
 	dataDSN := fs.String("data-dsn", "", "data set to stream in binary mode through Zowe CLI")
 	codepage := fs.String("codepage", "cp037", "EBCDIC codepage of the data (cp037, cp277, cp1047, cp1140, cp1142; ascii/latin1 for testing)")
