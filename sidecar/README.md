@@ -57,14 +57,15 @@ stored secrets; choose "Always Allow" to stop it recurring.
 
 When cq runs with `-max N` (and no `-where` filter), the download request
 carries `records`/`reclen` and the sidecar asks z/OSMF for just those
-records with `X-IBM-Record-Range: 0,N`, in record mode ("no data conversion
-is performed and the record length is prepended to the data"). Every
-record's 4-byte length prefix is checked against the record length cq
-expects; on any surprise — a different record length, a response ending
-inside a record, or an HTTP error on the ranged request — the sidecar
-restarts the transfer as a plain unranged binary stream and skips the bytes
-already delivered, so the bound can only ever save work, never change
-output.
+records with `X-IBM-Record-Range: 0,N` — record offsets are 0-based per the
+z/OSMF REST documentation — in record mode, where "each logical record is
+preceded by the 4-byte big endian record length". Every record's length
+prefix is checked against the record length cq expects; on any surprise — a
+different record length, a response ending inside a record, or an HTTP
+error on the ranged request (z/OSMF returns an exception when the range
+matches no records, e.g. an empty data set) — the sidecar restarts the
+transfer as a plain unranged binary stream and skips the bytes already
+delivered, so the bound can only ever save work, never change output.
 
 ## Protocol
 
