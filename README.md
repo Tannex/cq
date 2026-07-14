@@ -164,12 +164,15 @@ Create that file with the ordered library search path:
 Run `cq config` to create this file when absent and open it in `$VISUAL`,
 `$EDITOR`, or the platform text editor.
 
-For `COPY ADDRESS.`, cq first requests `HQL.CPY.SRC(ADDRESS)`, then
-`HQL.COB.SRC(ADDRESS)`, stopping at the first successful result. Resolved
-members are cached for the command, nested `COPY` statements use the same
-search order, and cycles are reported with the full member chain. The current
-scope supports plain `COPY MEMBER.` statements; `REPLACING`, `OF`, and `IN`
-clauses are rejected explicitly.
+For `COPY ADDRESS.`, cq requests `HQL.CPY.SRC(ADDRESS)` and
+`HQL.COB.SRC(ADDRESS)` in parallel and keeps the result from the earliest
+library in the list that has the member, so the configured order still
+decides which copy wins. Members named at the same nesting level are also
+fetched in parallel, with at most eight Zowe requests in flight at once.
+Resolved members (and failed lookups) are cached for the command, nested
+`COPY` statements use the same search order, and cycles are reported with the
+full member chain. The current scope supports plain `COPY MEMBER.`
+statements; `REPLACING`, `OF`, and `IN` clauses are rejected explicitly.
 
 Input containing a non-comment `PROCEDURE DIVISION` is rejected as `Not a
 copybook` before its `COPY` statements are expanded.

@@ -8,8 +8,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -163,33 +165,113 @@ func TestZoweDownloadErrorIncludesStderrAndRemovesTemporaryFile(t *testing.T) {
 	}
 }
 
-func TestDSNCopyResolverUsesSearchOrderAndCache(t *testing.T) {
+// recordZoweCalls swaps zoweCommand for stub and returns the DSNs it was
+// called with, sorted: the resolver probes libraries concurrently, so the
+// call order is not deterministic.
+func recordZoweCalls(t *testing.T, stub func(dsn string) *exec.Cmd) func() []string {
+	t.Helper()
 	original := zoweCommand
+	var mu sync.Mutex
 	var calls []string
 	zoweCommand = func(args ...string) *exec.Cmd {
 		dsn := args[3]
+		mu.Lock()
 		calls = append(calls, dsn)
+		mu.Unlock()
+		return stub(dsn)
+	}
+	t.Cleanup(func() { zoweCommand = original })
+	return func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		sorted := append([]string{}, calls...)
+		sort.Strings(sorted)
+		return sorted
+	}
+}
+
+func TestDSNCopyResolverUsesSearchOrderAndCache(t *testing.T) {
+	sortedCalls := recordZoweCalls(t, func(dsn string) *exec.Cmd {
 		switch dsn {
 		case "HQL.CPY.SRC(ADDRESS)":
 			return zoweHelperCommand("", "member not found", 8)
 		case "HQL.COB.SRC(ADDRESS)":
 			return zoweHelperCommand("05 ADDRESS PIC X(10).\n", "", 0)
 		default:
-			t.Fatalf("unexpected DSN %q", dsn)
-			return nil
+			t.Errorf("unexpected DSN %q", dsn)
+			return zoweHelperCommand("", "unexpected DSN", 8)
 		}
-	}
-	t.Cleanup(func() { zoweCommand = original })
+	})
 	resolver := newDSNCopyResolver([]string{"HQL.CPY.SRC", "HQL.COB.SRC"})
 
 	for range 2 {
-		if _, err := resolver.Resolve("ADDRESS"); err != nil {
+		src, err := resolver.Resolve("ADDRESS")
+		if err != nil {
 			t.Fatalf("Resolve() error = %v", err)
 		}
+		if src != "05 ADDRESS PIC X(10).\n" {
+			t.Fatalf("Resolve() = %q, want the member from HQL.COB.SRC", src)
+		}
 	}
-	want := []string{"HQL.CPY.SRC(ADDRESS)", "HQL.COB.SRC(ADDRESS)"}
-	if !reflect.DeepEqual(calls, want) {
-		t.Fatalf("Zowe calls = %q, want %q", calls, want)
+	want := []string{"HQL.COB.SRC(ADDRESS)", "HQL.CPY.SRC(ADDRESS)"}
+	if got := sortedCalls(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Zowe calls = %q, want %q", got, want)
+	}
+}
+
+func TestDSNCopyResolverPrefersEarlierLibrary(t *testing.T) {
+	sortedCalls := recordZoweCalls(t, func(dsn string) *exec.Cmd {
+		switch dsn {
+		case "HQL.CPY.SRC(ADDRESS)":
+			return zoweHelperCommand("05 ADDRESS PIC X(10).\n", "", 0)
+		case "HQL.COB.SRC(ADDRESS)":
+			return zoweHelperCommand("05 ADDRESS PIC X(99).\n", "", 0)
+		default:
+			t.Errorf("unexpected DSN %q", dsn)
+			return zoweHelperCommand("", "unexpected DSN", 8)
+		}
+	})
+	resolver := newDSNCopyResolver([]string{"HQL.CPY.SRC", "HQL.COB.SRC"})
+
+	src, err := resolver.Resolve("ADDRESS")
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if src != "05 ADDRESS PIC X(10).\n" {
+		t.Fatalf("Resolve() = %q, want the member from HQL.CPY.SRC even when both libraries have it", src)
+	}
+	if got := sortedCalls(); len(got) != 2 {
+		t.Fatalf("Zowe calls = %q, want both libraries probed", got)
+	}
+}
+
+func TestDSNCopyResolverCachesFailuresAndListsThemInSearchOrder(t *testing.T) {
+	sortedCalls := recordZoweCalls(t, func(dsn string) *exec.Cmd {
+		switch dsn {
+		case "HQL.CPY.SRC(ADDRESS)":
+			return zoweHelperCommand("", "first library failure", 8)
+		case "HQL.COB.SRC(ADDRESS)":
+			return zoweHelperCommand("", "second library failure", 8)
+		default:
+			t.Errorf("unexpected DSN %q", dsn)
+			return zoweHelperCommand("", "unexpected DSN", 8)
+		}
+	})
+	resolver := newDSNCopyResolver([]string{"HQL.CPY.SRC", "HQL.COB.SRC"})
+
+	for range 2 {
+		_, err := resolver.Resolve("ADDRESS")
+		if err == nil {
+			t.Fatal("Resolve() error = nil, want failure from every library")
+		}
+		first := strings.Index(err.Error(), "first library failure")
+		second := strings.Index(err.Error(), "second library failure")
+		if first < 0 || second < 0 || second < first {
+			t.Fatalf("Resolve() error = %v, want failures in search order", err)
+		}
+	}
+	if got := sortedCalls(); len(got) != 2 {
+		t.Fatalf("Zowe calls = %q, want the failed lookup cached after one probe per library", got)
 	}
 }
 
@@ -308,10 +390,13 @@ func TestRunExpandsNestedCopiesThroughSearchPath(t *testing.T) {
 	}
 
 	originalCommand := zoweCommand
+	var mu sync.Mutex
 	var calls []string
 	zoweCommand = func(args ...string) *exec.Cmd {
 		dsn := args[3]
+		mu.Lock()
 		calls = append(calls, dsn)
+		mu.Unlock()
 		switch dsn {
 		case copybookDSN:
 			return zoweHelperCommand("01 CUSTOMER.\n   COPY DETAILS.\n", "", 0)
@@ -321,15 +406,18 @@ func TestRunExpandsNestedCopiesThroughSearchPath(t *testing.T) {
 			return zoweHelperCommand("05 NAME PIC X(3).\n COPY FLAGS.\n", "", 0)
 		case "HQL.CPY.SRC(FLAGS)":
 			return zoweHelperCommand("05 FLAG PIC X(1).\n", "", 0)
+		case "HQL.COB.SRC(FLAGS)":
+			return zoweHelperCommand("05 FLAG PIC X(9).\n", "", 0)
 		case dataDSN:
 			path, ok := zoweDownloadPath(args, dataDSN)
 			if !ok {
-				t.Fatalf("unexpected zowe download args: %q", args)
+				t.Errorf("unexpected zowe download args: %q", args)
+				return zoweHelperCommand("", "unexpected args", 8)
 			}
 			return zoweDownloadHelperCommand(path, []byte("BOBY"), "", 0)
 		default:
-			t.Fatalf("unexpected zowe args: %q", args)
-			return nil
+			t.Errorf("unexpected zowe args: %q", args)
+			return zoweHelperCommand("", "unexpected DSN", 8)
 		}
 	}
 	t.Cleanup(func() { zoweCommand = originalCommand })
@@ -361,13 +449,19 @@ func TestRunExpandsNestedCopiesThroughSearchPath(t *testing.T) {
 	if !strings.Contains(string(got), `"NAME":"BOB"`) || !strings.Contains(string(got), `"FLAG":"Y"`) {
 		t.Fatalf("run() output = %s, want nested COPY fields", got)
 	}
+	// Library probes run concurrently, so compare the calls sorted. Both
+	// libraries are probed for every member; search order still picks the
+	// one-byte FLAG from HQL.CPY.SRC over the nine-byte one.
 	wantCalls := []string{
 		copybookDSN,
-		"HQL.CPY.SRC(DETAILS)",
 		"HQL.COB.SRC(DETAILS)",
+		"HQL.COB.SRC(FLAGS)",
+		"HQL.CPY.SRC(DETAILS)",
 		"HQL.CPY.SRC(FLAGS)",
 		dataDSN,
 	}
+	sort.Strings(wantCalls)
+	sort.Strings(calls)
 	if !reflect.DeepEqual(calls, wantCalls) {
 		t.Fatalf("Zowe calls = %q, want %q", calls, wantCalls)
 	}
