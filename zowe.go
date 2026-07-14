@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 )
 
 var zoweCommand = func(args ...string) *exec.Cmd {
@@ -14,12 +15,19 @@ var zoweCommand = func(args ...string) *exec.Cmd {
 }
 
 func fetchZoweCopybook(dsn string) ([]byte, error) {
+	start := time.Now()
 	cmd := zoweCommand("zos-files", "view", "data-set", dsn)
 	out, err := cmd.Output()
 	if err != nil {
+		debugLog.Printf("zowe view %s: failed after %s", dsn, elapsed(start))
 		return nil, zoweCommandError(dsn, err, exitStderr(err))
 	}
+	debugLog.Printf("zowe view %s: %d bytes in %s", dsn, len(out), elapsed(start))
 	return out, nil
+}
+
+func elapsed(start time.Time) time.Duration {
+	return time.Since(start).Round(time.Millisecond)
 }
 
 // maxConcurrentZoweFetches bounds the zowe processes a resolver runs at once;
@@ -55,6 +63,7 @@ func (r *dsnCopyResolver) Resolve(member string) (string, error) {
 	res, ok := r.cache[member]
 	r.mu.Unlock()
 	if ok {
+		debugLog.Printf("COPY %s: cached", member)
 		return res.text, res.err
 	}
 	if len(r.searchPaths) == 0 {
@@ -86,12 +95,14 @@ func (r *dsnCopyResolver) probeSearchPaths(member string) copyResult {
 	wg.Wait()
 
 	var failures []string
-	for _, res := range results {
+	for i, res := range results {
 		if res.err == nil {
+			debugLog.Printf("COPY %s: using %s(%s)", member, r.searchPaths[i], member)
 			return copyResult{text: res.text}
 		}
 		failures = append(failures, res.err.Error())
 	}
+	debugLog.Printf("COPY %s: not found in any of %d libraries", member, len(r.searchPaths))
 	return copyResult{err: fmt.Errorf("COPY %s was not resolved through DSNSearchPath:\n  %s", member, strings.Join(failures, "\n  "))}
 }
 
@@ -117,14 +128,19 @@ func downloadZoweDataSet(dsn string) (*temporaryDataFile, error) {
 		}
 	}()
 
+	start := time.Now()
 	cmd := zoweCommand("zos-files", "download", "data-set", dsn,
 		"--binary", "--file", path, "--overwrite")
 	if _, err := cmd.Output(); err != nil {
+		debugLog.Printf("zowe download %s: failed after %s", dsn, elapsed(start))
 		return nil, zoweCommandError(dsn, err, exitStderr(err))
 	}
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("open downloaded Zowe data set %q: %w", dsn, err)
+	}
+	if fi, err := f.Stat(); err == nil {
+		debugLog.Printf("zowe download %s: %d bytes in %s", dsn, fi.Size(), elapsed(start))
 	}
 	ok = true
 	return &temporaryDataFile{File: f, path: path}, nil

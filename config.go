@@ -18,11 +18,13 @@ type config struct {
 func loadConfig() (config, error) {
 	path, err := defaultConfigFile()
 	if err != nil {
+		debugLog.Printf("config: no user config directory: %v", err)
 		return config{}, nil
 	}
 	b, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
+			debugLog.Printf("config %s: not found", path)
 			return config{}, nil
 		}
 		return config{}, fmt.Errorf("read config %q: %w", path, err)
@@ -41,6 +43,7 @@ func loadConfig() (config, error) {
 		}
 		cfg.DSNSearchPath[i] = dsn
 	}
+	debugLog.Printf("config %s: DSNSearchPath %v", path, cfg.DSNSearchPath)
 	return cfg, nil
 }
 

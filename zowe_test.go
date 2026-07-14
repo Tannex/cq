@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -327,6 +328,86 @@ func TestRunWithZoweDataSets(t *testing.T) {
 	}
 	if !strings.Contains(string(got), `"NAME":"BOB"`) {
 		t.Fatalf("run() output = %s, want decoded Zowe record", got)
+	}
+}
+
+func TestRunVerboseWritesDebugToStderrOnly(t *testing.T) {
+	const copybookDSN = "HQ.COPYLIB(CUSTOMER)"
+	const dataDSN = "HQ.CUSTOMER.DATA"
+	originalCommand := zoweCommand
+	zoweCommand = func(args ...string) *exec.Cmd {
+		if reflect.DeepEqual(args, []string{"zos-files", "view", "data-set", copybookDSN}) {
+			return zoweHelperCommand("01 CUSTOMER.\n   05 NAME PIC X(3).\n", "", 0)
+		}
+		if path, ok := zoweDownloadPath(args, dataDSN); ok {
+			return zoweDownloadHelperCommand(path, []byte("BOB"), "", 0)
+		}
+		t.Errorf("unexpected zowe args: %q", args)
+		return zoweHelperCommand("", "unexpected args", 8)
+	}
+	t.Cleanup(func() { zoweCommand = originalCommand })
+
+	captureRun := func(args ...string) (string, string) {
+		t.Helper()
+		dir := t.TempDir()
+		outFile, err := os.Create(filepath.Join(dir, "stdout"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		errFile, err := os.Create(filepath.Join(dir, "stderr"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		origOut, origErr := os.Stdout, os.Stderr
+		os.Stdout, os.Stderr = outFile, errFile
+		runErr := runWithArgs(t, args...)
+		os.Stdout, os.Stderr = origOut, origErr
+		if err := errors.Join(outFile.Close(), errFile.Close(), runErr); err != nil {
+			t.Fatalf("run() error = %v", err)
+		}
+		stdout, err := os.ReadFile(outFile.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		stderr, err := os.ReadFile(errFile.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(stdout), string(stderr)
+	}
+
+	stdout, stderr := captureRun("--verbose",
+		"--copybook-dsn", copybookDSN,
+		"--data-dsn", dataDSN,
+		"-codepage", "ascii",
+	)
+	if !strings.Contains(stdout, `"NAME":"BOB"`) {
+		t.Fatalf("run() stdout = %s, want decoded record", stdout)
+	}
+	if strings.Contains(stdout, "cq: ") {
+		t.Fatalf("run() stdout = %s, want no debug lines", stdout)
+	}
+	for _, want := range []string{
+		"zowe view " + copybookDSN,
+		"zowe download " + dataDSN,
+		"record CUSTOMER: 3 bytes per record",
+		"decoded 1 records",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("verbose stderr = %q, want it to contain %q", stderr, want)
+		}
+	}
+
+	stdout, stderr = captureRun(
+		"--copybook-dsn", copybookDSN,
+		"--data-dsn", dataDSN,
+		"-codepage", "ascii",
+	)
+	if !strings.Contains(stdout, `"NAME":"BOB"`) {
+		t.Fatalf("run() stdout = %s, want decoded record", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr without --verbose = %q, want empty", stderr)
 	}
 }
 

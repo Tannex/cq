@@ -42,6 +42,7 @@ padding.
 | `--data-dsn` | none | data set downloaded in binary mode through Zowe CLI |
 | `-codepage` | `cp037` | EBCDIC codepage of the data (`cp037`, `cp277`, `cp1047`, `cp1140`, `cp1142`; `ascii`/`latin1` for testing) |
 | `-format` | `auto` | copybook source format: `fixed` (cols 7–72), `free`, or `auto` |
+| `--verbose` | off | write debug information (config, Zowe calls, timings) to stderr |
 | `-record` | first | which 01-level record to decode when the copybook has several |
 | `-pretty` | off | indent JSON output |
 | `-fillers` | off | include FILLER fields in decoded output |

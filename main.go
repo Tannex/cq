@@ -14,6 +14,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"os"
 
 	"github.com/itchyny/gojq"
@@ -24,6 +25,11 @@ import (
 	"github.com/Tannex/cq/internal/query"
 	"github.com/Tannex/cq/internal/record"
 )
+
+// debugLog carries --verbose diagnostics to stderr. It stays discarded until
+// run enables it; a log.Logger serializes writes from the concurrent library
+// probes in the DSN copy resolver.
+var debugLog = log.New(io.Discard, "cq: ", 0)
 
 func main() {
 	if err := run(); err != nil {
@@ -54,6 +60,7 @@ func run() error {
 	lrecl := fs.Int("lrecl", 0, "physical record length when it exceeds the layout (extra bytes are padding)")
 	expr := fs.String("q", "", "jq expression: run per record when decoding (output becomes a result stream, not an array), or against the layout document")
 	rawOut := fs.Bool("r", false, "with -q, print string results raw instead of JSON-quoted")
+	verbose := fs.Bool("verbose", false, "write debug information (config, Zowe calls, timings) to stderr")
 	var wheres []string
 	fs.Func("where", "keep only records satisfying this level-88 `condition`; prefix with ! or \"not \" to negate; repeat to AND", func(s string) error {
 		wheres = append(wheres, s)
@@ -90,6 +97,11 @@ examples:
 `)
 	}
 	fs.Parse(os.Args[1:])
+
+	debugLog.SetOutput(io.Discard)
+	if *verbose {
+		debugLog.SetOutput(os.Stderr)
+	}
 
 	if (*copybookPath == "") == (*copybookDSN == "") {
 		return errors.New("provide exactly one copybook source: -c COPYBOOK or --copybook-dsn DSN[(MEMBER)]")
@@ -137,6 +149,9 @@ examples:
 		src, err = fetchZoweCopybook(*copybookDSN)
 	} else {
 		src, err = os.ReadFile(*copybookPath)
+		if err == nil {
+			debugLog.Printf("copybook %s: %d bytes", *copybookPath, len(src))
+		}
 	}
 	if err != nil {
 		return err
@@ -164,6 +179,11 @@ examples:
 	rec, err := pickRecord(recs, *recName)
 	if err != nil {
 		return err
+	}
+	if rec.Variable() {
+		debugLog.Printf("record %s: %d-%d bytes per record", rec.Name, rec.MinLength, rec.MaxLength)
+	} else {
+		debugLog.Printf("record %s: %d bytes per record", rec.Name, rec.MaxLength)
 	}
 	cm, err := decode.Codepage(*codepage)
 	if err != nil {
@@ -304,6 +324,7 @@ func decodeAll(w io.Writer, d *record.Decoder, in io.Reader, pretty bool, max in
 			return err
 		}
 	}
+	debugLog.Printf("decoded %d records", n)
 	if q != nil {
 		return nil
 	}
