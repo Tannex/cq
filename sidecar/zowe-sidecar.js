@@ -14,8 +14,26 @@
 const https = require("https");
 const readline = require("readline");
 
+// send writes one frame; false means stdout is backed up and the caller
+// should pause its source until stdout drains.
 function send(msg) {
-  process.stdout.write(JSON.stringify(msg) + "\n");
+  return process.stdout.write(JSON.stringify(msg) + "\n");
+}
+
+// respectBackpressure pauses res whenever a frame write reports a full
+// stdout pipe and resumes it on drain, so a slow cq consumer bounds this
+// process's memory instead of ballooning it: without the pause, Node queues
+// every pending write on the heap while the z/OSMF socket keeps delivering.
+function respectBackpressure(res, ok) {
+  if (ok || res.isPaused()) {
+    return;
+  }
+  res.pause();
+  process.stdout.once("drain", () => {
+    if (!res.destroyed) {
+      res.resume();
+    }
+  });
 }
 
 async function resolveSession() {
@@ -174,13 +192,15 @@ function serve(session) {
     };
 
     // sentBytes tracks what already reached cq, so a fallback transfer can
-    // skip exactly that prefix and continue the stream seamlessly.
+    // skip exactly that prefix and continue the stream seamlessly. Returns
+    // the underlying write result for backpressure.
     let sentBytes = 0;
     const sendData = (buf) => {
       if (!done && buf.length > 0) {
         sentBytes += buf.length;
-        send({ id: req.id, data: buf.toString("base64") });
+        return send({ id: req.id, data: buf.toString("base64") });
       }
+      return true;
     };
 
     // startAttempt issues one HTTP request for this cq request. Each attempt
@@ -232,7 +252,7 @@ function serve(session) {
             toSkip -= n;
             chunk = chunk.subarray(n);
           }
-          sendData(chunk);
+          respectBackpressure(res, sendData(chunk));
         });
         res.on("end", () => settle({ end: true }));
         res.on("error", (err) => {
@@ -266,6 +286,7 @@ function serve(session) {
             return;
           }
           buf = buf.length === 0 ? chunk : Buffer.concat([buf, chunk]);
+          let ok = true;
           while (buf.length >= 4) {
             const len = buf.readUInt32BE(0);
             if (len !== req.reclen) {
@@ -275,9 +296,10 @@ function serve(session) {
             if (buf.length < 4 + len) {
               break;
             }
-            sendData(buf.subarray(4, 4 + len));
+            ok = sendData(buf.subarray(4, 4 + len)) && ok;
             buf = buf.subarray(4 + len);
           }
+          respectBackpressure(res, ok);
         });
         res.on("end", () => {
           if (done || attempt.superseded) {
