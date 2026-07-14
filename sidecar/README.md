@@ -35,6 +35,21 @@ Basic auth (user/password, including values from the secure credential
 store) and token auth (`zowe auth login apiml`) are supported; client
 certificates are not wired up in this proof of concept.
 
+## Secure credential store
+
+Profiles whose credentials live in the OS secure store (the zowe CLI
+default: `"secure": ["user", "password"]` in the team config) need
+`@zowe/secrets-for-zowe-sdk`, which `npm install` in this directory brings
+in. Without it, `ProfileInfo` fails with `Failed to initialize secure
+credential manager` as soon as the config contains secure fields — configs
+with plain-text properties are unaffected. The sidecar wires up the same
+keyring the zowe CLI itself uses: macOS Keychain, Windows Credential
+Manager, or libsecret on Linux.
+
+On macOS the first read may pop a Keychain prompt asking to allow `node`
+access to the "Zowe" item — that is the Keychain protecting the zowe CLI's
+stored secrets; choose "Always Allow" to stop it recurring.
+
 ## Protocol
 
 Newline-delimited JSON over stdin/stdout. cq sends requests:

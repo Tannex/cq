@@ -19,9 +19,37 @@ function send(msg) {
 }
 
 async function resolveSession() {
-  const { ProfileInfo } = require("@zowe/imperative");
-  const profInfo = new ProfileInfo("zowe");
-  await profInfo.readProfilesFromDisk();
+  const { ProfileInfo, ProfileCredentials } = require("@zowe/imperative");
+  // Standalone imperative has no secure credential manager wired up; give it
+  // the same keyring the zowe CLI uses (macOS Keychain, Windows Credential
+  // Manager, libsecret) so configs with secure fields resolve. When the
+  // native module is unavailable, plain-text configs still work.
+  let credMgrOverride;
+  let keyringError;
+  try {
+    const { keyring } = require("@zowe/secrets-for-zowe-sdk");
+    credMgrOverride = ProfileCredentials.defaultCredMgrWithKeytar(() => keyring);
+  } catch (err) {
+    keyringError = err;
+  }
+  const profInfo = new ProfileInfo("zowe", { credMgrOverride });
+  try {
+    await profInfo.readProfilesFromDisk();
+  } catch (err) {
+    if (err && err.errorCode === "LoadCredMgrFailed") {
+      const cause = (err.causeErrors && err.causeErrors.message) || err.message;
+      const hint = keyringError
+        ? `the @zowe/secrets-for-zowe-sdk keyring failed to load (${keyringError.message})`
+        : cause;
+      throw new Error(
+        "cannot open the secure credential store your Zowe configuration uses: " +
+          hint +
+          "; reinstall the sidecar dependencies (npm install) or store the " +
+          "profile's credentials as plain properties to bypass the store",
+      );
+    }
+    throw err;
+  }
   const prof = profInfo.getDefaultProfile("zosmf");
   if (!prof) {
     throw new Error(
