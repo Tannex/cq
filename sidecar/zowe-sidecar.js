@@ -43,9 +43,9 @@ async function resolveSession() {
         : cause;
       throw new Error(
         "cannot open the secure credential store your Zowe configuration uses: " +
-          hint +
-          "; reinstall the sidecar dependencies (npm install) or store the " +
-          "profile's credentials as plain properties to bypass the store",
+        hint +
+        "; reinstall the sidecar dependencies (npm install) or store the " +
+        "profile's credentials as plain properties to bypass the store",
       );
     }
     throw err;
@@ -54,7 +54,7 @@ async function resolveSession() {
   if (!prof) {
     throw new Error(
       "no default zosmf profile found in the Zowe configuration; " +
-        "run 'zowe config init' or check ~/.zowe/zowe.config.json",
+      "run 'zowe config init' or check ~/.zowe/zowe.config.json",
     );
   }
   const merged = profInfo.mergeArgsForProfile(prof, { getSecureVals: true });
@@ -79,17 +79,18 @@ async function resolveSession() {
   if (!session.tokenValue && !session.user) {
     throw new Error(
       `zosmf profile ${prof.profName} has neither a token nor a user; ` +
-        "log in with 'zowe auth login' or add credentials to the profile",
+      "log in with 'zowe auth login' or add credentials to the profile",
     );
   }
   return session;
 }
 
 function openRequest(session, dsn, binary) {
-  const headers = { "X-CSRF-ZOSMF-HEADER": "" };
-  if (binary) {
-    headers["X-IBM-Data-Type"] = "binary";
-  }
+  const headers = {
+    "X-CSRF-ZOSMF-HEADER": "",
+    "X-IBM-Migrated-Recall": "error",
+    "X-IBM-Data-Type": binary ? "binary" : "text"
+  };
   if (session.tokenValue) {
     const cookie = session.tokenType || "apimlAuthenticationToken";
     headers.Cookie = `${cookie}=${session.tokenValue}`;
