@@ -61,7 +61,6 @@ func run() error {
 	expr := fs.String("q", "", "jq expression: run per record when decoding (output becomes a result stream, not an array), or against the layout document")
 	rawOut := fs.Bool("r", false, "with -q, print string results raw instead of JSON-quoted")
 	verbose := fs.Bool("verbose", false, "write debug information (config, Zowe calls, timings) to stderr")
-	sidecarCmd := fs.String("sidecar", "", "stream DSN access through a Zowe SDK sidecar started with this `command` (see sidecar/; default is one zowe CLI call per data set)")
 	var wheres []string
 	fs.Func("where", "keep only records satisfying this level-88 `condition`; prefix with ! or \"not \" to negate; repeat to AND", func(s string) error {
 		wheres = append(wheres, s)
@@ -125,13 +124,9 @@ examples:
 		return err
 	}
 
-	command := cfg.Sidecar
-	if *sidecarCmd != "" {
-		command = *sidecarCmd
-	}
 	var transport zoweTransport = zoweCLI{}
-	if command != "" {
-		sc, err := startSidecar(command)
+	if cfg.Sidecar != "" {
+		sc, err := startSidecar(cfg.Sidecar)
 		if err != nil {
 			return err
 		}

@@ -12,11 +12,10 @@ import (
 var userConfigDir = os.UserConfigDir
 
 type config struct {
-	DSNSearchPath []string `json:"DSNSearchPath"`
+	DSNSearchPath []string `json:"dsnSearchPath"`
 	// Sidecar, when set, is the command cq runs to start a Zowe SDK sidecar
-	// for DSN access instead of calling the zowe CLI per data set. The
-	// --sidecar flag overrides it.
-	Sidecar string `json:"Sidecar,omitempty"`
+	// for DSN access instead of calling the zowe CLI per data set.
+	Sidecar string `json:"sidecar,omitempty"`
 }
 
 func loadConfig() (config, error) {
@@ -40,14 +39,14 @@ func loadConfig() (config, error) {
 	for i, dsn := range cfg.DSNSearchPath {
 		dsn = strings.TrimSpace(dsn)
 		if dsn == "" {
-			return config{}, fmt.Errorf("parse config %q: DSNSearchPath[%d] is empty", path, i)
+			return config{}, fmt.Errorf("parse config %q: dsnSearchPath[%d] is empty", path, i)
 		}
 		if strings.ContainsAny(dsn, "()") {
-			return config{}, fmt.Errorf("parse config %q: DSNSearchPath[%d] must name a library without a member: %q", path, i, dsn)
+			return config{}, fmt.Errorf("parse config %q: dsnSearchPath[%d] must name a library without a member: %q", path, i, dsn)
 		}
 		cfg.DSNSearchPath[i] = dsn
 	}
-	debugLog.Printf("config %s: DSNSearchPath %v", path, cfg.DSNSearchPath)
+	debugLog.Printf("config %s: dsnSearchPath %v", path, cfg.DSNSearchPath)
 	return cfg, nil
 }
 

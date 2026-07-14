@@ -280,7 +280,7 @@ func TestDSNCopyResolverRequiresSearchPath(t *testing.T) {
 	resolver := newDSNCopyResolver(nil, zoweCLI{})
 
 	_, err := resolver.Resolve("ADDRESS")
-	if err == nil || !strings.Contains(err.Error(), "DSNSearchPath") {
+	if err == nil || !strings.Contains(err.Error(), "dsnSearchPath") {
 		t.Fatalf("Resolve() error = %v, want config guidance", err)
 	}
 }
@@ -466,7 +466,7 @@ func TestRunExpandsNestedCopiesThroughSearchPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	configPath := filepath.Join(configDir, "config.json")
-	if err := os.WriteFile(configPath, []byte(`{"DSNSearchPath":["HQL.CPY.SRC","HQL.COB.SRC"]}`), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte(`{"dsnSearchPath":["HQL.CPY.SRC","HQL.COB.SRC"]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

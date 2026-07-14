@@ -43,7 +43,7 @@ func TestRunConfigPreservesExistingFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(configDir, "config.json")
-	const existing = `{"DSNSearchPath":["HQL.CPY.SRC"]}`
+	const existing = `{"dsnSearchPath":["HQL.CPY.SRC"]}`
 	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}

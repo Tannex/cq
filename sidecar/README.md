@@ -17,17 +17,21 @@ stdout. This sidecar replaces that with **one** long-lived Node process that:
 
 ```sh
 cd sidecar && npm install
-cq --sidecar "node /path/to/sidecar/zowe-sidecar.js" \
-   --copybook-dsn "HQ.COPYLIB(CUSTOMER)" --data-dsn "HQ.CUSTOMER.DATA"
 ```
 
-Or set it once in cq's `config.json` so every run uses it:
+Set the sidecar command in cq's `config.json` so every run uses it:
 
 ```json
 {
-  "DSNSearchPath": ["HQL.CPY.SRC", "HQL.COB.SRC"],
-  "Sidecar": "node /path/to/sidecar/zowe-sidecar.js"
+  "dsnSearchPath": ["HQL.CPY.SRC", "HQL.COB.SRC"],
+  "sidecar": "node /path/to/sidecar/zowe-sidecar.js"
 }
+```
+
+Then run cq normally, for example:
+
+```sh
+cq --copybook-dsn "HQ.COPYLIB(CUSTOMER)" --data-dsn "HQ.CUSTOMER.DATA"
 ```
 
 The sidecar uses the default `zosmf` profile from the Zowe configuration.

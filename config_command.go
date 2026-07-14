@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-const initialConfig = "{\n  \"DSNSearchPath\": []\n}\n"
+const initialConfig = "{\n  \"dsnSearchPath\": []\n}\n"
 
 var launchConfigEditor = func(path string) error {
 	name, args, err := configEditorInvocation(runtime.GOOS, os.Getenv, path)

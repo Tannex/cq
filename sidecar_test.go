@@ -243,22 +243,25 @@ func TestRunWithSidecarStreamsEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	configPath := filepath.Join(configDir, "config.json")
-	if err := os.WriteFile(configPath, []byte(`{"DSNSearchPath":["HQL.CPY.SRC"]}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	originalCommand := zoweCommand
-	zoweCommand = func(args ...string) *exec.Cmd {
-		t.Errorf("zowe CLI invoked with %q despite --sidecar", args)
-		return zoweHelperCommand("", "unexpected CLI call", 8)
-	}
-	t.Cleanup(func() { zoweCommand = originalCommand })
-
 	command := fakeSidecarCommand(t, map[string]fakeMember{
 		"HQ.COPYLIB(CUSTOMER)": {Text: "01 CUSTOMER.\n   COPY DETAILS.\n"},
 		"HQL.CPY.SRC(DETAILS)": {Text: "05 NAME PIC X(3).\n05 FLAG PIC X(1).\n"},
 		"HQ.CUSTOMER.DATA":     {B64: base64.StdEncoding.EncodeToString([]byte("BOBY")), Chunk: 2},
 	})
+	configJSON, err := json.Marshal(config{DSNSearchPath: []string{"HQL.CPY.SRC"}, Sidecar: command})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, configJSON, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	originalCommand := zoweCommand
+	zoweCommand = func(args ...string) *exec.Cmd {
+		t.Errorf("zowe CLI invoked with %q despite configured sidecar", args)
+		return zoweHelperCommand("", "unexpected CLI call", 8)
+	}
+	t.Cleanup(func() { zoweCommand = originalCommand })
 
 	out, err := os.CreateTemp(t.TempDir(), "cq-output-*.json")
 	if err != nil {
@@ -270,7 +273,6 @@ func TestRunWithSidecarStreamsEndToEnd(t *testing.T) {
 	t.Cleanup(func() { os.Stdout = originalStdout })
 
 	err = runWithArgs(t,
-		"--sidecar", command,
 		"--copybook-dsn", "HQ.COPYLIB(CUSTOMER)",
 		"--data-dsn", "HQ.CUSTOMER.DATA",
 		"-codepage", "ascii",

@@ -90,7 +90,7 @@ func (r *dsnCopyResolver) Resolve(member string) (string, error) {
 		return res.text, res.err
 	}
 	if len(r.searchPaths) == 0 {
-		return "", fmt.Errorf("COPY %s requires DSNSearchPath in the user config file", member)
+		return "", fmt.Errorf("COPY %s requires dsnSearchPath in the user config file", member)
 	}
 	res = r.probeSearchPaths(member)
 	r.mu.Lock()
@@ -126,7 +126,7 @@ func (r *dsnCopyResolver) probeSearchPaths(member string) copyResult {
 		failures = append(failures, res.err.Error())
 	}
 	debugLog.Printf("COPY %s: not found in any of %d libraries", member, len(r.searchPaths))
-	return copyResult{err: fmt.Errorf("COPY %s was not resolved through DSNSearchPath:\n  %s", member, strings.Join(failures, "\n  "))}
+	return copyResult{err: fmt.Errorf("COPY %s was not resolved through dsnSearchPath:\n  %s", member, strings.Join(failures, "\n  "))}
 }
 
 type temporaryDataFile struct {
