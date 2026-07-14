@@ -1,25 +1,24 @@
-# cq Zowe sidecar (proof of concept)
+# cq Zowe sidecar
 
-The default cq transport runs one `zowe` CLI process per data set access:
-each call pays Node.js startup plus a fresh TLS handshake, and binary
-downloads go through a temporary file because the CLI cannot stream to
-stdout. This sidecar replaces that with **one** long-lived Node process that:
+cq's transport to z/OS: one long-lived Node process per cq run that
 
 - resolves the user's existing Zowe configuration — team config, secure
   credential store, tokens — through the official Zowe Node SDK
-  (`ProfileInfo`, the same API the zowe CLI and Zowe Explorer use), so cq
+  (`ProfileInfo`, the same API the Zowe CLI and Zowe Explorer use), so cq
   never reimplements or even sees auth;
 - serves data set reads over the z/OSMF REST API on a warm HTTPS session,
   streaming bytes to cq as they arrive, so decoding starts before the
-  download finishes and `-max`-style early exits cancel the transfer.
+  transfer finishes and `-max`-style early exits cancel it.
 
-## Usage
+## Setup
 
 ```sh
-cd sidecar && npm install
+cd sidecar && npm install -g .
 ```
 
-Set the sidecar command in cq's `config.json` so every run uses it:
+That puts `cq-zowe-sidecar` on PATH, where cq finds it automatically the
+first time a run touches a DSN. To run it from somewhere else instead, name
+the command in cq's `config.json`:
 
 ```json
 {
@@ -37,7 +36,7 @@ cq --copybook-dsn "HQ.COPYLIB(CUSTOMER)" --data-dsn "HQ.CUSTOMER.DATA"
 The sidecar uses the default `zosmf` profile from the Zowe configuration.
 Basic auth (user/password, including values from the secure credential
 store) and token auth (`zowe auth login apiml`) are supported; client
-certificates are not wired up in this proof of concept.
+certificates are not wired up yet.
 
 ## Secure credential store
 
@@ -54,14 +53,27 @@ On macOS the first read may pop a Keychain prompt asking to allow `node`
 access to the "Zowe" item — that is the Keychain protecting the zowe CLI's
 stored secrets; choose "Always Allow" to stop it recurring.
 
+## Bounded reads for -max
+
+When cq runs with `-max N` (and no `-where` filter), the download request
+carries `records`/`reclen` and the sidecar asks z/OSMF for just those
+records with `X-IBM-Record-Range: 0,N`, in record mode ("no data conversion
+is performed and the record length is prepended to the data"). Every
+record's 4-byte length prefix is checked against the record length cq
+expects; on any surprise — a different record length, a response ending
+inside a record, or an HTTP error on the ranged request — the sidecar
+restarts the transfer as a plain unranged binary stream and skips the bytes
+already delivered, so the bound can only ever save work, never change
+output.
+
 ## Protocol
 
 Newline-delimited JSON over stdin/stdout. cq sends requests:
 
 ```
-{"id":1,"op":"view","dsn":"HQ.COPYLIB(CUSTOMER)"}   text read (copybooks)
-{"id":2,"op":"download","dsn":"HQ.CUSTOMER.DATA"}   binary read (records)
-{"id":2,"op":"cancel"}                              stop a transfer early
+{"id":1,"op":"view","dsn":"HQ.COPYLIB(CUSTOMER)"}                          text read (copybooks)
+{"id":2,"op":"download","dsn":"HQ.CUSTOMER.DATA","records":10,"reclen":80} binary read (records; bound optional)
+{"id":2,"op":"cancel"}                                                     stop a transfer early
 ```
 
 The sidecar answers with one `{"ready":true}` frame at startup (or

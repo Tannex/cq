@@ -48,9 +48,9 @@ func run() error {
 
 	fs := flag.NewFlagSet("cq", flag.ExitOnError)
 	copybookPath := fs.String("c", "", "local copybook file")
-	copybookDSN := fs.String("copybook-dsn", "", "copybook data set or member to fetch through Zowe CLI")
+	copybookDSN := fs.String("copybook-dsn", "", "copybook data set or member to fetch through Zowe (z/OSMF)")
 	dataPath := fs.String("d", "", "data file to decode (use - for stdin; omit for layout output)")
-	dataDSN := fs.String("data-dsn", "", "data set to download in binary mode through Zowe CLI")
+	dataDSN := fs.String("data-dsn", "", "data set to stream in binary mode through Zowe (z/OSMF)")
 	codepage := fs.String("codepage", "cp037", "EBCDIC codepage of the data (cp037, cp277, cp1047, cp1140, cp1142; ascii/latin1 for testing)")
 	format := fs.String("format", "auto", "copybook source format: auto, fixed (cols 7-72), or free")
 	recName := fs.String("record", "", "01-level record to decode when the copybook has several (default: first)")
@@ -75,7 +75,9 @@ usage: cq [flags] (-c COPYBOOK | --copybook-dsn DSN[(MEMBER)])
 
 With only a copybook source, prints the record layout as JSON. A data source
 decodes fixed-length binary records into a UTF-8 JSON array. DSN sources are
-fetched through the installed Zowe CLI; use a trailing "-" for stdin.
+streamed through the Zowe sidecar (see the README's Zowe section), which
+reuses the Zowe CLI configuration and credentials; use a trailing "-" for
+stdin.
 
 The config command creates the user configuration file when needed and opens
 it with $VISUAL, $EDITOR, or the platform text editor.
@@ -92,8 +94,6 @@ examples:
   cq -q 'select(.BALANCE < 0)' -c CUSTOMER.cpy -d customer.bin
   cq -r -q '.["CUST-NAME"]' -c CUSTOMER.cpy -d customer.bin
   cq -where DTAR107-SALE -where 'not DTAR107-VOID' -c DTAR107.cbl -d sales.bin
-  zowe zos-files download data-set "HQ.CUSTOMER.DATA" --binary --file customer.bin
-  cq -c CUSTOMER.cpy -d customer.bin
 `)
 	}
 	fs.Parse(os.Args[1:])
@@ -124,15 +124,11 @@ examples:
 		return err
 	}
 
-	var transport zoweTransport = zoweCLI{}
-	if cfg.Sidecar != "" {
-		sc, err := startSidecar(cfg.Sidecar)
-		if err != nil {
-			return err
-		}
-		defer sc.Close()
-		transport = sc
-	}
+	// DSN access goes through the Zowe sidecar, started lazily on first use
+	// so purely local runs never pay for it.
+	sidecar := newLazySidecar(cfg.Sidecar)
+	defer sidecar.Close()
+	var transport zoweTransport = sidecar
 
 	var cbFormat copybook.Format
 	switch *format {
@@ -218,7 +214,17 @@ examples:
 	}
 
 	if *dataDSN != "" {
-		data, err := transport.openDataSet(*dataDSN)
+		// With -max and no -where filter, every decoded record is emitted, so
+		// the transfer can be bounded server-side to that many records.
+		// -where decides matches only after decoding, so it needs the stream.
+		var hint downloadHint
+		if *maxRecs > 0 && len(wheres) == 0 && !rec.Variable() {
+			hint = downloadHint{Records: *maxRecs, RecordLength: rec.MaxLength}
+			if *lrecl > 0 {
+				hint.RecordLength = *lrecl
+			}
+		}
+		data, err := transport.openDataSet(*dataDSN, hint)
 		if err != nil {
 			return err
 		}

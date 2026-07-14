@@ -2,7 +2,8 @@
 
 `cq` parses a COBOL copybook and either prints the record layout (byte
 offset and length of every field) or decodes fixed-length EBCDIC records —
-for example a binary dataset fetched with Zowe CLI — into UTF-8 JSON. The
+for example a binary dataset streamed straight from z/OS through the user's
+Zowe configuration — into UTF-8 JSON. The
 output is plain JSON on stdout; a built-in jq (`-q`) covers most filtering
 and reshaping, and anything else can be piped into the real `jq`.
 
@@ -28,18 +29,18 @@ cq [flags] (-c COPYBOOK | --copybook-dsn DSN[(MEMBER)])
 ```
 
 Provide one copybook source: a local `-c COPYBOOK`, or `--copybook-dsn` to
-fetch a data set or PDS member through the installed Zowe CLI. Data can come
-from `-d DATA`, a trailing `DATA` argument, stdin via a trailing `-`, or a
-binary Zowe download selected by `--data-dsn`. Records are fixed-length,
+fetch a data set or PDS member through Zowe (see the Zowe section). Data can
+come from `-d DATA`, a trailing `DATA` argument, stdin via a trailing `-`, or
+a binary Zowe stream selected by `--data-dsn`. Records are fixed-length,
 derived from the copybook; use `-lrecl` if the physical records carry trailing
 padding.
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `-c` | one copybook source required | local copybook file |
-| `--copybook-dsn` | one copybook source required | data set or PDS member fetched as text through Zowe CLI |
+| `--copybook-dsn` | one copybook source required | data set or PDS member fetched as text through Zowe (z/OSMF) |
 | `-d` | none | data file to decode (`-` for stdin); omit for layout output |
-| `--data-dsn` | none | data set downloaded in binary mode through Zowe CLI |
+| `--data-dsn` | none | data set streamed in binary mode through Zowe (z/OSMF) |
 | `-codepage` | `cp037` | EBCDIC codepage of the data (`cp037`, `cp277`, `cp1047`, `cp1140`, `cp1142`; `ascii`/`latin1` for testing) |
 | `-format` | `auto` | copybook source format: `fixed` (cols 7–72), `free`, or `auto` |
 | `--verbose` | off | write debug information (config, Zowe calls, timings) to stderr |
@@ -120,32 +121,32 @@ the raw bytes before any JSON is built, and combines with `-q` (filter
 first, query after). Conditions inside `OCCURS` tables aren't supported
 yet.
 
-## Using Zowe CLI
+## Using Zowe
 
-`cq` can invoke an installed and configured Zowe CLI directly. This is the
-cross-platform form, including Windows PowerShell and Command Prompt:
+DSN sources are served by a small Node sidecar that cq starts once per run.
+The sidecar resolves the user's existing Zowe configuration — team config,
+secure credential store, tokens — through the official Zowe SDK (the same
+`ProfileInfo` API the Zowe CLI and Zowe Explorer use) and streams data sets
+over the z/OSMF REST API. Install it once from the [sidecar/](sidecar/)
+directory (`npm install -g .` puts `cq-zowe-sidecar` on PATH, which cq finds
+by default), then:
 
 ```console
 $ cq --copybook-dsn "HQ.COPYLIB(CUSTOMER)" --data-dsn "HQ.CUSTOMER.DATA"
 ```
 
-Zowe® CLI is not included with `cq` and must be installed and configured
-separately. `cq` is an independent project and is not affiliated with or
-endorsed by The Linux Foundation or the Zowe project. Zowe® is a registered
-trademark of The Linux Foundation.
+A Zowe configuration (from Zowe CLI or Zowe Explorer) must exist; see
+[sidecar/README.md](sidecar/README.md) for details, including running the
+sidecar from a custom location with `"sidecar"` in cq's config file. `cq` is
+an independent project and is not affiliated with or endorsed by The Linux
+Foundation or the Zowe project. Zowe® is a registered trademark of The Linux
+Foundation.
 
 The copybook is fetched as text so z/OSMF converts its EBCDIC source, while
-the data set is downloaded in binary mode to preserve packed and binary
-fields. The download uses an OS temporary file that is removed after decoding.
-Zowe authentication, profiles, certificates, and connection settings continue
-to come from the user's normal Zowe configuration; binary mode takes precedence
-over a profile-level encoding on this download path.
-
-As a proof of concept, `"sidecar"` in the config file
-replaces the per-call CLI with one long-lived Node process that resolves the
-same Zowe configuration through the official Zowe SDK and streams data sets
-over z/OSMF REST — no per-call Node startup, no temporary download file. See
-[sidecar/README.md](sidecar/README.md).
+the data set is streamed in binary mode to preserve packed and binary fields
+— records decode as bytes arrive, with no temporary file. Zowe
+authentication, profiles, and connection settings continue to come from the
+user's normal Zowe configuration.
 
 ### Nested copybooks
 
@@ -225,8 +226,12 @@ $ zowe zos-files download data-set "HQ.CUSTOMER.DATA" --binary \
 ```
 
 If the dataset's LRECL is larger than the copybook layout (padded FB records),
-pass `-lrecl` with the dataset's record length. `-max` limits decoding, but a
-`--data-dsn` source is downloaded in full first.
+pass `-lrecl` with the dataset's record length. With `-max N` (and no
+`-where`), a `--data-dsn` transfer is bounded server-side with a z/OSMF
+record range, so peeking at a huge dataset moves only the records asked for;
+the sidecar verifies the dataset's record length matches the layout and
+transparently falls back to a full streamed transfer (canceled once `-max`
+records have decoded) when it does not.
 
 ## Supported COBOL
 

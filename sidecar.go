@@ -1,11 +1,10 @@
-// Sidecar transport (proof of concept): instead of one zowe CLI process per
-// data set, cq starts a single long-lived sidecar (see sidecar/) that
-// resolves the user's existing Zowe configuration through the Zowe Node SDK
-// and streams data sets over the z/OSMF REST API. cq and the sidecar speak
-// newline-delimited JSON over stdin/stdout:
+// Sidecar transport: cq starts a single long-lived sidecar (see sidecar/)
+// that resolves the user's existing Zowe configuration through the Zowe Node
+// SDK and streams data sets over the z/OSMF REST API. cq and the sidecar
+// speak newline-delimited JSON over stdin/stdout:
 //
 //	cq -> sidecar: {"id":1,"op":"view","dsn":"HQ.CPY(CUSTOMER)"}
-//	               {"id":2,"op":"download","dsn":"HQ.CUSTOMER.DATA"}
+//	               {"id":2,"op":"download","dsn":"HQ.CUSTOMER.DATA","records":10,"reclen":80}
 //	               {"id":2,"op":"cancel"}
 //	sidecar -> cq: {"ready":true}                       (once, at startup)
 //	               {"id":2,"data":"<base64 chunk>"}     (zero or more)
@@ -13,7 +12,9 @@
 //
 // Requests are multiplexed: frames for different ids may interleave, which
 // lets the copy resolver keep probing libraries concurrently over one warm
-// HTTP session.
+// HTTP session. records/reclen on a download let the sidecar bound the
+// transfer server-side with X-IBM-Record-Range; the sidecar transparently
+// falls back to a full transfer when the data set's records do not match.
 package main
 
 import (
@@ -30,10 +31,34 @@ import (
 
 const sidecarStartTimeout = 30 * time.Second
 
+// defaultSidecarCommand is used when neither the config file nor --sidecar
+// names one: the launcher an npm install of sidecar/ puts on PATH.
+const defaultSidecarCommand = "cq-zowe-sidecar"
+
+// zoweTransport is what the copy resolver and main need from the sidecar;
+// tests substitute a fake sidecar process behind the same interface.
+// Implementations must be safe for concurrent use.
+type zoweTransport interface {
+	fetchCopybook(dsn string) ([]byte, error)
+	openDataSet(dsn string, hint downloadHint) (io.ReadCloser, error)
+}
+
+// downloadHint bounds a download when cq knows it will not need the whole
+// data set: Records > 0 asks the sidecar for a server-side record range of
+// Records records of RecordLength bytes each. The sidecar verifies the data
+// set's records really have that length and falls back to a full transfer
+// when they do not, so the hint can never truncate output.
+type downloadHint struct {
+	Records      int
+	RecordLength int
+}
+
 type sidecarRequest struct {
-	ID  uint64 `json:"id"`
-	Op  string `json:"op"`
-	DSN string `json:"dsn,omitempty"`
+	ID      uint64 `json:"id"`
+	Op      string `json:"op"`
+	DSN     string `json:"dsn,omitempty"`
+	Records int    `json:"records,omitempty"`
+	Reclen  int    `json:"reclen,omitempty"`
 }
 
 type sidecarFrame struct {
@@ -186,7 +211,7 @@ func (s *zoweSidecar) send(req sidecarRequest) error {
 }
 
 // open registers a request and returns the waiter its frames arrive on.
-func (s *zoweSidecar) open(op, dsn string) (uint64, sidecarWaiter, error) {
+func (s *zoweSidecar) open(req sidecarRequest) (uint64, sidecarWaiter, error) {
 	w := sidecarWaiter{ch: make(chan sidecarFrame, 16), done: make(chan struct{})}
 	s.mu.Lock()
 	if s.readErr != nil {
@@ -199,11 +224,12 @@ func (s *zoweSidecar) open(op, dsn string) (uint64, sidecarWaiter, error) {
 	s.pending[id] = w
 	s.mu.Unlock()
 
-	if err := s.send(sidecarRequest{ID: id, Op: op, DSN: dsn}); err != nil {
+	req.ID = id
+	if err := s.send(req); err != nil {
 		s.mu.Lock()
 		delete(s.pending, id)
 		s.mu.Unlock()
-		return 0, w, fmt.Errorf("sidecar request for %q: %w", dsn, err)
+		return 0, w, fmt.Errorf("sidecar request for %q: %w", req.DSN, err)
 	}
 	return id, w, nil
 }
@@ -227,9 +253,13 @@ func (s *zoweSidecar) exitError() error {
 	return fmt.Errorf("sidecar closed the response stream")
 }
 
+func elapsed(start time.Time) time.Duration {
+	return time.Since(start).Round(time.Millisecond)
+}
+
 func (s *zoweSidecar) fetchCopybook(dsn string) ([]byte, error) {
 	start := time.Now()
-	id, w, err := s.open("view", dsn)
+	id, w, err := s.open(sidecarRequest{Op: "view", DSN: dsn})
 	if err != nil {
 		return nil, err
 	}
@@ -255,15 +285,17 @@ func (s *zoweSidecar) fetchCopybook(dsn string) ([]byte, error) {
 	return nil, s.exitError()
 }
 
-func (s *zoweSidecar) openDataSet(dsn string) (io.ReadCloser, error) {
-	id, w, err := s.open("download", dsn)
+func (s *zoweSidecar) openDataSet(dsn string, hint downloadHint) (io.ReadCloser, error) {
+	id, w, err := s.open(sidecarRequest{
+		Op: "download", DSN: dsn,
+		Records: hint.Records, Reclen: hint.RecordLength,
+	})
 	if err != nil {
 		return nil, err
 	}
 	st := &sidecarStream{s: s, id: id, dsn: dsn, w: w}
 	// Wait for the first frame so failures (not cataloged, permissions)
-	// surface before any decoding starts, like the CLI transport's
-	// download-then-decode does.
+	// surface before any decoding starts.
 	f, ok := <-w.ch
 	switch {
 	case !ok:
@@ -281,7 +313,11 @@ func (s *zoweSidecar) openDataSet(dsn string) (io.ReadCloser, error) {
 		}
 		st.buf = chunk
 	}
-	debugLog.Printf("sidecar download %s: streaming", dsn)
+	if hint.Records > 0 {
+		debugLog.Printf("sidecar download %s: streaming (up to %d records of %d bytes)", dsn, hint.Records, hint.RecordLength)
+	} else {
+		debugLog.Printf("sidecar download %s: streaming", dsn)
+	}
 	return st, nil
 }
 
@@ -358,6 +394,57 @@ func (s *zoweSidecar) Close() error {
 		<-done
 		return nil
 	}
+}
+
+// lazySidecar starts the sidecar process on first data set access, so runs
+// that never touch a DSN (local copybook, local data) pay no Node startup
+// and work without the sidecar installed.
+type lazySidecar struct {
+	command string
+	once    sync.Once
+	s       *zoweSidecar
+	err     error
+}
+
+func newLazySidecar(command string) *lazySidecar {
+	if command == "" {
+		command = defaultSidecarCommand
+	}
+	return &lazySidecar{command: command}
+}
+
+func (l *lazySidecar) get() (*zoweSidecar, error) {
+	l.once.Do(func() {
+		l.s, l.err = startSidecar(l.command)
+		if l.err != nil && l.command == defaultSidecarCommand {
+			l.err = fmt.Errorf("%w\n  (data set access needs the Zowe sidecar: npm install -g the cq sidecar/ package, or point \"sidecar\" in the cq config file or --sidecar at it)", l.err)
+		}
+	})
+	return l.s, l.err
+}
+
+func (l *lazySidecar) fetchCopybook(dsn string) ([]byte, error) {
+	s, err := l.get()
+	if err != nil {
+		return nil, err
+	}
+	return s.fetchCopybook(dsn)
+}
+
+func (l *lazySidecar) openDataSet(dsn string, hint downloadHint) (io.ReadCloser, error) {
+	s, err := l.get()
+	if err != nil {
+		return nil, err
+	}
+	return s.openDataSet(dsn, hint)
+}
+
+// Close shuts down the sidecar if one was started.
+func (l *lazySidecar) Close() error {
+	if l.s != nil {
+		return l.s.Close()
+	}
+	return nil
 }
 
 func forwardSidecarStderr(r io.Reader) {

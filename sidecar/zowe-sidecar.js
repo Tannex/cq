@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// cq Zowe sidecar (proof of concept).
+// cq Zowe sidecar.
 //
 // Resolves the user's existing Zowe configuration — team config, secure
 // credential store, tokens — through the official Zowe Node SDK (the same
@@ -85,12 +85,15 @@ async function resolveSession() {
   return session;
 }
 
-function openRequest(session, dsn, binary) {
+function openRequest(session, dsn, opts) {
   const headers = {
     "X-CSRF-ZOSMF-HEADER": "",
     "X-IBM-Migrated-Recall": "error",
-    "X-IBM-Data-Type": binary ? "binary" : "text"
+    "X-IBM-Data-Type": opts.dataType,
   };
+  if (opts.range) {
+    headers["X-IBM-Record-Range"] = opts.range;
+  }
   if (session.tokenValue) {
     const cookie = session.tokenType || "apimlAuthenticationToken";
     headers.Cookie = `${cookie}=${session.tokenValue}`;
@@ -170,30 +173,135 @@ function serve(session) {
       maybeExit();
     };
 
-    const httpReq = openRequest(session, req.dsn, req.op === "download");
-    inflight.set(req.id, () => {
-      settle(null); // canceled by cq: no terminal frame expected
-      httpReq.destroy();
-    });
-    httpReq.on("response", (res) => {
-      if (res.statusCode !== 200) {
-        let body = "";
-        res.setEncoding("utf8");
-        res.on("data", (chunk) => (body += chunk));
-        res.on("end", () => settle({ error: zosmfError(req.dsn, res.statusCode, body) }));
-        res.on("error", () => settle({ error: zosmfError(req.dsn, res.statusCode, body) }));
-        return;
+    // sentBytes tracks what already reached cq, so a fallback transfer can
+    // skip exactly that prefix and continue the stream seamlessly.
+    let sentBytes = 0;
+    const sendData = (buf) => {
+      if (!done && buf.length > 0) {
+        sentBytes += buf.length;
+        send({ id: req.id, data: buf.toString("base64") });
       }
-      res.on("data", (chunk) => {
-        if (!done) {
-          send({ id: req.id, data: chunk.toString("base64") });
+    };
+
+    // startAttempt issues one HTTP request for this cq request. Each attempt
+    // has its own guard so a superseded attempt (record-range fallback) goes
+    // quiet instead of settling the request.
+    const startAttempt = (opts, onOK) => {
+      const attempt = { superseded: false };
+      const httpReq = openRequest(session, req.dsn, opts);
+      inflight.set(req.id, () => {
+        settle(null); // canceled by cq: no terminal frame expected
+        httpReq.destroy();
+      });
+      httpReq.on("response", (res) => {
+        if (res.statusCode !== 200) {
+          if (opts.range) {
+            // Range or record mode unsupported here: retry unranged.
+            attempt.superseded = true;
+            res.destroy();
+            process.stderr.write(`zowe-sidecar: ${req.dsn}: range request got HTTP ${res.statusCode}; retrying without record range\n`);
+            streamPlain();
+            return;
+          }
+          let body = "";
+          res.setEncoding("utf8");
+          res.on("data", (chunk) => (body += chunk));
+          res.on("end", () => settle({ error: zosmfError(req.dsn, res.statusCode, body) }));
+          res.on("error", () => settle({ error: zosmfError(req.dsn, res.statusCode, body) }));
+          return;
+        }
+        onOK(res, attempt);
+      });
+      httpReq.on("error", (err) => {
+        if (!attempt.superseded) {
+          settle({ error: `data set ${req.dsn}: ${err.message}` });
         }
       });
-      res.on("end", () => settle({ end: true }));
-      res.on("error", (err) => settle({ error: `data set ${req.dsn}: ${err.message}` }));
-    });
-    httpReq.on("error", (err) => settle({ error: `data set ${req.dsn}: ${err.message}` }));
-    httpReq.end();
+      httpReq.end();
+      return attempt;
+    };
+
+    // streamPlain transfers the whole data set (text for copybooks, binary
+    // for records), skipping any prefix a ranged attempt already delivered.
+    const streamPlain = () => {
+      let toSkip = sentBytes;
+      startAttempt({ dataType: req.op === "download" ? "binary" : "text" }, (res, attempt) => {
+        res.on("data", (chunk) => {
+          if (toSkip > 0) {
+            const n = Math.min(toSkip, chunk.length);
+            toSkip -= n;
+            chunk = chunk.subarray(n);
+          }
+          sendData(chunk);
+        });
+        res.on("end", () => settle({ end: true }));
+        res.on("error", (err) => {
+          if (!attempt.superseded) {
+            settle({ error: `data set ${req.dsn}: ${err.message}` });
+          }
+        });
+      });
+    };
+
+    // streamRanged asks z/OSMF for just the first req.records records, in
+    // record mode so each record arrives as a 4-byte big-endian length
+    // prefix plus payload. Every record is checked against the record length
+    // cq expects; any surprise (different length, partial trailer, HTTP
+    // error) falls back to a full plain transfer, so the hint can only ever
+    // save work, never change output.
+    const streamRanged = () => {
+      startAttempt({ dataType: "record", range: `0,${req.records}` }, (res, attempt) => {
+        let buf = Buffer.alloc(0);
+        const fallBack = (reason) => {
+          if (attempt.superseded || done) {
+            return;
+          }
+          attempt.superseded = true;
+          res.destroy();
+          process.stderr.write(`zowe-sidecar: ${req.dsn}: ${reason}; retrying without record range\n`);
+          streamPlain();
+        };
+        res.on("data", (chunk) => {
+          if (done || attempt.superseded) {
+            return;
+          }
+          buf = buf.length === 0 ? chunk : Buffer.concat([buf, chunk]);
+          while (buf.length >= 4) {
+            const len = buf.readUInt32BE(0);
+            if (len !== req.reclen) {
+              fallBack(`data set record is ${len} bytes, cq record is ${req.reclen}`);
+              return;
+            }
+            if (buf.length < 4 + len) {
+              break;
+            }
+            sendData(buf.subarray(4, 4 + len));
+            buf = buf.subarray(4 + len);
+          }
+        });
+        res.on("end", () => {
+          if (done || attempt.superseded) {
+            return;
+          }
+          if (buf.length !== 0) {
+            fallBack("ranged response ended inside a record");
+            return;
+          }
+          settle({ end: true });
+        });
+        res.on("error", (err) => {
+          if (!attempt.superseded) {
+            settle({ error: `data set ${req.dsn}: ${err.message}` });
+          }
+        });
+      });
+    };
+
+    if (req.op === "download" && Number.isInteger(req.records) && req.records > 0 && Number.isInteger(req.reclen) && req.reclen > 0) {
+      streamRanged();
+    } else {
+      streamPlain();
+    }
   });
 
   rl.on("close", () => {

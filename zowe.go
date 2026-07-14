@@ -1,58 +1,15 @@
+// COPY member resolution through the configured DSN search path. All data
+// set access goes through the Zowe sidecar (sidecar.go).
 package main
 
 import (
-	"errors"
 	"fmt"
-	"io"
-	"os"
-	"os/exec"
 	"strings"
 	"sync"
-	"time"
 )
 
-// zoweTransport is the seam between cq and the mainframe. The default
-// implementation shells out to the zowe CLI per call; the sidecar
-// implementation (sidecar.go) streams everything through one Zowe SDK
-// process. Implementations must be safe for concurrent use.
-type zoweTransport interface {
-	fetchCopybook(dsn string) ([]byte, error)
-	openDataSet(dsn string) (io.ReadCloser, error)
-}
-
-// zoweCLI fetches data sets by running the installed zowe CLI once per call.
-type zoweCLI struct{}
-
-func (zoweCLI) fetchCopybook(dsn string) ([]byte, error) {
-	return fetchZoweCopybook(dsn)
-}
-
-func (zoweCLI) openDataSet(dsn string) (io.ReadCloser, error) {
-	return downloadZoweDataSet(dsn)
-}
-
-var zoweCommand = func(args ...string) *exec.Cmd {
-	return exec.Command("zowe", args...)
-}
-
-func fetchZoweCopybook(dsn string) ([]byte, error) {
-	start := time.Now()
-	cmd := zoweCommand("zos-files", "view", "data-set", dsn)
-	out, err := cmd.Output()
-	if err != nil {
-		debugLog.Printf("zowe view %s: failed after %s", dsn, elapsed(start))
-		return nil, zoweCommandError(dsn, err, exitStderr(err))
-	}
-	debugLog.Printf("zowe view %s: %d bytes in %s", dsn, len(out), elapsed(start))
-	return out, nil
-}
-
-func elapsed(start time.Time) time.Duration {
-	return time.Since(start).Round(time.Millisecond)
-}
-
-// maxConcurrentZoweFetches bounds the zowe processes a resolver runs at once;
-// each invocation starts a Node.js process and a z/OSMF request.
+// maxConcurrentZoweFetches bounds the data set reads a resolver has in
+// flight at once; each is one HTTP request on the sidecar's z/OSMF session.
 const maxConcurrentZoweFetches = 8
 
 type dsnCopyResolver struct {
@@ -127,68 +84,4 @@ func (r *dsnCopyResolver) probeSearchPaths(member string) copyResult {
 	}
 	debugLog.Printf("COPY %s: not found in any of %d libraries", member, len(r.searchPaths))
 	return copyResult{err: fmt.Errorf("COPY %s was not resolved through dsnSearchPath:\n  %s", member, strings.Join(failures, "\n  "))}
-}
-
-type temporaryDataFile struct {
-	*os.File
-	path string
-}
-
-func downloadZoweDataSet(dsn string) (*temporaryDataFile, error) {
-	temp, err := os.CreateTemp("", "cq-zowe-*.bin")
-	if err != nil {
-		return nil, fmt.Errorf("create temporary file for Zowe data set %q: %w", dsn, err)
-	}
-	path := temp.Name()
-	if err := temp.Close(); err != nil {
-		_ = os.Remove(path)
-		return nil, fmt.Errorf("prepare temporary file for Zowe data set %q: %w", dsn, err)
-	}
-	ok := false
-	defer func() {
-		if !ok {
-			_ = os.Remove(path)
-		}
-	}()
-
-	start := time.Now()
-	cmd := zoweCommand("zos-files", "download", "data-set", dsn,
-		"--binary", "--file", path, "--overwrite")
-	if _, err := cmd.Output(); err != nil {
-		debugLog.Printf("zowe download %s: failed after %s", dsn, elapsed(start))
-		return nil, zoweCommandError(dsn, err, exitStderr(err))
-	}
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("open downloaded Zowe data set %q: %w", dsn, err)
-	}
-	if fi, err := f.Stat(); err == nil {
-		debugLog.Printf("zowe download %s: %d bytes in %s", dsn, fi.Size(), elapsed(start))
-	}
-	ok = true
-	return &temporaryDataFile{File: f, path: path}, nil
-}
-
-func (f *temporaryDataFile) Close() error {
-	closeErr := f.File.Close()
-	removeErr := os.Remove(f.path)
-	if errors.Is(removeErr, os.ErrNotExist) {
-		removeErr = nil
-	}
-	return errors.Join(closeErr, removeErr)
-}
-
-func exitStderr(err error) string {
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
-		return string(exitErr.Stderr)
-	}
-	return ""
-}
-
-func zoweCommandError(dsn string, err error, stderr string) error {
-	if message := strings.TrimSpace(stderr); message != "" {
-		return fmt.Errorf("Zowe data set %q: %s", dsn, message)
-	}
-	return fmt.Errorf("Zowe data set %q: %w", dsn, err)
 }

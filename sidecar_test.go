@@ -6,13 +6,15 @@ import (
 	"encoding/json"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 )
+
+var testExecutable = os.Args[0]
 
 // fakeMember is one data set served by the fake sidecar. Text carries UTF-8
 // content, B64 binary content; Chunk splits the response into frames of that
@@ -26,8 +28,7 @@ type fakeMember struct {
 }
 
 // TestSidecarHelperProcess is not a test: re-invoked via -test.run it acts
-// as a fake sidecar speaking the protocol from fixtures in the environment,
-// the same trick TestZoweHelperProcess uses for the zowe CLI.
+// as a fake sidecar speaking the protocol from fixtures in the environment.
 func TestSidecarHelperProcess(t *testing.T) {
 	if os.Getenv("CQ_SIDECAR_HELPER") != "1" {
 		return
@@ -56,22 +57,33 @@ func fakeSidecarMain() {
 	}
 	emit(map[string]any{"ready": true})
 
+	var reqLog *os.File
+	if path := os.Getenv("CQ_SIDECAR_REQLOG"); path != "" {
+		reqLog, _ = os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	}
+
 	var mu sync.Mutex
 	canceled := make(map[uint64]chan struct{})
 
-	serve := func(id uint64, dsn string, stop chan struct{}) {
-		m, ok := members[dsn]
+	serve := func(req sidecarRequest, stop chan struct{}) {
+		m, ok := members[req.DSN]
 		if !ok || m.Error != "" {
 			msg := m.Error
 			if msg == "" {
-				msg = "data set not found: " + dsn
+				msg = "data set not found: " + req.DSN
 			}
-			emit(map[string]any{"id": id, "error": msg})
+			emit(map[string]any{"id": req.ID, "error": msg})
 			return
 		}
 		content := []byte(m.Text)
 		if m.B64 != "" {
 			content, _ = base64.StdEncoding.DecodeString(m.B64)
+		}
+		// A records hint bounds the transfer like a server-side record range.
+		if req.Op == "download" && req.Records > 0 && req.Reclen > 0 && !m.Slow {
+			if limit := req.Records * req.Reclen; limit < len(content) {
+				content = content[:limit]
+			}
 		}
 		chunk := len(content)
 		if m.Chunk > 0 {
@@ -85,10 +97,10 @@ func fakeSidecarMain() {
 					return
 				default:
 				}
-				emit(map[string]any{"id": id, "data": base64.StdEncoding.EncodeToString(content[i:end])})
+				emit(map[string]any{"id": req.ID, "data": base64.StdEncoding.EncodeToString(content[i:end])})
 			}
 			if !m.Slow {
-				emit(map[string]any{"id": id, "end": true})
+				emit(map[string]any{"id": req.ID, "end": true})
 				return
 			}
 			time.Sleep(2 * time.Millisecond)
@@ -103,6 +115,9 @@ func fakeSidecarMain() {
 			emit(map[string]any{"error": "bad request: " + sc.Text()})
 			continue
 		}
+		if reqLog != nil {
+			_, _ = reqLog.Write(append(append([]byte{}, sc.Bytes()...), '\n'))
+		}
 		if req.Op == "cancel" {
 			mu.Lock()
 			if stop, ok := canceled[req.ID]; ok {
@@ -116,7 +131,7 @@ func fakeSidecarMain() {
 		mu.Lock()
 		canceled[req.ID] = stop
 		mu.Unlock()
-		go serve(req.ID, req.DSN, stop)
+		go serve(req, stop)
 	}
 }
 
@@ -128,7 +143,46 @@ func fakeSidecarCommand(t *testing.T, members map[string]fakeMember) string {
 	}
 	t.Setenv("CQ_SIDECAR_HELPER", "1")
 	t.Setenv("CQ_SIDECAR_DATA", string(b))
+	t.Setenv("CQ_SIDECAR_REQLOG", filepath.Join(t.TempDir(), "requests.ndjson"))
 	return testExecutable + " -test.run=TestSidecarHelperProcess"
+}
+
+// fakeSidecarRequests returns the view/download requests the fake sidecar
+// received, sorted by DSN: probes run concurrently, so arrival order is not
+// deterministic.
+func fakeSidecarRequests(t *testing.T) []sidecarRequest {
+	t.Helper()
+	data, err := os.ReadFile(os.Getenv("CQ_SIDECAR_REQLOG"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		t.Fatal(err)
+	}
+	var reqs []sidecarRequest
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if line == "" {
+			continue
+		}
+		var req sidecarRequest
+		if err := json.Unmarshal([]byte(line), &req); err != nil {
+			t.Fatalf("bad request log line %q: %v", line, err)
+		}
+		if req.Op != "cancel" {
+			reqs = append(reqs, req)
+		}
+	}
+	sort.Slice(reqs, func(i, j int) bool { return reqs[i].DSN < reqs[j].DSN })
+	return reqs
+}
+
+func fakeSidecarDSNs(t *testing.T) []string {
+	t.Helper()
+	var dsns []string
+	for _, req := range fakeSidecarRequests(t) {
+		dsns = append(dsns, req.DSN)
+	}
+	return dsns
 }
 
 func startFakeSidecar(t *testing.T, members map[string]fakeMember) *zoweSidecar {
@@ -139,6 +193,49 @@ func startFakeSidecar(t *testing.T, members map[string]fakeMember) *zoweSidecar 
 	}
 	t.Cleanup(func() { _ = s.Close() })
 	return s
+}
+
+// configureFakeSidecar points cq's user config at a fake sidecar serving the
+// given members, so run() exercises the real transport wiring.
+func configureFakeSidecar(t *testing.T, members map[string]fakeMember, searchPaths ...string) {
+	t.Helper()
+	configRoot := t.TempDir()
+	stubUserConfigDir(t, configRoot, nil)
+	configDir := filepath.Join(configRoot, "cq")
+	if err := os.Mkdir(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	command := fakeSidecarCommand(t, members)
+	configJSON, err := json.Marshal(config{DSNSearchPath: searchPaths, Sidecar: command})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "config.json"), configJSON, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// captureStdout redirects os.Stdout for the test; the returned func stops
+// capturing and returns everything written.
+func captureStdout(t *testing.T) func() string {
+	t.Helper()
+	out, err := os.CreateTemp(t.TempDir(), "cq-output-*.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := os.Stdout
+	os.Stdout = out
+	return func() string {
+		os.Stdout = original
+		if err := out.Close(); err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(out.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
 }
 
 func TestSidecarFetchesCopybookAcrossChunks(t *testing.T) {
@@ -167,7 +264,7 @@ func TestSidecarStreamsBinaryDataSet(t *testing.T) {
 		"HQ.CUSTOMER.DATA": {B64: base64.StdEncoding.EncodeToString(binary), Chunk: 3},
 	})
 
-	rc, err := s.openDataSet("HQ.CUSTOMER.DATA")
+	rc, err := s.openDataSet("HQ.CUSTOMER.DATA", downloadHint{})
 	if err != nil {
 		t.Fatalf("openDataSet() error = %v", err)
 	}
@@ -183,21 +280,6 @@ func TestSidecarStreamsBinaryDataSet(t *testing.T) {
 	}
 }
 
-func TestSidecarResolverProbesShareOneProcess(t *testing.T) {
-	s := startFakeSidecar(t, map[string]fakeMember{
-		"HQL.COB.SRC(ADDRESS)": {Text: "05 ADDRESS PIC X(10).\n"},
-	})
-	resolver := newDSNCopyResolver([]string{"HQL.CPY.SRC", "HQL.COB.SRC"}, s)
-
-	src, err := resolver.Resolve("ADDRESS")
-	if err != nil {
-		t.Fatalf("Resolve() error = %v", err)
-	}
-	if src != "05 ADDRESS PIC X(10).\n" {
-		t.Fatalf("Resolve() = %q, want the member from HQL.COB.SRC", src)
-	}
-}
-
 func TestSidecarStartupErrorSurfaces(t *testing.T) {
 	t.Setenv("CQ_SIDECAR_HELPER", "1")
 	t.Setenv("CQ_SIDECAR_FAIL", "no default zosmf profile found")
@@ -208,13 +290,24 @@ func TestSidecarStartupErrorSurfaces(t *testing.T) {
 	}
 }
 
+func TestLazySidecarDefaultCommandErrorExplainsSetup(t *testing.T) {
+	t.Setenv("PATH", t.TempDir()) // no cq-zowe-sidecar anywhere
+
+	l := newLazySidecar("")
+	t.Cleanup(func() { _ = l.Close() })
+	_, err := l.fetchCopybook("HQ.COPYLIB(CUSTOMER)")
+	if err == nil || !strings.Contains(err.Error(), "npm install") {
+		t.Fatalf("fetchCopybook() error = %v, want setup guidance", err)
+	}
+}
+
 func TestSidecarStreamCloseCancelsAndKeepsMuxUsable(t *testing.T) {
 	s := startFakeSidecar(t, map[string]fakeMember{
 		"HQ.ENDLESS.DATA":  {Text: strings.Repeat("X", 64), Chunk: 8, Slow: true},
 		"HQ.COPYLIB(TINY)": {Text: "05 A PIC X.\n"},
 	})
 
-	rc, err := s.openDataSet("HQ.ENDLESS.DATA")
+	rc, err := s.openDataSet("HQ.ENDLESS.DATA", downloadHint{})
 	if err != nil {
 		t.Fatalf("openDataSet() error = %v", err)
 	}
@@ -236,58 +329,86 @@ func TestSidecarStreamCloseCancelsAndKeepsMuxUsable(t *testing.T) {
 }
 
 func TestRunWithSidecarStreamsEndToEnd(t *testing.T) {
-	configRoot := t.TempDir()
-	stubUserConfigDir(t, configRoot, nil)
-	configDir := filepath.Join(configRoot, "cq")
-	if err := os.Mkdir(configDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	configPath := filepath.Join(configDir, "config.json")
-	command := fakeSidecarCommand(t, map[string]fakeMember{
+	configureFakeSidecar(t, map[string]fakeMember{
 		"HQ.COPYLIB(CUSTOMER)": {Text: "01 CUSTOMER.\n   COPY DETAILS.\n"},
 		"HQL.CPY.SRC(DETAILS)": {Text: "05 NAME PIC X(3).\n05 FLAG PIC X(1).\n"},
 		"HQ.CUSTOMER.DATA":     {B64: base64.StdEncoding.EncodeToString([]byte("BOBY")), Chunk: 2},
-	})
-	configJSON, err := json.Marshal(config{DSNSearchPath: []string{"HQL.CPY.SRC"}, Sidecar: command})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(configPath, configJSON, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	}, "HQL.CPY.SRC")
+	stdout := captureStdout(t)
 
-	originalCommand := zoweCommand
-	zoweCommand = func(args ...string) *exec.Cmd {
-		t.Errorf("zowe CLI invoked with %q despite configured sidecar", args)
-		return zoweHelperCommand("", "unexpected CLI call", 8)
-	}
-	t.Cleanup(func() { zoweCommand = originalCommand })
-
-	out, err := os.CreateTemp(t.TempDir(), "cq-output-*.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = out.Close() })
-	originalStdout := os.Stdout
-	os.Stdout = out
-	t.Cleanup(func() { os.Stdout = originalStdout })
-
-	err = runWithArgs(t,
+	err := runWithArgs(t,
 		"--copybook-dsn", "HQ.COPYLIB(CUSTOMER)",
 		"--data-dsn", "HQ.CUSTOMER.DATA",
 		"-codepage", "ascii",
 	)
+	got := stdout()
 	if err != nil {
 		t.Fatalf("run() error = %v", err)
 	}
-	if err := out.Close(); err != nil {
-		t.Fatal(err)
-	}
-	got, err := os.ReadFile(out.Name())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(got), `"NAME":"BOB"`) || !strings.Contains(string(got), `"FLAG":"Y"`) {
+	if !strings.Contains(got, `"NAME":"BOB"`) || !strings.Contains(got, `"FLAG":"Y"`) {
 		t.Fatalf("run() output = %s, want record decoded through the sidecar", got)
+	}
+}
+
+func TestRunMaxSendsRecordHint(t *testing.T) {
+	configureFakeSidecar(t, map[string]fakeMember{
+		"HQ.COPYLIB(CUSTOMER)": {Text: "01 CUSTOMER.\n   05 NAME PIC X(3).\n   05 FLAG PIC X(1).\n"},
+		"HQ.CUSTOMER.DATA":     {B64: base64.StdEncoding.EncodeToString([]byte("BOBYSUEN"))},
+	})
+	stdout := captureStdout(t)
+
+	err := runWithArgs(t,
+		"--copybook-dsn", "HQ.COPYLIB(CUSTOMER)",
+		"--data-dsn", "HQ.CUSTOMER.DATA",
+		"-codepage", "ascii",
+		"-max", "1",
+	)
+	got := stdout()
+	if err != nil {
+		t.Fatalf("run() error = %v", err)
+	}
+	if !strings.Contains(got, `"NAME":"BOB"`) || strings.Contains(got, `"NAME":"SUE"`) {
+		t.Fatalf("run() output = %s, want only the first record", got)
+	}
+	for _, req := range fakeSidecarRequests(t) {
+		if req.Op == "download" {
+			if req.Records != 1 || req.Reclen != 4 {
+				t.Fatalf("download request = %+v, want records=1 reclen=4", req)
+			}
+			return
+		}
+	}
+	t.Fatal("no download request reached the sidecar")
+}
+
+func TestRunWhereKeepsFullDownload(t *testing.T) {
+	copybook := "01 CUSTOMER.\n" +
+		"   05 FLAG PIC X(1).\n" +
+		"      88 FLAG-Y VALUE \"Y\".\n" +
+		"   05 NAME PIC X(3).\n"
+	configureFakeSidecar(t, map[string]fakeMember{
+		"HQ.COPYLIB(CUSTOMER)": {Text: copybook},
+		"HQ.CUSTOMER.DATA":     {B64: base64.StdEncoding.EncodeToString([]byte("NBOBYSUE"))},
+	})
+	stdout := captureStdout(t)
+
+	err := runWithArgs(t,
+		"--copybook-dsn", "HQ.COPYLIB(CUSTOMER)",
+		"--data-dsn", "HQ.CUSTOMER.DATA",
+		"-codepage", "ascii",
+		"-max", "1",
+		"-where", "FLAG-Y",
+	)
+	got := stdout()
+	if err != nil {
+		t.Fatalf("run() error = %v", err)
+	}
+	if !strings.Contains(got, `"NAME":"SUE"`) {
+		t.Fatalf("run() output = %s, want the matching record", got)
+	}
+	for _, req := range fakeSidecarRequests(t) {
+		if req.Op == "download" && req.Records != 0 {
+			t.Fatalf("download request = %+v, want no record bound with -where", req)
+		}
 	}
 }
