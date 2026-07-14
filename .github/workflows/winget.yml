@@ -1,0 +1,100 @@
+name: Publish release to WinGet
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version, without a leading v
+        required: true
+        type: string
+      installer_url:
+        description: Optional direct installer URL; otherwise a matching release asset is selected
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: winget-${{ github.event.release.tag_name || inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Update WinGet manifest
+    runs-on: windows-latest
+    environment: winget
+
+    steps:
+      - name: Resolve version and installer URL
+        id: release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ASSET_REGEX: ${{ vars.WINGET_ASSET_REGEX }}
+          MANUAL_VERSION: ${{ inputs.version }}
+          MANUAL_INSTALLER_URL: ${{ inputs.installer_url }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          if ('${{ github.event_name }}' -eq 'release') {
+            $version = '${{ github.event.release.tag_name }}' -replace '^v', ''
+            $installerUrl = '${{ github.event.release.assets_url }}'
+
+            $pattern = if ($env:ASSET_REGEX) {
+              $env:ASSET_REGEX
+            } else {
+              '(?i)(windows|win).*(amd64|x86_64|x64).*(\.zip|\.msi|\.exe)$'
+            }
+
+            $assets = gh api '${{ github.event.release.assets_url }}' | ConvertFrom-Json
+            $asset = $assets | Where-Object { $_.name -match $pattern } | Select-Object -First 1
+            if (-not $asset) {
+              throw "No release asset matched WINGET_ASSET_REGEX: $pattern"
+            }
+            $installerUrl = $asset.browser_download_url
+          } else {
+            $version = $env:MANUAL_VERSION -replace '^v', ''
+            $installerUrl = $env:MANUAL_INSTALLER_URL
+            if (-not $installerUrl) {
+              throw 'installer_url is required for workflow_dispatch.'
+            }
+          }
+
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "installer_url=$installerUrl" >> $env:GITHUB_OUTPUT
+          Write-Host "Version: $version"
+          Write-Host "Installer: $installerUrl"
+
+      - name: Validate configuration
+        shell: pwsh
+        env:
+          PACKAGE_ID: ${{ vars.WINGET_PACKAGE_ID }}
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: |
+          if (-not $env:PACKAGE_ID) {
+            throw 'Repository variable WINGET_PACKAGE_ID is not configured.'
+          }
+          if (-not $env:WINGET_TOKEN) {
+            throw 'Environment secret WINGET_TOKEN is not configured.'
+          }
+
+      - name: Download WingetCreate
+        shell: pwsh
+        run: Invoke-WebRequest https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
+
+      - name: Update and submit WinGet manifest
+        shell: pwsh
+        env:
+          PACKAGE_ID: ${{ vars.WINGET_PACKAGE_ID }}
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+          VERSION: ${{ steps.release.outputs.version }}
+          INSTALLER_URL: ${{ steps.release.outputs.installer_url }}
+        run: |
+          ./wingetcreate.exe update $env:PACKAGE_ID `
+            --urls $env:INSTALLER_URL `
+            --version $env:VERSION `
+            --token $env:WINGET_TOKEN `
+            --submit
