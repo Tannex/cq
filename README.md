@@ -141,6 +141,12 @@ Zowe authentication, profiles, certificates, and connection settings continue
 to come from the user's normal Zowe configuration; binary mode takes precedence
 over a profile-level encoding on this download path.
 
+As a proof of concept, `--sidecar` (or `"Sidecar"` in the config file)
+replaces the per-call CLI with one long-lived Node process that resolves the
+same Zowe configuration through the official Zowe SDK and streams data sets
+over z/OSMF REST — no per-call Node startup, no temporary download file. See
+[sidecar/README.md](sidecar/README.md).
+
 ### Nested copybooks
 
 When a copybook contains `COPY MEMBER.`, cq resolves the member recursively

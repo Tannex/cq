@@ -3,12 +3,33 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
 	"sync"
 	"time"
 )
+
+// zoweTransport is the seam between cq and the mainframe. The default
+// implementation shells out to the zowe CLI per call; the sidecar
+// implementation (sidecar.go) streams everything through one Zowe SDK
+// process. Implementations must be safe for concurrent use.
+type zoweTransport interface {
+	fetchCopybook(dsn string) ([]byte, error)
+	openDataSet(dsn string) (io.ReadCloser, error)
+}
+
+// zoweCLI fetches data sets by running the installed zowe CLI once per call.
+type zoweCLI struct{}
+
+func (zoweCLI) fetchCopybook(dsn string) ([]byte, error) {
+	return fetchZoweCopybook(dsn)
+}
+
+func (zoweCLI) openDataSet(dsn string) (io.ReadCloser, error) {
+	return downloadZoweDataSet(dsn)
+}
 
 var zoweCommand = func(args ...string) *exec.Cmd {
 	return exec.Command("zowe", args...)
@@ -36,6 +57,7 @@ const maxConcurrentZoweFetches = 8
 
 type dsnCopyResolver struct {
 	searchPaths []string
+	transport   zoweTransport
 	slots       chan struct{}
 
 	mu    sync.Mutex
@@ -47,9 +69,10 @@ type copyResult struct {
 	err  error
 }
 
-func newDSNCopyResolver(searchPaths []string) *dsnCopyResolver {
+func newDSNCopyResolver(searchPaths []string, transport zoweTransport) *dsnCopyResolver {
 	return &dsnCopyResolver{
 		searchPaths: searchPaths,
+		transport:   transport,
 		slots:       make(chan struct{}, maxConcurrentZoweFetches),
 		cache:       make(map[string]copyResult),
 	}
@@ -88,7 +111,7 @@ func (r *dsnCopyResolver) probeSearchPaths(member string) copyResult {
 			defer wg.Done()
 			r.slots <- struct{}{}
 			defer func() { <-r.slots }()
-			src, err := fetchZoweCopybook(fmt.Sprintf("%s(%s)", library, member))
+			src, err := r.transport.fetchCopybook(fmt.Sprintf("%s(%s)", library, member))
 			results[i] = copyResult{text: string(src), err: err}
 		}()
 	}

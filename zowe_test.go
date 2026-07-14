@@ -203,7 +203,7 @@ func TestDSNCopyResolverUsesSearchOrderAndCache(t *testing.T) {
 			return zoweHelperCommand("", "unexpected DSN", 8)
 		}
 	})
-	resolver := newDSNCopyResolver([]string{"HQL.CPY.SRC", "HQL.COB.SRC"})
+	resolver := newDSNCopyResolver([]string{"HQL.CPY.SRC", "HQL.COB.SRC"}, zoweCLI{})
 
 	for range 2 {
 		src, err := resolver.Resolve("ADDRESS")
@@ -232,7 +232,7 @@ func TestDSNCopyResolverPrefersEarlierLibrary(t *testing.T) {
 			return zoweHelperCommand("", "unexpected DSN", 8)
 		}
 	})
-	resolver := newDSNCopyResolver([]string{"HQL.CPY.SRC", "HQL.COB.SRC"})
+	resolver := newDSNCopyResolver([]string{"HQL.CPY.SRC", "HQL.COB.SRC"}, zoweCLI{})
 
 	src, err := resolver.Resolve("ADDRESS")
 	if err != nil {
@@ -258,7 +258,7 @@ func TestDSNCopyResolverCachesFailuresAndListsThemInSearchOrder(t *testing.T) {
 			return zoweHelperCommand("", "unexpected DSN", 8)
 		}
 	})
-	resolver := newDSNCopyResolver([]string{"HQL.CPY.SRC", "HQL.COB.SRC"})
+	resolver := newDSNCopyResolver([]string{"HQL.CPY.SRC", "HQL.COB.SRC"}, zoweCLI{})
 
 	for range 2 {
 		_, err := resolver.Resolve("ADDRESS")
@@ -277,7 +277,7 @@ func TestDSNCopyResolverCachesFailuresAndListsThemInSearchOrder(t *testing.T) {
 }
 
 func TestDSNCopyResolverRequiresSearchPath(t *testing.T) {
-	resolver := newDSNCopyResolver(nil)
+	resolver := newDSNCopyResolver(nil, zoweCLI{})
 
 	_, err := resolver.Resolve("ADDRESS")
 	if err == nil || !strings.Contains(err.Error(), "DSNSearchPath") {

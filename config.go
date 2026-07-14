@@ -13,6 +13,10 @@ var userConfigDir = os.UserConfigDir
 
 type config struct {
 	DSNSearchPath []string `json:"DSNSearchPath"`
+	// Sidecar, when set, is the command cq runs to start a Zowe SDK sidecar
+	// for DSN access instead of calling the zowe CLI per data set. The
+	// --sidecar flag overrides it.
+	Sidecar string `json:"Sidecar,omitempty"`
 }
 
 func loadConfig() (config, error) {
