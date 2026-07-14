@@ -94,6 +94,34 @@ PROCEDURE DIVISION.
 	}
 }
 
+func TestParseWithCopiesRejectsProgramSourceMember(t *testing.T) {
+	resolve := func(name string) (string, error) {
+		return "IDENTIFICATION DIVISION.\nPROCEDURE DIVISION.\n   GOBACK.\n", nil
+	}
+
+	_, err := ParseWithCopies("01 RECORD.\n COPY PROG.\n", FormatFree, resolve)
+	if err == nil || !strings.Contains(err.Error(), "Not a copybook") || !strings.Contains(err.Error(), "COPY PROG") {
+		t.Fatalf("ParseWithCopies() error = %v, want Not a copybook for member PROG", err)
+	}
+}
+
+func TestParseWithCopiesKeepsExplicitFormatForMembers(t *testing.T) {
+	resolve := func(name string) (string, error) {
+		// Alphanumeric sequence area that free-format detection would
+		// misread as tokens; only fixed-format lexing skips it.
+		return "CUST01     05 VALUE-FIELD PIC X(2).\n", nil
+	}
+	src := "000100 01 RECORD.\n000200     COPY FIELD.\n"
+
+	items, err := ParseWithCopies(src, FormatFixed, resolve)
+	if err != nil {
+		t.Fatalf("ParseWithCopies() error = %v", err)
+	}
+	if got := items[0].Children[0].Name; got != "VALUE-FIELD" {
+		t.Fatalf("expanded child = %q, want VALUE-FIELD", got)
+	}
+}
+
 func TestParseWithCopiesIgnoresCommentedProcedureDivision(t *testing.T) {
 	tests := []struct {
 		name   string

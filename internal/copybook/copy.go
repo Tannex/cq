@@ -17,14 +17,14 @@ func ParseWithCopies(src string, f Format, resolve CopyResolver) ([]*Item, error
 	if err := rejectProgramSource(toks); err != nil {
 		return nil, err
 	}
-	toks, err := expandCopies(toks, resolve, nil)
+	toks, err := expandCopies(toks, f, resolve, nil)
 	if err != nil {
 		return nil, err
 	}
 	return parseTokens(toks)
 }
 
-func expandCopies(toks []token, resolve CopyResolver, stack []string) ([]token, error) {
+func expandCopies(toks []token, f Format, resolve CopyResolver, stack []string) ([]token, error) {
 	var out []token
 	statementStart := true
 	for i := 0; i < len(toks); {
@@ -61,7 +61,12 @@ func expandCopies(toks []token, resolve CopyResolver, stack []string) ([]token, 
 			chain := append(append([]string{}, stack...), member)
 			return nil, fmt.Errorf("resolve COPY %s: %w", strings.Join(chain, " -> "), err)
 		}
-		expanded, err := expandCopies(lex(src, FormatAuto), resolve, append(stack, member))
+		memberToks := lex(src, f)
+		if err := rejectProgramSource(memberToks); err != nil {
+			chain := append(append([]string{}, stack...), member)
+			return nil, fmt.Errorf("COPY %s: %w", strings.Join(chain, " -> "), err)
+		}
+		expanded, err := expandCopies(memberToks, f, resolve, append(stack, member))
 		if err != nil {
 			return nil, err
 		}

@@ -23,14 +23,30 @@ func fetchZoweCopybook(dsn string) ([]byte, error) {
 
 type dsnCopyResolver struct {
 	searchPaths []string
+	loaded      bool
 	cache       map[string]string
 }
 
 func newDSNCopyResolver(searchPaths []string) *dsnCopyResolver {
-	return &dsnCopyResolver{searchPaths: searchPaths, cache: make(map[string]string)}
+	return &dsnCopyResolver{searchPaths: searchPaths, loaded: true, cache: make(map[string]string)}
+}
+
+// newConfigDSNCopyResolver defers reading the user config until the first
+// COPY statement needs resolving, so copybooks without COPY statements
+// never depend on the config file's presence or validity.
+func newConfigDSNCopyResolver() *dsnCopyResolver {
+	return &dsnCopyResolver{cache: make(map[string]string)}
 }
 
 func (r *dsnCopyResolver) Resolve(member string) (string, error) {
+	if !r.loaded {
+		cfg, err := loadConfig()
+		if err != nil {
+			return "", err
+		}
+		r.searchPaths = cfg.DSNSearchPath
+		r.loaded = true
+	}
 	member = strings.ToUpper(strings.TrimSpace(member))
 	if src, ok := r.cache[member]; ok {
 		return src, nil

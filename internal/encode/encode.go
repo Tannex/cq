@@ -86,20 +86,25 @@ func ZonedSeparate(n json.Number, digits, scale int, signed, leading bool, cm *d
 	return out, nil
 }
 
-// Packed encodes n as COMP-3. The result uses canonical C/D sign nibbles.
+// Packed encodes n as COMP-3. Signed fields use canonical C/D sign
+// nibbles; unsigned fields use the F nibble COBOL stores for PIC 9 items.
+// The full storage range is accepted: an even PICTURE digit count leaves a
+// pad nibble that can carry one more digit, and decoding emits such
+// values, so encode accepts them too.
 func Packed(n json.Number, digits, scale int, signed bool) ([]byte, error) {
-	negative, decimal, err := scaledDecimal(n, digits, scale, signed)
+	width := digits | 1 // storage holds an odd number of digit nibbles
+	negative, decimal, err := scaledDecimal(n, width, scale, signed)
 	if err != nil {
 		return nil, fmt.Errorf("encode: Packed: %w", err)
 	}
-	sign := byte(0x0C)
+	sign := byte(0x0F)
+	if signed {
+		sign = 0x0C
+	}
 	if negative {
 		sign = 0x0D
 	}
-	nibbles := make([]byte, 0, digits+2)
-	if digits%2 == 0 {
-		nibbles = append(nibbles, 0)
-	}
+	nibbles := make([]byte, 0, width+1)
 	for i := range decimal {
 		nibbles = append(nibbles, decimal[i]-'0')
 	}
@@ -112,12 +117,16 @@ func Packed(n json.Number, digits, scale int, signed bool) ([]byte, error) {
 }
 
 // Binary encodes n as a 2, 4, or 8 byte big-endian COMP integer, applying
-// scale as an implied decimal point and enforcing the PICTURE digit count.
-func Binary(n json.Number, length, digits, scale int, signed bool) ([]byte, error) {
+// scale as an implied decimal point. The full storage range is accepted —
+// not just the PICTURE digit count — because stored COMP values routinely
+// exceed the picture and decoding emits them as-is.
+func Binary(n json.Number, length, scale int, signed bool) ([]byte, error) {
 	if length != 2 && length != 4 && length != 8 {
 		return nil, fmt.Errorf("encode: Binary: length must be 2, 4, or 8 bytes, got %d", length)
 	}
-	negative, decimal, err := scaledDecimal(n, digits, scale, signed)
+	// 20 digits hold the largest 8-byte value; the range check below
+	// enforces the storage bounds exactly.
+	negative, decimal, err := scaledDecimal(n, 20, scale, signed)
 	if err != nil {
 		return nil, fmt.Errorf("encode: Binary: %w", err)
 	}
@@ -228,7 +237,10 @@ func scaledDecimal(n json.Number, width, scale int, signed bool) (bool, string, 
 			i++
 		}
 		start := i
-		limit := width + len(fracPart) + 1
+		// Any exponent beyond this limit fails the same way the exact
+		// exponent would: negative means all coefficient digits land past
+		// the scale, positive means they cannot fit in width digits.
+		limit := width + scale + len(intPart) + len(fracPart) + 1
 		for i < len(s) && s[i] >= '0' && s[i] <= '9' {
 			if exponent <= limit {
 				exponent = exponent*10 + int(s[i]-'0')

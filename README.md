@@ -87,10 +87,16 @@ $ cq -c CUSTOMER.cpy -d customer.bin \
 
 Encoding is strict: every non-FILLER field is required, unknown and duplicate
 keys are rejected, arrays must match their `OCCURS` count, and values must fit
-their picture without truncation, overflow, or decimal rounding. For ODO
-records, the `DEPENDING ON` value must equal the JSON array length. Omitted
-FILLER fields are initialized to spaces or zero, and `-lrecl` padding uses the
-selected codepage's space byte.
+their field without truncation, overflow, or decimal rounding. DISPLAY values
+must fit the PICTURE digit count; COMP/BINARY and COMP-3 values may use the
+full range of their physical storage (an even-digit COMP-3 picture carries one
+extra digit in its pad nibble), matching what decoding can emit.
+For ODO records, the `DEPENDING ON` value must equal the JSON array length. FILLER
+fields may be omitted (they are initialized to spaces or zero) or supplied the
+way `-fillers` decoding emits them: repeated `FILLER` keys map to a group's
+FILLER fields in copybook order and must cover all of them, so
+`cq -fillers ... -d data.bin | cq ... -j -` preserves FILLER content. `-lrecl`
+padding uses the selected codepage's space byte.
 
 For `REDEFINES`, cq validates every JSON view but writes only the original
 storage definition. A redefining item longer than its primary item is rejected

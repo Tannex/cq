@@ -9,6 +9,15 @@ import (
 
 type jsonObject map[string]any
 
+// fillerName is the name the copybook parser gives FILLER (and unnamed)
+// items and the only key -fillers decoding repeats within one object.
+const fillerName = "FILLER"
+
+// fillerValues collects the values of repeated FILLER keys in document
+// order. It is a distinct type so one FILLER holding a JSON array (an
+// OCCURS filler) is not confused with several FILLER keys.
+type fillerValues []any
+
 // EncodeJSON reads one object or an array of objects and writes binary records.
 func EncodeJSON(w io.Writer, e *Encoder, r io.Reader) error {
 	dec := json.NewDecoder(r)
@@ -91,14 +100,19 @@ func readObject(dec *json.Decoder) (jsonObject, error) {
 		if !ok {
 			return nil, fmt.Errorf("object key is not a string")
 		}
-		if _, exists := obj[name]; exists {
+		if _, exists := obj[name]; exists && name != fillerName {
 			return nil, fmt.Errorf("duplicate JSON field %q", name)
 		}
 		value, err := readValue(dec)
 		if err != nil {
 			return nil, fmt.Errorf("field %s: %w", name, err)
 		}
-		obj[name] = value
+		if name == fillerName {
+			values, _ := obj[name].(fillerValues)
+			obj[name] = append(values, value)
+		} else {
+			obj[name] = value
+		}
 	}
 	if tok, err := dec.Token(); err != nil {
 		return nil, err

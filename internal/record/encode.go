@@ -141,7 +141,7 @@ func (e *Encoder) Encode(obj jsonObject) ([]byte, error) {
 		return nil, err
 	}
 	out := pad
-	if err := e.fillDefaults(e.Rec.Field, out, 0, count); err != nil {
+	if err := e.fillDefaults(e.Rec.Field, out, 0, count, false); err != nil {
 		return nil, err
 	}
 	if err := e.encodeGroup(e.Rec.Field, obj, out, 0, e.Rec.Name, count, true); err != nil {
@@ -166,9 +166,10 @@ func (e *Encoder) odoCount(obj jsonObject) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("%s: DEPENDING ON value %s is not an integer", path, num)
 	}
-	min := e.odo.OccursMin
-	if n < min || n > e.odo.Occurs {
-		return 0, fmt.Errorf("%s: count %d outside %d..%d", path, n, min, e.odo.Occurs)
+	// Accept the same 0..Occurs range as the decoder so decoded records
+	// can always be regenerated, even when the data sits below OccursMin.
+	if n < 0 || n > e.odo.Occurs {
+		return 0, fmt.Errorf("%s: count %d outside 0..%d", path, n, e.odo.Occurs)
 	}
 	return n, nil
 }
@@ -197,10 +198,14 @@ func findFieldValue(g *layout.Field, obj jsonObject, target *layout.Field, path 
 	return nil, path + "." + target.Name, false
 }
 
-func (e *Encoder) fillDefaults(f *layout.Field, out []byte, base, odoCount int) error {
+// fillDefaults writes default bytes into FILLER storage (including fields
+// nested under FILLER groups). Every other scalar is required JSON input
+// and is written by encodeGroup.
+func (e *Encoder) fillDefaults(f *layout.Field, out []byte, base, odoCount int, underFiller bool) error {
 	if f.Redefines != "" {
 		return nil
 	}
+	filler := underFiller || f.Filler
 	n := 1
 	if f.Occurs > 0 {
 		n = f.Occurs
@@ -212,10 +217,13 @@ func (e *Encoder) fillDefaults(f *layout.Field, out []byte, base, odoCount int) 
 		at := base + i*f.Length
 		if f.Kind == layout.KindGroup {
 			for _, child := range f.Children {
-				if err := e.fillDefaults(child, out, at+(child.Offset-f.Offset), odoCount); err != nil {
+				if err := e.fillDefaults(child, out, at+(child.Offset-f.Offset), odoCount, filler); err != nil {
 					return err
 				}
 			}
+			continue
+		}
+		if !filler {
 			continue
 		}
 		b, err := e.encodeScalar(f, zeroValue(f))
@@ -239,25 +247,43 @@ func zeroValue(f *layout.Field) any {
 
 func (e *Encoder) encodeGroup(g *layout.Field, obj jsonObject, out []byte, base int, path string, odoCount int, write bool) error {
 	known := make(map[string]bool)
+	fillerCount := 0
 	for _, f := range g.Children {
-		if !f.Filler {
+		if f.Filler {
+			fillerCount++
+		} else {
 			known[f.Name] = true
 		}
 	}
 	for name := range obj {
-		if !known[name] {
+		if !known[name] && !(name == fillerName && fillerCount > 0) {
 			return fmt.Errorf("%s: unknown field %q", path, name)
 		}
 	}
+	// FILLER values are optional as a whole: absent fillers keep their
+	// defaults, present ones (as -fillers decoding emits them) map to the
+	// group's FILLER fields in copybook order and must cover all of them.
+	fillers, _ := obj[fillerName].(fillerValues)
+	if len(fillers) > 0 && len(fillers) != fillerCount {
+		return fmt.Errorf("%s: got %d FILLER values, want %d", path, len(fillers), fillerCount)
+	}
+	fillerIndex := 0
 	for _, f := range g.Children {
+		var v any
 		if f.Filler {
-			continue
+			if len(fillers) == 0 {
+				continue
+			}
+			v = fillers[fillerIndex]
+			fillerIndex++
+		} else {
+			value, ok := obj[f.Name]
+			if !ok {
+				return fmt.Errorf("%s.%s: missing field", path, f.Name)
+			}
+			v = value
 		}
-		v, ok := obj[f.Name]
 		fieldPath := path + "." + f.Name
-		if !ok {
-			return fmt.Errorf("%s: missing field", fieldPath)
-		}
 		fieldWrite := write && f.Redefines == ""
 		if err := e.encodeField(f, v, out, base+(f.Offset-g.Offset), fieldPath, odoCount, fieldWrite); err != nil {
 			return err
@@ -341,7 +367,7 @@ func (e *Encoder) encodeScalar(f *layout.Field, value any) ([]byte, error) {
 		if !ok {
 			return nil, fmt.Errorf("want JSON number, got %s", jsonType(value))
 		}
-		return cobolencode.Binary(n, f.Length, f.Digits, f.Scale, f.Signed)
+		return cobolencode.Binary(n, f.Length, f.Scale, f.Signed)
 	case layout.KindFloat:
 		n, ok := value.(json.Number)
 		if !ok {

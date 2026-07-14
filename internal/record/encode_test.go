@@ -100,6 +100,101 @@ func TestEncodeDefaultsFillerAndLrecl(t *testing.T) {
 	}
 }
 
+func TestEncodeJSONPreservesFillers(t *testing.T) {
+	const book = `01 R.
+  05 A PIC X(2).
+  05 FILLER PIC X(2).
+  05 N PIC 9(2).
+  05 FILLER PIC 9(2).
+`
+	record := append(ebc(t, "AB", 2), ebc(t, "XY", 2)...)
+	record = append(record, zonedUnsigned("12")...)
+	record = append(record, zonedUnsigned("34")...)
+
+	d := mustDecoder(t, book)
+	d.IncludeFillers = true
+	decoded, err := d.Decode(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := mustEncoder(t, book)
+	var got bytes.Buffer
+	if err := EncodeJSON(&got, e, bytes.NewReader(decoded)); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got.Bytes(), record) {
+		t.Fatalf("re-encoded = % X, want original % X", got.Bytes(), record)
+	}
+}
+
+func TestEncodeBinaryAcceptsFullStorageRange(t *testing.T) {
+	// Stored COMP values routinely exceed the PICTURE digit count; what
+	// decodes must re-encode.
+	const book = `01 R.
+  05 N PIC S9(4) COMP.
+`
+	record := []byte{0x7F, 0xFF}
+	d := mustDecoder(t, book)
+	decoded, err := d.Decode(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := mustEncoder(t, book)
+	var got bytes.Buffer
+	if err := EncodeJSON(&got, e, bytes.NewReader(decoded)); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got.Bytes(), record) {
+		t.Fatalf("re-encoded = % X, want original % X", got.Bytes(), record)
+	}
+}
+
+func TestEncodePackedAcceptsPadNibbleDigit(t *testing.T) {
+	// An even-digit COMP-3 picture leaves a pad nibble that real data can
+	// use; what decodes must re-encode.
+	const book = `01 R.
+  05 N PIC 9(4) COMP-3.
+`
+	record := []byte{0x12, 0x34, 0x5F}
+	d := mustDecoder(t, book)
+	decoded, err := d.Decode(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := mustEncoder(t, book)
+	var got bytes.Buffer
+	if err := EncodeJSON(&got, e, bytes.NewReader(decoded)); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got.Bytes(), record) {
+		t.Fatalf("re-encoded = % X, want original % X", got.Bytes(), record)
+	}
+}
+
+func TestEncodeJSONRejectsPartialFillers(t *testing.T) {
+	e := mustEncoder(t, `01 R.
+  05 A PIC X(2).
+  05 FILLER PIC X(2).
+  05 FILLER PIC 9(2).
+`)
+	var out bytes.Buffer
+	err := EncodeJSON(&out, e, strings.NewReader(`{"A":"AB","FILLER":"XY"}`))
+	if err == nil || !strings.Contains(err.Error(), "got 1 FILLER values, want 2") {
+		t.Fatalf("error = %v, want FILLER count mismatch", err)
+	}
+}
+
+func TestEncodeJSONRejectsFillerWithoutFillerFields(t *testing.T) {
+	e := mustEncoder(t, `01 R.
+  05 A PIC X(2).
+`)
+	var out bytes.Buffer
+	err := EncodeJSON(&out, e, strings.NewReader(`{"A":"AB","FILLER":"XY"}`))
+	if err == nil || !strings.Contains(err.Error(), `unknown field "FILLER"`) {
+		t.Fatalf("error = %v, want unknown FILLER", err)
+	}
+}
+
 func TestEncodeUsesPrimaryRedefinesView(t *testing.T) {
 	e := mustEncoder(t, `01 R.
   05 BASE PIC X(2).

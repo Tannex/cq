@@ -60,6 +60,7 @@ func TestZoned(t *testing.T) {
 		{"negative signed", "-12.30", 4, 2, true, []byte{0xF1, 0xF2, 0xF3, 0xD0}},
 		{"unsigned", "42", 3, 0, false, []byte{0xF0, 0xF4, 0xF2}},
 		{"exact exponent", "123e-1", 4, 2, true, []byte{0xF1, 0xF2, 0xF3, 0xC0}},
+		{"long exponent pair", "1000000000000e-12", 4, 0, false, []byte{0xF0, 0xF0, 0xF0, 0xF1}},
 		{"negative zero", "-0.00", 3, 2, false, []byte{0xF0, 0xF0, 0xF0}},
 	}
 	for _, tc := range tests {
@@ -132,7 +133,9 @@ func TestPacked(t *testing.T) {
 	}{
 		{"odd positive", "123.45", 5, 2, true, []byte{0x12, 0x34, 0x5C}},
 		{"odd negative", "-123.45", 5, 2, true, []byte{0x12, 0x34, 0x5D}},
-		{"even leading pad", "12", 4, 0, false, []byte{0x00, 0x01, 0x2C}},
+		{"even leading pad unsigned", "12", 4, 0, false, []byte{0x00, 0x01, 0x2F}},
+		{"even leading pad signed", "12", 4, 0, true, []byte{0x00, 0x01, 0x2C}},
+		{"even picture pad nibble digit", "12345", 4, 0, false, []byte{0x12, 0x34, 0x5F}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -166,7 +169,7 @@ func TestBinary(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := Binary(tc.n, tc.length, 20, tc.scale, tc.signed)
+			got, err := Binary(tc.n, tc.length, tc.scale, tc.signed)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -202,14 +205,17 @@ func TestNumericErrors(t *testing.T) {
 		fn   func() error
 	}{
 		{"precision loss", func() error { _, err := Zoned("1.234", 4, 2, true, cp037(t)); return err }},
+		{"huge negative exponent", func() error { _, err := Zoned("10000000e-100", 5, 0, false, cp037(t)); return err }},
+		{"huge positive exponent", func() error { _, err := Zoned("1e100000", 5, 0, false, cp037(t)); return err }},
 		{"zoned overflow", func() error { _, err := Zoned("1000", 3, 0, true, cp037(t)); return err }},
 		{"unsigned negative", func() error { _, err := Packed("-1", 3, 0, false); return err }},
 		{"invalid JSON number", func() error { _, err := Packed("01", 3, 0, true); return err }},
-		{"binary picture overflow", func() error { _, err := Binary("10000", 2, 4, 0, true); return err }},
-		{"binary signed overflow", func() error { _, err := Binary("32768", 2, 5, 0, true); return err }},
-		{"binary unsigned overflow", func() error { _, err := Binary("65536", 2, 5, 0, false); return err }},
-		{"binary negative unsigned", func() error { _, err := Binary("-1", 2, 5, 0, false); return err }},
-		{"binary bad length", func() error { _, err := Binary("1", 3, 1, 0, true); return err }},
+		{"packed odd picture overflow", func() error { _, err := Packed("123456", 5, 0, true); return err }},
+		{"packed even storage overflow", func() error { _, err := Packed("123456", 4, 0, true); return err }},
+		{"binary signed overflow", func() error { _, err := Binary("32768", 2, 0, true); return err }},
+		{"binary unsigned overflow", func() error { _, err := Binary("65536", 2, 0, false); return err }},
+		{"binary negative unsigned", func() error { _, err := Binary("-1", 2, 0, false); return err }},
+		{"binary bad length", func() error { _, err := Binary("1", 3, 0, true); return err }},
 		{"float overflow", func() error { _, err := Float("1e100", 4); return err }},
 		{"float bad token", func() error { _, err := Float("NaN", 8); return err }},
 		{"float bad length", func() error { _, err := Float("1", 2); return err }},

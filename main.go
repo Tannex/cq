@@ -95,12 +95,26 @@ examples:
 	setFlags := make(map[string]bool)
 	fs.Visit(func(f *flag.Flag) { setFlags[f.Name] = true })
 
+	for _, source := range []struct {
+		name  string
+		value string
+	}{
+		{"c", *copybookPath}, {"copybook-dsn", *copybookDSN},
+		{"d", *dataPath}, {"data-dsn", *dataDSN}, {"j", *jsonPath},
+	} {
+		if setFlags[source.name] && source.value == "" {
+			return fmt.Errorf("-%s requires a non-empty value", source.name)
+		}
+	}
 	if (*copybookPath == "") == (*copybookDSN == "") {
 		return errors.New("provide exactly one copybook source: -c COPYBOOK or --copybook-dsn DSN[(MEMBER)]")
 	}
 	switch fs.NArg() {
 	case 0:
 	case 1:
+		if fs.Arg(0) == "" {
+			return errors.New("positional DATA argument is empty")
+		}
 		if *dataPath != "" || *dataDSN != "" {
 			return errors.New("provide only one data source: -d DATA, --data-dsn DSN, or positional DATA")
 		}
@@ -121,11 +135,6 @@ examples:
 			}
 		}
 	}
-	cfg, err := loadConfig()
-	if err != nil {
-		return err
-	}
-
 	var cbFormat copybook.Format
 	switch *format {
 	case "auto":
@@ -147,6 +156,7 @@ examples:
 	}
 
 	var src []byte
+	var err error
 	if *copybookDSN != "" {
 		src, err = fetchZoweCopybook(*copybookDSN)
 	} else {
@@ -155,7 +165,7 @@ examples:
 	if err != nil {
 		return err
 	}
-	resolver := newDSNCopyResolver(cfg.DSNSearchPath)
+	resolver := newConfigDSNCopyResolver()
 	items, err := copybook.ParseWithCopies(string(src), cbFormat, resolver.Resolve)
 	if err != nil {
 		return err
