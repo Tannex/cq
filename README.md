@@ -127,13 +127,17 @@ DSN sources are served by a small Node sidecar that cq starts once per run.
 The sidecar resolves the user's existing Zowe configuration — team config,
 secure credential store, tokens — through the official Zowe SDK (the same
 `ProfileInfo` API the Zowe CLI and Zowe Explorer use) and streams data sets
-over the z/OSMF REST API. Install it once from the [sidecar/](sidecar/)
-directory (`npm install -g .` puts `cq-zowe-sidecar` on PATH, which cq finds
-by default), then:
+over the z/OSMF REST API. With Node.js 20.9.0 or newer and npm installed, run
+the bundled setup once, then use DSN sources normally:
 
 ```console
+$ cq init
 $ cq --copybook-dsn "HQ.COPYLIB(CUSTOMER)" --data-dsn "HQ.CUSTOMER.DATA"
 ```
+
+`cq init` extracts the sidecar under cq's platform user configuration
+directory, runs `npm ci` there, and records its `node` command in
+`config.json`. Run it again to update or repair the installed sidecar.
 
 A Zowe configuration (from Zowe CLI or Zowe Explorer) must exist; see
 [sidecar/README.md](sidecar/README.md) for details, including running the

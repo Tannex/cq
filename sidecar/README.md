@@ -13,12 +13,13 @@ cq's transport to z/OS: one long-lived Node process per cq run that
 ## Setup
 
 ```sh
-cd sidecar && npm install -g .
+cq init
 ```
 
-That puts `cq-zowe-sidecar` on PATH, where cq finds it automatically the
-first time a run touches a DSN. To run it from somewhere else instead, name
-the command in cq's `config.json`:
+This requires Node.js 20.9.0 or newer and npm. It extracts the sidecar into
+cq's user configuration directory, runs `npm ci`, and updates `config.json`.
+Run it again to update or repair the installation. To run the sidecar from
+somewhere else instead, name the command in cq's `config.json`:
 
 ```json
 {

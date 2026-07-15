@@ -298,7 +298,7 @@ func TestLazySidecarDefaultCommandErrorExplainsSetup(t *testing.T) {
 	l := newLazySidecar("")
 	t.Cleanup(func() { _ = l.Close() })
 	_, err := l.fetchCopybook(context.Background(), "HQ.COPYLIB(CUSTOMER)")
-	if err == nil || !strings.Contains(err.Error(), "npm install") {
+	if err == nil || !strings.Contains(err.Error(), "cq init") {
 		t.Fatalf("fetchCopybook() error = %v, want setup guidance", err)
 	}
 }

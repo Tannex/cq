@@ -31,8 +31,8 @@ import (
 
 const sidecarStartTimeout = 30 * time.Second
 
-// defaultSidecarCommand is used when neither the config file nor --sidecar
-// names one: the launcher an npm install of sidecar/ puts on PATH.
+// defaultSidecarCommand preserves compatibility with globally installed
+// sidecars when cq init has not written a command to the config yet.
 const defaultSidecarCommand = "cq-zowe-sidecar"
 
 // zoweTransport is what the copy resolver and main need from the sidecar;
@@ -438,7 +438,7 @@ func (l *lazySidecar) get() (*zoweSidecar, error) {
 	l.once.Do(func() {
 		l.s, l.err = startSidecar(l.command)
 		if l.err != nil && l.command == defaultSidecarCommand {
-			l.err = fmt.Errorf("%w\n  (data set access needs the Zowe sidecar: npm install -g the cq sidecar/ package, or point \"sidecar\" in the cq config file or --sidecar at it)", l.err)
+			l.err = fmt.Errorf("%w\n  (data set access needs the Zowe sidecar: run cq init, or point \"sidecar\" at a custom command in the cq config file)", l.err)
 		}
 	})
 	return l.s, l.err

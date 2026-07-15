@@ -46,6 +46,12 @@ func run() error {
 		}
 		return editConfig()
 	}
+	if len(os.Args) > 1 && os.Args[1] == "init" {
+		if len(os.Args) != 2 {
+			return errors.New("usage: cq init")
+		}
+		return initSidecar(os.Stdout)
+	}
 
 	fs := flag.NewFlagSet("cq", flag.ExitOnError)
 	copybookPath := fs.String("c", "", "local copybook file")
@@ -73,6 +79,7 @@ func run() error {
 usage: cq [flags] (-c COPYBOOK | --copybook-dsn DSN[(MEMBER)])
                   [-d DATA | --data-dsn DSN | DATA]
        cq config
+       cq init
 
 With only a copybook source, prints the record layout as JSON. A data source
 decodes fixed-length binary records into a UTF-8 JSON array. DSN sources are
@@ -82,6 +89,9 @@ stdin.
 
 The config command creates the user configuration file when needed and opens
 it with $VISUAL, $EDITOR, or the platform text editor.
+
+The init command installs the bundled Zowe sidecar in cq's user configuration
+directory, verifies Node.js, and writes its command to config.json.
 
 flags:
 `)
