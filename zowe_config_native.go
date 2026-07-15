@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -293,7 +294,15 @@ func loadZoweVault(keyring zoweKeyring, goos string) (map[string]map[string]any,
 	if value == "" {
 		return nil, fmt.Errorf("no entry found for service %q account %q", zoweCredentialServices[0], zoweSecureAccount)
 	}
-	normalized, err := normalizeJSONC([]byte(value))
+	// Imperative's AbstractCredentialManager Base64-encodes every value before
+	// handing it to the OS-specific credential manager. The keyring adapters
+	// return that stored representation, so mirror AbstractCredentialManager.load
+	// before parsing ConfigSecure's JSON object.
+	decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(value))
+	if err != nil {
+		return nil, fmt.Errorf("decode secure Zowe properties: %w", err)
+	}
+	normalized, err := normalizeJSONC(decoded)
 	if err != nil {
 		return nil, fmt.Errorf("parse secure Zowe properties: %w", err)
 	}

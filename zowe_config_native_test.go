@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"os"
@@ -77,7 +78,7 @@ func TestLoadZoweSessionResolvesNestedProfileAndSecureBase(t *testing.T) {
 		t.Fatal(err)
 	}
 	keyring := &fakeZoweKeyring{values: map[string]string{
-		"Zowe\x00" + zoweSecureAccount: string(vault),
+		"Zowe\x00" + zoweSecureAccount: base64.StdEncoding.EncodeToString(vault),
 	}}
 
 	session, err := loadZoweSession(zoweTestOptions(home, work, keyring, nil))
@@ -253,10 +254,11 @@ func TestLoadZoweVaultUsesLegacyServiceAndWindowsChunks(t *testing.T) {
 	want := map[string]map[string]any{
 		`C:\Users\me\.zowe\zowe.config.json`: {"profiles.base.properties.password": "secret"},
 	}
-	encoded, err := json.Marshal(want)
+	vaultJSON, err := json.Marshal(want)
 	if err != nil {
 		t.Fatal(err)
 	}
+	encoded := []byte(base64.StdEncoding.EncodeToString(vaultJSON))
 	encoded = append(encoded, 0)
 	keyring := &fakeZoweKeyring{values: make(map[string]string)}
 	const chunkSize = 11
