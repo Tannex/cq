@@ -79,11 +79,16 @@ func initSidecar(out io.Writer) error {
 	if err := os.MkdirAll(configDir, 0o700); err != nil {
 		return fmt.Errorf("create config directory %q: %w", configDir, err)
 	}
-	if err := extractSidecar(installDir); err != nil {
+	staging, err := extractSidecar(configDir)
+	if err != nil {
 		return err
 	}
-	if err := installSidecarDependencies(npm, installDir); err != nil {
+	defer os.RemoveAll(staging)
+	if err := installSidecarDependencies(npm, staging); err != nil {
 		return fmt.Errorf("install sidecar dependencies with npm ci: %w", err)
+	}
+	if err := replaceSidecar(staging, installDir); err != nil {
+		return err
 	}
 
 	if err := writeSidecarConfig(configPath, updatedConfig); err != nil {
@@ -116,23 +121,28 @@ func parseNodeVersion(output string) ([3]int, error) {
 	return version, nil
 }
 
-func extractSidecar(dest string) error {
+func extractSidecar(parent string) (string, error) {
 	f, err := sidecarResources.Open(sidecarArchive)
 	if err != nil {
-		return fmt.Errorf("open bundled sidecar: %w", err)
+		return "", fmt.Errorf("open bundled sidecar: %w", err)
 	}
 	defer f.Close()
 	gz, err := gzip.NewReader(f)
 	if err != nil {
-		return fmt.Errorf("read bundled sidecar: %w", err)
+		return "", fmt.Errorf("read bundled sidecar: %w", err)
 	}
 	defer gz.Close()
 
-	staging, err := os.MkdirTemp(filepath.Dir(dest), ".sidecar-")
+	staging, err := os.MkdirTemp(parent, ".sidecar-")
 	if err != nil {
-		return fmt.Errorf("prepare sidecar installation: %w", err)
+		return "", fmt.Errorf("prepare sidecar installation: %w", err)
 	}
-	defer os.RemoveAll(staging)
+	succeeded := false
+	defer func() {
+		if !succeeded {
+			_ = os.RemoveAll(staging)
+		}
+	}()
 
 	tr := tar.NewReader(gz)
 	for {
@@ -141,48 +151,73 @@ func extractSidecar(dest string) error {
 			break
 		}
 		if err != nil {
-			return fmt.Errorf("read bundled sidecar: %w", err)
+			return "", fmt.Errorf("read bundled sidecar: %w", err)
 		}
 		archiveName := filepath.ToSlash(h.Name)
 		if !strings.HasPrefix(archiveName, "package/") {
-			return fmt.Errorf("bundled sidecar contains unexpected path %q", h.Name)
+			return "", fmt.Errorf("bundled sidecar contains unexpected path %q", h.Name)
 		}
 		name := filepath.Clean(filepath.FromSlash(strings.TrimPrefix(archiveName, "package/")))
 		if name == "." {
 			continue
 		}
 		if filepath.IsAbs(name) || name == ".." || strings.HasPrefix(name, ".."+string(filepath.Separator)) {
-			return fmt.Errorf("bundled sidecar contains unsafe path %q", h.Name)
+			return "", fmt.Errorf("bundled sidecar contains unsafe path %q", h.Name)
 		}
 		target := filepath.Join(staging, name)
 		switch h.Typeflag {
 		case tar.TypeDir:
 			if err := os.MkdirAll(target, 0o755); err != nil {
-				return fmt.Errorf("extract bundled sidecar: %w", err)
+				return "", fmt.Errorf("extract bundled sidecar: %w", err)
 			}
 		case tar.TypeReg, tar.TypeRegA:
 			mode := os.FileMode(h.Mode) & 0o777
 			file, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
 			if err != nil {
-				return fmt.Errorf("extract bundled sidecar: %w", err)
+				return "", fmt.Errorf("extract bundled sidecar: %w", err)
 			}
 			_, copyErr := io.Copy(file, tr)
 			closeErr := file.Close()
 			if err := errors.Join(copyErr, closeErr); err != nil {
-				return fmt.Errorf("extract bundled sidecar: %w", err)
+				return "", fmt.Errorf("extract bundled sidecar: %w", err)
 			}
 		default:
-			return fmt.Errorf("bundled sidecar contains unsupported entry %q", h.Name)
+			return "", fmt.Errorf("bundled sidecar contains unsupported entry %q", h.Name)
 		}
 	}
 	if _, err := os.Stat(filepath.Join(staging, sidecarScript)); err != nil {
-		return fmt.Errorf("bundled sidecar is missing %s: %w", sidecarScript, err)
+		return "", fmt.Errorf("bundled sidecar is missing %s: %w", sidecarScript, err)
 	}
-	if err := os.RemoveAll(dest); err != nil {
+	succeeded = true
+	return staging, nil
+}
+
+func replaceSidecar(staging, dest string) error {
+	backup, err := os.MkdirTemp(filepath.Dir(dest), ".sidecar-backup-")
+	if err != nil {
+		return fmt.Errorf("prepare to replace sidecar installation %q: %w", dest, err)
+	}
+	if err := os.Remove(backup); err != nil {
+		return fmt.Errorf("prepare to replace sidecar installation %q: %w", dest, err)
+	}
+	hadExisting := true
+	if err := os.Rename(dest, backup); errors.Is(err, os.ErrNotExist) {
+		hadExisting = false
+	} else if err != nil {
 		return fmt.Errorf("replace sidecar installation %q: %w", dest, err)
 	}
+	if !hadExisting {
+		backup = ""
+	}
 	if err := os.Rename(staging, dest); err != nil {
+		if backup != "" {
+			restoreErr := os.Rename(backup, dest)
+			return fmt.Errorf("install sidecar in %q: %w", dest, errors.Join(err, restoreErr))
+		}
 		return fmt.Errorf("install sidecar in %q: %w", dest, err)
+	}
+	if backup != "" {
+		_ = os.RemoveAll(backup)
 	}
 	return nil
 }
@@ -238,8 +273,8 @@ func writeSidecarConfig(path string, updated []byte) error {
 }
 
 func quoteCommandArg(arg string) string {
-	if !strings.ContainsAny(arg, " \t\"") {
+	if !strings.ContainsAny(arg, " \t\"'") {
 		return arg
 	}
-	return `"` + strings.ReplaceAll(arg, `"`, `\"`) + `"`
+	return `'` + strings.ReplaceAll(arg, `'`, `'"'"'`) + `'`
 }

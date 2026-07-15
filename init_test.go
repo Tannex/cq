@@ -59,8 +59,8 @@ func TestRunInitInstallsSidecarAndUpdatesConfig(t *testing.T) {
 	if err := runWithArgs(t, "init"); err != nil {
 		t.Fatalf("run() error = %v", err)
 	}
-	if *installedIn != wantDir {
-		t.Fatalf("npm ci directory = %q, want %q", *installedIn, wantDir)
+	if filepath.Dir(*installedIn) != configDir || !strings.HasPrefix(filepath.Base(*installedIn), ".sidecar-") {
+		t.Fatalf("npm ci directory = %q, want a staging directory in %q", *installedIn, configDir)
 	}
 	for _, name := range []string{"zowe-sidecar.js", "package.json", "package-lock.json"} {
 		got, err := os.ReadFile(filepath.Join(wantDir, name))
@@ -91,7 +91,7 @@ func TestRunInitInstallsSidecarAndUpdatesConfig(t *testing.T) {
 	if err := json.Unmarshal(got["sidecar"], &command); err != nil {
 		t.Fatal(err)
 	}
-	wantCommand := `node "` + filepath.Join(wantDir, "zowe-sidecar.js") + `"`
+	wantCommand := `node '` + filepath.Join(wantDir, "zowe-sidecar.js") + `'`
 	if command != wantCommand {
 		t.Errorf("sidecar command = %q, want %q", command, wantCommand)
 	}
