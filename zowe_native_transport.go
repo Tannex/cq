@@ -27,14 +27,15 @@ type nativeZoweTransport struct {
 
 func newNativeZoweTransport(session zoweSession) *nativeZoweTransport {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	if session.Protocol == "https" && !session.RejectUnauthorized {
+	skipCertificateVerification := session.Protocol == "https" && !session.RejectUnauthorized
+	if skipCertificateVerification {
 		if transport.TLSClientConfig == nil {
 			transport.TLSClientConfig = &tls.Config{}
 		}
 		// Zowe defines rejectUnauthorized=false as an explicit opt-out from
 		// server certificate verification. Keep the opt-out scoped to this
 		// cloned transport so it cannot affect other HTTP clients.
-		transport.TLSClientConfig.InsecureSkipVerify = true // lgtm[go/disabled-certificate-check] -- explicitly requested by the selected Zowe profile.
+		transport.TLSClientConfig.InsecureSkipVerify = true // #nosec G402 -- explicitly requested by the selected Zowe profile.
 	}
 	return &nativeZoweTransport{session: session, client: &http.Client{Transport: transport}}
 }
