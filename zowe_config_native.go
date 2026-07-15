@@ -595,29 +595,25 @@ func zoweIntProperty(properties map[string]any, name string) (int, error) {
 	if !ok || value == nil {
 		return 0, nil
 	}
-	var n int64
-	var err error
+	var text string
 	switch value := value.(type) {
 	case json.Number:
-		n, err = value.Int64()
+		text = value.String()
 	case float64:
-		if value != float64(int64(value)) {
-			err = errors.New("not an integer")
-		} else {
-			n = int64(value)
+		if value != math.Trunc(value) {
+			return 0, fmt.Errorf("Zowe property %s must be an integer", name)
 		}
+		text = strconv.FormatFloat(value, 'f', -1, 64)
 	case string:
-		n, err = strconv.ParseInt(value, 10, 64)
+		text = value
 	default:
-		err = fmt.Errorf("got %T", value)
+		return 0, fmt.Errorf("Zowe property %s must be an integer, got %T", name, value)
 	}
+	n, err := strconv.Atoi(text)
 	if err != nil {
 		return 0, fmt.Errorf("Zowe property %s must be an integer: %w", name, err)
 	}
-	if n < int64(math.MinInt) || n > int64(math.MaxInt) {
-		return 0, fmt.Errorf("Zowe property %s must fit in a %d-bit integer", name, strconv.IntSize)
-	}
-	return int(n), nil
+	return n, nil
 }
 
 func zoweBoolProperty(properties map[string]any, name string, fallback bool) (bool, error) {

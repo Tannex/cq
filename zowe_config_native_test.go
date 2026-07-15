@@ -225,6 +225,18 @@ func TestApplyZoweEnvironmentKeepsStringPropertiesAsStrings(t *testing.T) {
 	}
 }
 
+func TestZoweIntPropertyRejectsNativeIntOverflow(t *testing.T) {
+	tooLarge := "2147483648"
+	if strconv.IntSize == 64 {
+		tooLarge = "9223372036854775808"
+	}
+
+	_, err := zoweIntProperty(map[string]any{"port": json.Number(tooLarge)}, "port")
+	if err == nil || !strings.Contains(err.Error(), "must be an integer") {
+		t.Fatalf("zoweIntProperty() error = %v, want native int overflow", err)
+	}
+}
+
 func TestLoadZoweSessionReportsMissingSecureStore(t *testing.T) {
 	home := t.TempDir()
 	work := t.TempDir()
