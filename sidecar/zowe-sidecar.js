@@ -50,7 +50,9 @@ async function resolveSession() {
   } catch (err) {
     keyringError = err;
   }
-  const profInfo = new ProfileInfo("zowe", { credMgrOverride });
+  // overrideWithEnv keeps ZOWE_OPT_* property overrides (host, port, user,
+  // ...) working exactly as they did when the zowe CLI made these requests.
+  const profInfo = new ProfileInfo("zowe", { credMgrOverride, overrideWithEnv: true });
   try {
     await profInfo.readProfilesFromDisk();
   } catch (err) {
@@ -68,7 +70,23 @@ async function resolveSession() {
     }
     throw err;
   }
-  const prof = profInfo.getDefaultProfile("zosmf");
+  // ZOWE_OPT_ZOSMF_PROFILE selects the profile the way it selects one for
+  // the zowe CLI's --zosmf-profile option.
+  const wantedProfile = process.env.ZOWE_OPT_ZOSMF_PROFILE;
+  let prof;
+  if (wantedProfile) {
+    prof = profInfo
+      .getAllProfiles("zosmf")
+      .find((p) => p.profName === wantedProfile);
+    if (!prof) {
+      throw new Error(
+        `ZOWE_OPT_ZOSMF_PROFILE names zosmf profile ${wantedProfile}, ` +
+        "but the Zowe configuration has no such profile",
+      );
+    }
+  } else {
+    prof = profInfo.getDefaultProfile("zosmf");
+  }
   if (!prof) {
     throw new Error(
       "no default zosmf profile found in the Zowe configuration; " +
@@ -76,7 +94,28 @@ async function resolveSession() {
     );
   }
   const merged = profInfo.mergeArgsForProfile(prof, { getSecureVals: true });
+  // The zowe CLI gives ZOWE_OPT_* variables precedence over profile
+  // properties; ProfileInfo's overrideWithEnv only fills in missing ones, so
+  // apply the CLI's precedence here (with the CLI's string-to-value rules).
+  const envOverride = (name) => {
+    const key = "ZOWE_OPT_" + name.replace(/([a-z])([A-Z])/g, "$1_$2").toUpperCase();
+    const value = process.env[key];
+    if (value === undefined || value === "") {
+      return undefined;
+    }
+    if (value.toUpperCase() === "TRUE" || value.toUpperCase() === "FALSE") {
+      return value.toUpperCase() === "TRUE";
+    }
+    if (!isNaN(+value)) {
+      return +value;
+    }
+    return value;
+  };
   const arg = (name) => {
+    const env = envOverride(name);
+    if (env !== undefined) {
+      return env;
+    }
     const found = merged.knownArgs.find((a) => a.argName === name);
     return found ? found.argValue : undefined;
   };
@@ -98,6 +137,12 @@ async function resolveSession() {
     throw new Error(
       `zosmf profile ${prof.profName} has neither a token nor a user; ` +
       "log in with 'zowe auth login' or add credentials to the profile",
+    );
+  }
+  if (!session.tokenValue && !session.password) {
+    throw new Error(
+      `zosmf profile ${prof.profName} has a user but no password; ` +
+      "add the password to the profile or its secure credential store",
     );
   }
   return session;
@@ -205,8 +250,9 @@ function serve(session) {
 
     // startAttempt issues one HTTP request for this cq request. Each attempt
     // has its own guard so a superseded attempt (record-range fallback) goes
-    // quiet instead of settling the request.
-    const startAttempt = (opts, onOK) => {
+    // quiet instead of settling the request. onError, when given, replaces
+    // the default settle-with-error handling of request-level failures.
+    const startAttempt = (opts, onOK, onError) => {
       const attempt = { superseded: false };
       const httpReq = openRequest(session, req.dsn, opts);
       inflight.set(req.id, () => {
@@ -223,17 +269,41 @@ function serve(session) {
             streamPlain();
             return;
           }
+          // Keep only a bounded diagnostic prefix of the error body, and cap
+          // how long we wait for it: a proxy streaming an endless error page
+          // must not balloon memory or keep the request from settling.
+          const maxErrorBody = 16 * 1024;
           let body = "";
+          const finish = () => {
+            clearTimeout(timer);
+            settle({ error: zosmfError(req.dsn, res.statusCode, body) });
+          };
+          const timer = setTimeout(() => {
+            res.destroy();
+            finish();
+          }, 10_000);
           res.setEncoding("utf8");
-          res.on("data", (chunk) => (body += chunk));
-          res.on("end", () => settle({ error: zosmfError(req.dsn, res.statusCode, body) }));
-          res.on("error", () => settle({ error: zosmfError(req.dsn, res.statusCode, body) }));
+          res.on("data", (chunk) => {
+            body += chunk;
+            if (body.length >= maxErrorBody) {
+              body = body.slice(0, maxErrorBody);
+              res.destroy();
+              finish();
+            }
+          });
+          res.on("end", finish);
+          res.on("error", finish);
           return;
         }
         onOK(res, attempt);
       });
       httpReq.on("error", (err) => {
-        if (!attempt.superseded) {
+        if (attempt.superseded) {
+          return;
+        }
+        if (onError) {
+          onError(err, attempt);
+        } else {
           settle({ error: `data set ${req.dsn}: ${err.message}` });
         }
       });
@@ -281,6 +351,10 @@ function serve(session) {
           process.stderr.write(`zowe-sidecar: ${req.dsn}: ${reason}; retrying without record range\n`);
           streamPlain();
         };
+        // A broken ranged response (socket reset after HTTP 200) falls back
+        // like any other range surprise: records already sent are skipped
+        // through sentBytes, so the plain retry resumes instead of failing.
+        res.on("error", (err) => fallBack(`ranged response failed (${err.message})`));
         res.on("data", (chunk) => {
           if (done || attempt.superseded) {
             return;
@@ -311,11 +385,15 @@ function serve(session) {
           }
           settle({ end: true });
         });
-        res.on("error", (err) => {
-          if (!attempt.superseded) {
-            settle({ error: `data set ${req.dsn}: ${err.message}` });
-          }
-        });
+      }, (err, attempt) => {
+        // The ranged request itself failed before a response settled; retry
+        // unranged rather than reporting an error the plain path may not hit.
+        if (done) {
+          return;
+        }
+        attempt.superseded = true;
+        process.stderr.write(`zowe-sidecar: ${req.dsn}: ranged request failed (${err.message}); retrying without record range\n`);
+        streamPlain();
       });
     };
 

@@ -19,12 +19,12 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os/exec"
-	"strings"
 	"sync"
 	"time"
 )
@@ -37,9 +37,11 @@ const defaultSidecarCommand = "cq-zowe-sidecar"
 
 // zoweTransport is what the copy resolver and main need from the sidecar;
 // tests substitute a fake sidecar process behind the same interface.
-// Implementations must be safe for concurrent use.
+// Implementations must be safe for concurrent use. Canceling the context
+// abandons an in-flight fetch, so a resolver that already has its answer can
+// stop probes it no longer needs.
 type zoweTransport interface {
-	fetchCopybook(dsn string) ([]byte, error)
+	fetchCopybook(ctx context.Context, dsn string) ([]byte, error)
 	openDataSet(dsn string, hint downloadHint) (io.ReadCloser, error)
 }
 
@@ -89,15 +91,16 @@ type sidecarWaiter struct {
 	done chan struct{}
 }
 
-// startSidecar launches the sidecar command (split on whitespace; quoting is
-// not supported in this proof of concept) and waits for its ready frame, so
-// configuration problems surface before any data set is requested.
+// startSidecar launches the sidecar command (an executable — quoted when its
+// path has spaces — followed by whitespace-separated arguments) and waits for
+// its ready frame, so configuration problems surface before any data set is
+// requested.
 func startSidecar(command string) (*zoweSidecar, error) {
-	parts := strings.Fields(command)
-	if len(parts) == 0 {
-		return nil, fmt.Errorf("empty sidecar command")
+	name, args, err := splitCommandSpec(command)
+	if err != nil {
+		return nil, fmt.Errorf("sidecar command %q: %w", command, err)
 	}
-	cmd := exec.Command(parts[0], parts[1:]...)
+	cmd := exec.Command(name, args...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("start sidecar %q: %w", command, err)
@@ -257,14 +260,29 @@ func elapsed(start time.Time) time.Duration {
 	return time.Since(start).Round(time.Millisecond)
 }
 
-func (s *zoweSidecar) fetchCopybook(dsn string) ([]byte, error) {
+func (s *zoweSidecar) fetchCopybook(ctx context.Context, dsn string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	start := time.Now()
 	id, w, err := s.open(sidecarRequest{Op: "view", DSN: dsn})
 	if err != nil {
 		return nil, err
 	}
 	var out []byte
-	for f := range w.ch {
+	for {
+		var f sidecarFrame
+		var ok bool
+		select {
+		case f, ok = <-w.ch:
+		case <-ctx.Done():
+			s.abandon(id, w)
+			debugLog.Printf("sidecar view %s: canceled after %s", dsn, elapsed(start))
+			return nil, ctx.Err()
+		}
+		if !ok {
+			return nil, s.exitError()
+		}
 		if f.Error != "" {
 			debugLog.Printf("sidecar view %s: failed after %s", dsn, elapsed(start))
 			return nil, fmt.Errorf("Zowe data set %q: %s", dsn, f.Error)
@@ -282,7 +300,6 @@ func (s *zoweSidecar) fetchCopybook(dsn string) ([]byte, error) {
 			return out, nil
 		}
 	}
-	return nil, s.exitError()
 }
 
 func (s *zoweSidecar) openDataSet(dsn string, hint downloadHint) (io.ReadCloser, error) {
@@ -370,12 +387,16 @@ func (st *sidecarStream) Read(p []byte) (int, error) {
 
 // Close cancels the transfer when it has not already finished, so early
 // exits (-max, decode errors) stop the download instead of pulling the rest
-// of the data set.
+// of the data set. Reads after Close fail instead of waiting for frames that
+// the abandoned request will never receive.
 func (st *sidecarStream) Close() error {
 	if st.done {
 		return nil
 	}
 	st.done = true
+	if st.err == nil {
+		st.err = io.ErrClosedPipe
+	}
 	st.s.abandon(st.id, st.w)
 	return nil
 }
@@ -423,12 +444,12 @@ func (l *lazySidecar) get() (*zoweSidecar, error) {
 	return l.s, l.err
 }
 
-func (l *lazySidecar) fetchCopybook(dsn string) ([]byte, error) {
+func (l *lazySidecar) fetchCopybook(ctx context.Context, dsn string) ([]byte, error) {
 	s, err := l.get()
 	if err != nil {
 		return nil, err
 	}
-	return s.fetchCopybook(dsn)
+	return s.fetchCopybook(ctx, dsn)
 }
 
 func (l *lazySidecar) openDataSet(dsn string, hint downloadHint) (io.ReadCloser, error) {

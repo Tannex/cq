@@ -9,6 +9,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -152,7 +153,7 @@ examples:
 
 	var src []byte
 	if *copybookDSN != "" {
-		src, err = transport.fetchCopybook(*copybookDSN)
+		src, err = transport.fetchCopybook(context.Background(), *copybookDSN)
 	} else {
 		src, err = os.ReadFile(*copybookPath)
 		if err == nil {

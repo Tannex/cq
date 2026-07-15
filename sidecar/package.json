@@ -8,7 +8,7 @@
     "cq-zowe-sidecar": "zowe-sidecar.js"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20.9.0"
   },
   "dependencies": {
     "@zowe/imperative": "^8.0.0",

@@ -2,8 +2,10 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -244,7 +246,7 @@ func TestSidecarFetchesCopybookAcrossChunks(t *testing.T) {
 		"HQ.COPYLIB(CUSTOMER)": {Text: copybook, Chunk: 7},
 	})
 
-	got, err := s.fetchCopybook("HQ.COPYLIB(CUSTOMER)")
+	got, err := s.fetchCopybook(context.Background(), "HQ.COPYLIB(CUSTOMER)")
 	if err != nil {
 		t.Fatalf("fetchCopybook() error = %v", err)
 	}
@@ -252,7 +254,7 @@ func TestSidecarFetchesCopybookAcrossChunks(t *testing.T) {
 		t.Fatalf("fetchCopybook() = %q, want %q", got, copybook)
 	}
 
-	_, err = s.fetchCopybook("HQ.COPYLIB(MISSING)")
+	_, err = s.fetchCopybook(context.Background(), "HQ.COPYLIB(MISSING)")
 	if err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("fetchCopybook(missing) error = %v, want not-found", err)
 	}
@@ -295,7 +297,7 @@ func TestLazySidecarDefaultCommandErrorExplainsSetup(t *testing.T) {
 
 	l := newLazySidecar("")
 	t.Cleanup(func() { _ = l.Close() })
-	_, err := l.fetchCopybook("HQ.COPYLIB(CUSTOMER)")
+	_, err := l.fetchCopybook(context.Background(), "HQ.COPYLIB(CUSTOMER)")
 	if err == nil || !strings.Contains(err.Error(), "npm install") {
 		t.Fatalf("fetchCopybook() error = %v, want setup guidance", err)
 	}
@@ -318,8 +320,13 @@ func TestSidecarStreamCloseCancelsAndKeepsMuxUsable(t *testing.T) {
 	if err := rc.Close(); err != nil { // must cancel, not hang
 		t.Fatalf("Close() error = %v", err)
 	}
+	// Reads past any buffered bytes must fail on the closed stream, not wait
+	// for frames the abandoned request will never receive.
+	if _, err := io.ReadAll(rc); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Read() after Close error = %v, want io.ErrClosedPipe", err)
+	}
 
-	got, err := s.fetchCopybook("HQ.COPYLIB(TINY)")
+	got, err := s.fetchCopybook(context.Background(), "HQ.COPYLIB(TINY)")
 	if err != nil {
 		t.Fatalf("fetchCopybook() after cancel error = %v", err)
 	}

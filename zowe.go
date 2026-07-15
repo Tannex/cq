@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -58,28 +59,43 @@ func (r *dsnCopyResolver) Resolve(member string) (string, error) {
 
 // probeSearchPaths queries every library concurrently and keeps the result
 // from the earliest library in search order that has the member, so the
-// configured precedence still decides which copy wins.
+// configured precedence still decides which copy wins. It returns as soon as
+// the winner is decided — a success whose earlier candidates have all failed
+// — and cancels the probes still in flight, so a slow later library never
+// delays or blocks an earlier match.
 func (r *dsnCopyResolver) probeSearchPaths(member string) copyResult {
-	results := make([]copyResult, len(r.searchPaths))
-	var wg sync.WaitGroup
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	type probe struct {
+		i   int
+		res copyResult
+	}
+	resCh := make(chan probe, len(r.searchPaths))
 	for i, library := range r.searchPaths {
-		wg.Add(1)
 		go func() {
-			defer wg.Done()
 			r.slots <- struct{}{}
 			defer func() { <-r.slots }()
-			src, err := r.transport.fetchCopybook(fmt.Sprintf("%s(%s)", library, member))
-			results[i] = copyResult{text: string(src), err: err}
+			src, err := r.transport.fetchCopybook(ctx, fmt.Sprintf("%s(%s)", library, member))
+			resCh <- probe{i: i, res: copyResult{text: string(src), err: err}}
 		}()
 	}
-	wg.Wait()
+
+	results := make([]*copyResult, len(r.searchPaths))
+	next := 0 // earliest library whose outcome is still unknown
+	for range r.searchPaths {
+		p := <-resCh
+		results[p.i] = &p.res
+		for next < len(results) && results[next] != nil {
+			if results[next].err == nil {
+				debugLog.Printf("COPY %s: using %s(%s)", member, r.searchPaths[next], member)
+				return copyResult{text: results[next].text}
+			}
+			next++
+		}
+	}
 
 	var failures []string
-	for i, res := range results {
-		if res.err == nil {
-			debugLog.Printf("COPY %s: using %s(%s)", member, r.searchPaths[i], member)
-			return copyResult{text: res.text}
-		}
+	for _, res := range results {
 		failures = append(failures, res.err.Error())
 	}
 	debugLog.Printf("COPY %s: not found in any of %d libraries", member, len(r.searchPaths))
