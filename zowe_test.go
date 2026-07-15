@@ -118,7 +118,7 @@ func (s *testZOSMFServer) requestedDSNs() []string {
 func configureTestZOSMF(t *testing.T, members map[string]zoweServerMember, searchPaths ...string) *testZOSMFServer {
 	t.Helper()
 	fixture := &testZOSMFServer{}
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		const prefix = "/zosmf/restfiles/ds/"
 		dsn := strings.TrimPrefix(r.URL.Path, prefix)
 		dataType := r.Header.Get("X-IBM-Data-Type")

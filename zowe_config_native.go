@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -560,6 +561,9 @@ func makeZoweSession(profileName string, properties map[string]any) (zoweSession
 	if err != nil {
 		return zoweSession{}, err
 	}
+	if protocol == "https" && !rejectUnauthorized {
+		return zoweSession{}, fmt.Errorf("zosmf profile %q disables TLS certificate verification with rejectUnauthorized=false; trust the z/OSMF certificate authority instead", profileName)
+	}
 	if tokenValue == "" && user == "" {
 		return zoweSession{}, fmt.Errorf("zosmf profile %q has neither a token nor a user; log in with 'zowe auth login' or add credentials to the profile", profileName)
 	}
@@ -609,6 +613,9 @@ func zoweIntProperty(properties map[string]any, name string) (int, error) {
 	}
 	if err != nil {
 		return 0, fmt.Errorf("Zowe property %s must be an integer: %w", name, err)
+	}
+	if n < int64(math.MinInt) || n > int64(math.MaxInt) {
+		return 0, fmt.Errorf("Zowe property %s must fit in a %d-bit integer", name, strconv.IntSize)
 	}
 	return int(n), nil
 }

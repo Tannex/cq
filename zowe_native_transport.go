@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -27,17 +26,6 @@ type nativeZoweTransport struct {
 
 func newNativeZoweTransport(session zoweSession) *nativeZoweTransport {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	if !session.RejectUnauthorized {
-		tlsConfig := transport.TLSClientConfig
-		if tlsConfig == nil {
-			tlsConfig = &tls.Config{}
-		} else {
-			tlsConfig = tlsConfig.Clone()
-		}
-		// This setting is an explicit Zowe profile choice.
-		tlsConfig.InsecureSkipVerify = true //nolint:gosec
-		transport.TLSClientConfig = tlsConfig
-	}
 	return &nativeZoweTransport{session: session, client: &http.Client{Transport: transport}}
 }
 
