@@ -147,6 +147,46 @@ func TestRunInitReportsNPMFailure(t *testing.T) {
 	}
 }
 
+func TestRunInitNPMFailurePreservesExistingInstallation(t *testing.T) {
+	root := t.TempDir()
+	stubUserConfigDir(t, root, nil)
+	stubInitCommands(t, "v22.1.0", errors.New("exit status 1"))
+	configDir := filepath.Join(root, "cq")
+	installDir := filepath.Join(configDir, sidecarSubdir)
+	if err := os.MkdirAll(installDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := filepath.Join(installDir, "working-sidecar")
+	if err := os.WriteFile(sentinel, []byte("working"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(configDir, "config.json")
+	existingConfig := []byte(`{"dsnSearchPath":["HLQ.CPY"],"sidecar":"node existing.js"}`)
+	if err := os.WriteFile(configPath, existingConfig, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runWithArgs(t, "init")
+	if err == nil || !strings.Contains(err.Error(), "npm ci") {
+		t.Fatalf("run() error = %v, want npm ci error", err)
+	}
+	gotSentinel, err := os.ReadFile(sentinel)
+	if err != nil || string(gotSentinel) != "working" {
+		t.Fatalf("existing installation changed: contents %q, error %v", gotSentinel, err)
+	}
+	gotConfig, err := os.ReadFile(configPath)
+	if err != nil || string(gotConfig) != string(existingConfig) {
+		t.Fatalf("existing config changed: contents %q, error %v", gotConfig, err)
+	}
+	matches, err := filepath.Glob(filepath.Join(configDir, ".sidecar-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("staging directories remain after npm failure: %v", matches)
+	}
+}
+
 func TestRunInitCreatesDefaultConfig(t *testing.T) {
 	root := t.TempDir()
 	stubUserConfigDir(t, root, nil)
@@ -244,5 +284,25 @@ func TestParseNodeVersion(t *testing.T) {
 	}
 	if _, err := parseNodeVersion("unknown"); err == nil {
 		t.Error("parseNodeVersion(unknown) unexpectedly succeeded")
+	}
+}
+
+func TestQuoteCommandArgRoundTrips(t *testing.T) {
+	paths := []string{
+		"/tmp/cq config/sidecar/zowe-sidecar.js",
+		`/tmp/cq-"config/sidecar/zowe-sidecar.js`,
+		"/tmp/cq-'config/sidecar/zowe-sidecar.js",
+		`/tmp/cq-'"config/sidecar/zowe-sidecar.js`,
+	}
+	for _, path := range paths {
+		command := "node " + quoteCommandArg(path)
+		name, args, err := splitCommandSpec(command)
+		if err != nil {
+			t.Errorf("splitCommandSpec(%q) error = %v", command, err)
+			continue
+		}
+		if name != "node" || len(args) != 1 || args[0] != path {
+			t.Errorf("splitCommandSpec(%q) = %q %q, want node [%q]", command, name, args, path)
+		}
 	}
 }
