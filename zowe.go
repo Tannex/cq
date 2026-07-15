@@ -1,5 +1,5 @@
-// COPY member resolution through the configured DSN search path. All data
-// set access goes through the Zowe sidecar (sidecar.go).
+// COPY member resolution through the configured DSN search path. Data set
+// access goes through the transport boundary in zowe_transport.go.
 package main
 
 import (
@@ -9,8 +9,8 @@ import (
 	"sync"
 )
 
-// maxConcurrentZoweFetches bounds the data set reads a resolver has in
-// flight at once; each is one HTTP request on the sidecar's z/OSMF session.
+// maxConcurrentZoweFetches bounds the z/OSMF data set reads a resolver has in
+// flight at once.
 const maxConcurrentZoweFetches = 8
 
 type dsnCopyResolver struct {

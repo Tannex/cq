@@ -123,24 +123,41 @@ yet.
 
 ## Using Zowe
 
-DSN sources are served by a small Node sidecar that cq starts once per run.
-The sidecar resolves the user's existing Zowe configuration — team config,
-secure credential store, tokens — through the official Zowe SDK (the same
-`ProfileInfo` API the Zowe CLI and Zowe Explorer use) and streams data sets
-over the z/OSMF REST API. Install it once from the [sidecar/](sidecar/)
-directory (`npm install -g .` puts `cq-zowe-sidecar` on PATH, which cq finds
-by default), then:
+DSN sources are streamed directly from z/OSMF by cq's native Go transport.
+There is no Node.js or npm setup. cq reads the same Zowe team configuration
+and operating-system credential entry as Zowe CLI and Zowe Explorer, then:
 
 ```console
 $ cq --copybook-dsn "HQ.COPYLIB(CUSTOMER)" --data-dsn "HQ.CUSTOMER.DATA"
 ```
 
-A Zowe configuration (from Zowe CLI or Zowe Explorer) must exist; see
-[sidecar/README.md](sidecar/README.md) for details, including running the
-sidecar from a custom location with `"sidecar"` in cq's config file. `cq` is
-an independent project and is not affiliated with or endorsed by The Linux
-Foundation or the Zowe project. Zowe® is a registered trademark of The Linux
-Foundation.
+A Zowe team configuration (from Zowe CLI or Zowe Explorer) must exist. cq
+loads the global `zowe.config.json` and `zowe.config.user.json` from
+`$ZOWE_CLI_HOME` (or `$HOME/.zowe`) and the nearest project pair found by
+walking up from the current directory. It supports:
+
+- global/project team and user layer precedence;
+- base, nested, default, and `ZOWE_OPT_ZOSMF_PROFILE`-selected `zosmf`
+  profiles;
+- `ZOWE_OPT_HOST`, `PORT`, `BASE_PATH`, `PROTOCOL`, `USER`, `PASSWORD`,
+  `TOKEN_TYPE`, `TOKEN_VALUE`, and `REJECT_UNAUTHORIZED` overrides;
+- plain properties and Zowe's `secure_config_props` entry in macOS Keychain,
+  Windows Credential Manager, or Secret Service/libsecret on Linux; and
+- JSON-with-comments and trailing commas, as accepted by Zowe's config
+  reader.
+
+HTTPS connections always verify the server certificate. Profiles with
+`rejectUnauthorized: false` are rejected; install the z/OSMF certificate
+authority in the operating-system trust store instead.
+
+cq does not currently load Zowe V1 profiles, arbitrary Imperative
+credential-manager plug-ins, or client-certificate identities. Those
+configurations must be migrated to a supported Zowe team configuration before
+using DSN sources.
+
+`cq` is an independent project and is not affiliated with or endorsed by The
+Linux Foundation or the Zowe project. Zowe® is a registered trademark of The
+Linux Foundation.
 
 The copybook is fetched as text so z/OSMF converts its EBCDIC source, while
 the data set is streamed in binary mode to preserve packed and binary fields
@@ -229,9 +246,9 @@ If the dataset's LRECL is larger than the copybook layout (padded FB records),
 pass `-lrecl` with the dataset's record length. With `-max N` (and no
 `-where`), a `--data-dsn` transfer is bounded server-side with a z/OSMF
 record range, so peeking at a huge dataset moves only the records asked for;
-the sidecar verifies the dataset's record length matches the layout and
-transparently falls back to a full streamed transfer (canceled once `-max`
-records have decoded) when it does not.
+the native transport verifies the dataset's record length matches the layout
+and transparently falls back to a full streamed transfer (canceled once
+`-max` records have decoded) when it does not.
 
 ## Supported COBOL
 

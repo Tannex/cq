@@ -72,10 +72,9 @@ func configEditorInvocation(goos string, getenv func(string) string, path string
 	}
 }
 
-// splitCommandSpec splits one command string (an editor spec, the sidecar
-// command) into an executable and its arguments. Single- or double-quoted
-// segments keep their spaces, so executables and arguments whose paths
-// contain spaces survive.
+// splitCommandSpec splits an editor command into an executable and its
+// arguments. Single- or double-quoted segments keep their spaces, so paths
+// containing spaces survive.
 func splitCommandSpec(spec string) (string, []string, error) {
 	var tokens []string
 	var cur strings.Builder

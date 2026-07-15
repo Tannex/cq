@@ -76,9 +76,8 @@ usage: cq [flags] (-c COPYBOOK | --copybook-dsn DSN[(MEMBER)])
 
 With only a copybook source, prints the record layout as JSON. A data source
 decodes fixed-length binary records into a UTF-8 JSON array. DSN sources are
-streamed through the Zowe sidecar (see the README's Zowe section), which
-reuses the Zowe CLI configuration and credentials; use a trailing "-" for
-stdin.
+streamed directly from z/OSMF using the Zowe CLI configuration and secure
+credential store; use a trailing "-" for stdin.
 
 The config command creates the user configuration file when needed and opens
 it with $VISUAL, $EDITOR, or the platform text editor.
@@ -125,11 +124,7 @@ examples:
 		return err
 	}
 
-	// DSN access goes through the Zowe sidecar, started lazily on first use
-	// so purely local runs never pay for it.
-	sidecar := newLazySidecar(cfg.Sidecar)
-	defer sidecar.Close()
-	var transport zoweTransport = sidecar
+	transport := newLazyNativeZoweTransport(loadDefaultZoweSession)
 
 	var cbFormat copybook.Format
 	switch *format {

@@ -77,11 +77,11 @@ func TestSplitCommandSpec(t *testing.T) {
 		wantArgs []string
 		wantErr  string
 	}{
-		{spec: "cq-zowe-sidecar", wantName: "cq-zowe-sidecar", wantArgs: []string{}},
-		{spec: "node zowe-sidecar.js --flag", wantName: "node", wantArgs: []string{"zowe-sidecar.js", "--flag"}},
-		{spec: `node "/opt/CQ Sidecar/zowe-sidecar.js"`, wantName: "node", wantArgs: []string{"/opt/CQ Sidecar/zowe-sidecar.js"}},
-		{spec: `"C:\Program Files\node\node.exe" 'side car.js'`, wantName: `C:\Program Files\node\node.exe`, wantArgs: []string{"side car.js"}},
-		{spec: `node "unterminated`, wantErr: "unterminated"},
+		{spec: "vim", wantName: "vim", wantArgs: []string{}},
+		{spec: "code --wait", wantName: "code", wantArgs: []string{"--wait"}},
+		{spec: `"/opt/CQ Editor/editor" --wait`, wantName: "/opt/CQ Editor/editor", wantArgs: []string{"--wait"}},
+		{spec: `"C:\Program Files\Editor\editor.exe" 'config file.json'`, wantName: `C:\Program Files\Editor\editor.exe`, wantArgs: []string{"config file.json"}},
+		{spec: `code "unterminated`, wantErr: "unterminated"},
 		{spec: "  ", wantErr: "empty executable"},
 		{spec: `"" arg`, wantErr: "empty executable"},
 	}
