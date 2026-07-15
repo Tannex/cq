@@ -41,7 +41,7 @@ padding.
 | `--copybook-dsn` | one copybook source required | data set or PDS member fetched as text through Zowe (z/OSMF) |
 | `-d` | none | data file to decode (`-` for stdin); omit for layout output |
 | `--data-dsn` | none | data set streamed in binary mode through Zowe (z/OSMF) |
-| `-codepage` | `cp037` | EBCDIC codepage of the data (`cp037`, `cp277`, `cp1047`, `cp1140`, `cp1142`; `ascii`/`latin1` for testing) |
+| `-codepage` | Zowe `encoding` for `--data-dsn`; otherwise `cp037` | EBCDIC codepage of the data (`cp037`, `cp277`, `cp1047`, `cp1140`, `cp1142`; `ascii`/`latin1` for testing); an explicit flag takes precedence |
 | `-format` | `auto` | copybook source format: `fixed` (cols 7–72), `free`, or `auto` |
 | `--verbose` | off | write debug information (config, Zowe calls, timings) to stderr |
 | `-record` | first | which 01-level record to decode when the copybook has several |
@@ -140,7 +140,8 @@ walking up from the current directory. It supports:
 - base, nested, default, and `ZOWE_OPT_ZOSMF_PROFILE`-selected `zosmf`
   profiles;
 - `ZOWE_OPT_HOST`, `PORT`, `BASE_PATH`, `PROTOCOL`, `USER`, `PASSWORD`,
-  `TOKEN_TYPE`, `TOKEN_VALUE`, and `REJECT_UNAUTHORIZED` overrides;
+  `TOKEN_TYPE`, `TOKEN_VALUE`, `REJECT_UNAUTHORIZED`, and `ENCODING`
+  overrides;
 - plain properties and Zowe's `secure_config_props` entry in macOS Keychain,
   Windows Credential Manager, or Secret Service/libsecret on Linux; and
 - JSON-with-comments and trailing commas, as accepted by Zowe's config
@@ -159,7 +160,9 @@ The copybook is fetched as text so z/OSMF converts its EBCDIC source, while
 the data set is streamed in binary mode to preserve packed and binary fields
 — records decode as bytes arrive, with no temporary file. Zowe
 authentication, profiles, and connection settings continue to come from the
-user's normal Zowe configuration.
+user's normal Zowe configuration. For `--data-dsn`, the resolved `zosmf`
+profile's `encoding` property selects the decoder codepage unless `-codepage`
+is supplied; cq falls back to `cp037` when the property is absent.
 
 ### Nested copybooks
 

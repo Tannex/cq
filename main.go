@@ -52,7 +52,7 @@ func run() error {
 	copybookDSN := fs.String("copybook-dsn", "", "copybook data set or member to fetch through Zowe (z/OSMF)")
 	dataPath := fs.String("d", "", "data file to decode (use - for stdin; omit for layout output)")
 	dataDSN := fs.String("data-dsn", "", "data set to stream in binary mode through Zowe (z/OSMF)")
-	codepage := fs.String("codepage", "cp037", "EBCDIC codepage of the data (cp037, cp277, cp1047, cp1140, cp1142; ascii/latin1 for testing)")
+	codepage := fs.String("codepage", "cp037", "EBCDIC codepage of the data (for --data-dsn, defaults to Zowe encoding when set; explicit flag wins)")
 	format := fs.String("format", "auto", "copybook source format: auto, fixed (cols 7-72), or free")
 	recName := fs.String("record", "", "01-level record to decode when the copybook has several (default: first)")
 	pretty := fs.Bool("pretty", false, "indent JSON output")
@@ -97,6 +97,12 @@ examples:
 `)
 	}
 	fs.Parse(os.Args[1:])
+	codepageExplicit := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "codepage" {
+			codepageExplicit = true
+		}
+	})
 
 	debugLog.SetOutput(io.Discard)
 	if *verbose {
@@ -187,7 +193,17 @@ examples:
 	} else {
 		debugLog.Printf("record %s: %d bytes per record", rec.Name, rec.MaxLength)
 	}
-	cm, err := decode.Codepage(*codepage)
+	codepageName := *codepage
+	if *dataDSN != "" && !codepageExplicit {
+		encoding, err := transport.encoding()
+		if err != nil {
+			return err
+		}
+		if encoding != "" {
+			codepageName = encoding
+		}
+	}
+	cm, err := decode.Codepage(codepageName)
 	if err != nil {
 		return err
 	}
