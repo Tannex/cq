@@ -13,8 +13,8 @@ var userConfigDir = os.UserConfigDir
 
 type config struct {
 	DSNSearchPath []string `json:"dsnSearchPath"`
-	// Sidecar overrides the command cq runs to start the Zowe sidecar for
-	// DSN access; by default cq-zowe-sidecar is found on PATH.
+	// Sidecar is a temporary migration escape hatch. When it is empty, cq
+	// resolves Zowe configuration and credentials natively.
 	Sidecar string `json:"sidecar,omitempty"`
 }
 

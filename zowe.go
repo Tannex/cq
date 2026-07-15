@@ -1,5 +1,5 @@
-// COPY member resolution through the configured DSN search path. All data
-// set access goes through the Zowe sidecar (sidecar.go).
+// COPY member resolution through the configured DSN search path. Data set
+// access goes through the transport boundary in zowe_transport.go.
 package main
 
 import (

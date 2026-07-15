@@ -35,26 +35,6 @@ const sidecarStartTimeout = 30 * time.Second
 // names one: the launcher an npm install of sidecar/ puts on PATH.
 const defaultSidecarCommand = "cq-zowe-sidecar"
 
-// zoweTransport is what the copy resolver and main need from the sidecar;
-// tests substitute a fake sidecar process behind the same interface.
-// Implementations must be safe for concurrent use. Canceling the context
-// abandons an in-flight fetch, so a resolver that already has its answer can
-// stop probes it no longer needs.
-type zoweTransport interface {
-	fetchCopybook(ctx context.Context, dsn string) ([]byte, error)
-	openDataSet(dsn string, hint downloadHint) (io.ReadCloser, error)
-}
-
-// downloadHint bounds a download when cq knows it will not need the whole
-// data set: Records > 0 asks the sidecar for a server-side record range of
-// Records records of RecordLength bytes each. The sidecar verifies the data
-// set's records really have that length and falls back to a full transfer
-// when they do not, so the hint can never truncate output.
-type downloadHint struct {
-	Records      int
-	RecordLength int
-}
-
 type sidecarRequest struct {
 	ID      uint64 `json:"id"`
 	Op      string `json:"op"`
@@ -254,10 +234,6 @@ func (s *zoweSidecar) exitError() error {
 		return s.readErr
 	}
 	return fmt.Errorf("sidecar closed the response stream")
-}
-
-func elapsed(start time.Time) time.Duration {
-	return time.Since(start).Round(time.Millisecond)
 }
 
 func (s *zoweSidecar) fetchCopybook(ctx context.Context, dsn string) ([]byte, error) {

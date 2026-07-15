@@ -1,4 +1,8 @@
-# cq Zowe sidecar
+# cq legacy Zowe sidecar
+
+The native Go Zowe config/keyring transport is now cq's default. This package
+is retained as a migration fallback for configurations that still need the
+full Zowe Node SDK profile machinery.
 
 cq's transport to z/OS: one long-lived Node process per cq run that
 
@@ -16,9 +20,8 @@ cq's transport to z/OS: one long-lived Node process per cq run that
 cd sidecar && npm install -g .
 ```
 
-That puts `cq-zowe-sidecar` on PATH, where cq finds it automatically the
-first time a run touches a DSN. To run it from somewhere else instead, name
-the command in cq's `config.json`:
+That puts `cq-zowe-sidecar` on PATH. Opt into it by naming the command in cq's
+`config.json`:
 
 ```json
 {
