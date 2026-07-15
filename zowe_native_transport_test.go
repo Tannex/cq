@@ -33,13 +33,13 @@ func zoweSessionForServer(t *testing.T, server *httptest.Server) zoweSession {
 	}
 	return zoweSession{
 		Profile: "test", Protocol: u.Scheme, Host: host, Port: port,
-		User: "IBMUSER", Password: "secret", RejectUnauthorized: false,
+		User: "IBMUSER", Password: "secret", RejectUnauthorized: true,
 	}
 }
 
 func TestNativeZoweTransportFetchesCopybookWithToken(t *testing.T) {
 	var requestErr error
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, hasCSRFHeader := r.Header[http.CanonicalHeaderKey("X-CSRF-ZOSMF-HEADER")]
 		switch {
 		case r.Method != http.MethodGet:
@@ -74,10 +74,23 @@ func TestNativeZoweTransportFetchesCopybookWithToken(t *testing.T) {
 	}
 }
 
+func TestNativeZoweTransportRejectsUntrustedTLSCertificate(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "must not be trusted")
+	}))
+	defer server.Close()
+	transport := newNativeZoweTransport(zoweSessionForServer(t, server))
+
+	_, err := transport.fetchCopybook(context.Background(), "HQ.COPYLIB(CUSTOMER)")
+	if err == nil || !strings.Contains(err.Error(), "certificate") {
+		t.Fatalf("fetchCopybook() error = %v, want certificate verification failure", err)
+	}
+}
+
 func TestNativeZoweTransportStreamsBinaryWithBasicAuth(t *testing.T) {
 	want := []byte{0x00, 0xff, 0xc1, 0x12}
 	var requestErr error
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, password, ok := r.BasicAuth()
 		switch {
 		case !ok || user != "IBMUSER" || password != "secret":
@@ -109,7 +122,7 @@ func TestNativeZoweTransportStreamsBinaryWithBasicAuth(t *testing.T) {
 
 func TestNativeZoweTransportDecodesRangedRecords(t *testing.T) {
 	var requestErr error
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("X-IBM-Data-Type"); got != "record" {
 			requestErr = fmt.Errorf("data type = %q", got)
 		}
@@ -143,7 +156,7 @@ func TestNativeZoweTransportDecodesRangedRecords(t *testing.T) {
 
 func TestNativeZoweTransportFallsBackWithoutDuplicatingRecords(t *testing.T) {
 	var requests atomic.Int32
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
 		if r.Header.Get("X-IBM-Data-Type") == "record" {
 			_ = binary.Write(w, binary.BigEndian, uint32(3))
@@ -176,7 +189,7 @@ func TestNativeZoweTransportFallsBackWithoutDuplicatingRecords(t *testing.T) {
 
 func TestNativeZoweTransportFallsBackAfterRangeHTTPError(t *testing.T) {
 	var requests atomic.Int32
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
 		if r.Header.Get("X-IBM-Data-Type") == "record" {
 			http.Error(w, "record mode unsupported", http.StatusBadRequest)
@@ -202,7 +215,7 @@ func TestNativeZoweTransportFallsBackAfterRangeHTTPError(t *testing.T) {
 }
 
 func TestNativeZoweTransportFormatsZOSMFError(t *testing.T) {
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = io.WriteString(w, `{"message":"data set is not cataloged"}`)
 	}))
@@ -228,7 +241,7 @@ func TestRunSelectsCodepageForZoweDataSet(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.Header.Get("X-IBM-Data-Type") {
 				case "text":
 					_, _ = io.WriteString(w, "01 CUSTOMER.\n  05 NAME PIC X(3).\n")

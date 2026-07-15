@@ -60,7 +60,7 @@ func TestLoadZoweSessionResolvesNestedProfileAndSecureBase(t *testing.T) {
       "secure": ["user", "password"],
     },
     "lpar1": {
-      "properties": {"basePath": "/api/v1/", "rejectUnauthorized": false},
+      "properties": {"basePath": "/api/v1/", "rejectUnauthorized": true},
       "profiles": {
         "zosmf": {"type": "zosmf", "properties": {}},
       },
@@ -88,7 +88,7 @@ func TestLoadZoweSessionResolvesNestedProfileAndSecureBase(t *testing.T) {
 	want := zoweSession{
 		Profile: "lpar1.zosmf", Protocol: "https", Host: "mainframe.example",
 		Port: 1443, BasePath: "/api/v1", User: "IBMUSER", Password: "secret",
-		RejectUnauthorized: false,
+		RejectUnauthorized: true,
 	}
 	if !reflect.DeepEqual(session, want) {
 		t.Fatalf("loadZoweSession() = %#v, want %#v", session, want)
@@ -125,6 +125,7 @@ func TestLoadZoweSessionMergesProjectUserConfigAndEnvironment(t *testing.T) {
 	env := map[string]string{
 		"ZOWE_OPT_HOST":                "override.example",
 		"ZOWE_OPT_PORT":                "7554",
+		"ZOWE_OPT_PROTOCOL":            "http",
 		"ZOWE_OPT_TOKEN_VALUE":         "token-from-env",
 		"ZOWE_OPT_REJECT_UNAUTHORIZED": "false",
 	}
@@ -133,7 +134,7 @@ func TestLoadZoweSessionMergesProjectUserConfigAndEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadZoweSession() error = %v", err)
 	}
-	if session.Profile != "lpar.zosmf" || session.Host != "override.example" || session.Port != 7554 {
+	if session.Profile != "lpar.zosmf" || session.Protocol != "http" || session.Host != "override.example" || session.Port != 7554 {
 		t.Fatalf("session selection/overrides = %#v", session)
 	}
 	if session.BasePath != "/gateway" || session.TokenType != "LtpaToken2" || session.TokenValue != "token-from-env" {
@@ -203,6 +204,23 @@ func TestLoadZoweSessionRequiresStringEncoding(t *testing.T) {
 	_, err := loadZoweSession(zoweTestOptions(home, work, &fakeZoweKeyring{}, nil))
 	if err == nil || !strings.Contains(err.Error(), "Zowe property encoding must be a string") {
 		t.Fatalf("loadZoweSession() error = %v, want string encoding error", err)
+	}
+}
+
+func TestLoadZoweSessionRejectsDisabledTLSVerification(t *testing.T) {
+	home := t.TempDir()
+	work := t.TempDir()
+	writeZoweTestFile(t, filepath.Join(home, ".zowe", "zowe.config.json"), `{
+  "profiles": {
+    "base":{"type":"base", "properties":{"host":"mainframe.example", "user":"u", "password":"p"}},
+    "zosmf":{"type":"zosmf", "properties":{"rejectUnauthorized":false}}
+  },
+  "defaults":{"base":"base", "zosmf":"zosmf"}
+}`)
+
+	_, err := loadZoweSession(zoweTestOptions(home, work, &fakeZoweKeyring{}, nil))
+	if err == nil || !strings.Contains(err.Error(), "rejectUnauthorized=false") || !strings.Contains(err.Error(), "certificate authority") {
+		t.Fatalf("loadZoweSession() error = %v, want secure TLS guidance", err)
 	}
 }
 
