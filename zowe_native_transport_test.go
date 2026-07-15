@@ -87,6 +87,24 @@ func TestNativeZoweTransportRejectsUntrustedTLSCertificate(t *testing.T) {
 	}
 }
 
+func TestNativeZoweTransportAllowsUntrustedTLSWhenConfigured(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "01 CUSTOMER.\n  05 NAME PIC X(3).\n")
+	}))
+	defer server.Close()
+	session := zoweSessionForServer(t, server)
+	session.RejectUnauthorized = false
+	transport := newNativeZoweTransport(session)
+
+	got, err := transport.fetchCopybook(context.Background(), "HQ.COPYLIB(CUSTOMER)")
+	if err != nil {
+		t.Fatalf("fetchCopybook() error = %v", err)
+	}
+	if !strings.Contains(string(got), "01 CUSTOMER") {
+		t.Fatalf("fetchCopybook() = %q", got)
+	}
+}
+
 func TestNativeZoweTransportStreamsBinaryWithBasicAuth(t *testing.T) {
 	want := []byte{0x00, 0xff, 0xc1, 0x12}
 	var requestErr error

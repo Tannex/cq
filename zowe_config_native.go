@@ -567,9 +567,6 @@ func makeZoweSession(profileName string, properties map[string]any) (zoweSession
 	if err != nil {
 		return zoweSession{}, err
 	}
-	if protocol == "https" && !rejectUnauthorized {
-		return zoweSession{}, fmt.Errorf("zosmf profile %q disables TLS certificate verification with rejectUnauthorized=false; trust the z/OSMF certificate authority instead", profileName)
-	}
 	if tokenValue == "" && user == "" {
 		return zoweSession{}, fmt.Errorf("zosmf profile %q has neither a token nor a user; log in with 'zowe auth login' or add credentials to the profile", profileName)
 	}

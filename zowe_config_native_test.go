@@ -207,7 +207,7 @@ func TestLoadZoweSessionRequiresStringEncoding(t *testing.T) {
 	}
 }
 
-func TestLoadZoweSessionRejectsDisabledTLSVerification(t *testing.T) {
+func TestLoadZoweSessionAllowsDisabledTLSVerification(t *testing.T) {
 	home := t.TempDir()
 	work := t.TempDir()
 	writeZoweTestFile(t, filepath.Join(home, ".zowe", "zowe.config.json"), `{
@@ -218,9 +218,12 @@ func TestLoadZoweSessionRejectsDisabledTLSVerification(t *testing.T) {
   "defaults":{"base":"base", "zosmf":"zosmf"}
 }`)
 
-	_, err := loadZoweSession(zoweTestOptions(home, work, &fakeZoweKeyring{}, nil))
-	if err == nil || !strings.Contains(err.Error(), "rejectUnauthorized=false") || !strings.Contains(err.Error(), "certificate authority") {
-		t.Fatalf("loadZoweSession() error = %v, want secure TLS guidance", err)
+	session, err := loadZoweSession(zoweTestOptions(home, work, &fakeZoweKeyring{}, nil))
+	if err != nil {
+		t.Fatalf("loadZoweSession() error = %v", err)
+	}
+	if session.RejectUnauthorized {
+		t.Fatal("RejectUnauthorized = true, want false")
 	}
 }
 
