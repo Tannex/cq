@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -50,21 +49,6 @@ func (f *fakeZoweTransport) fetchCopybook(ctx context.Context, dsn string) ([]by
 		return nil, member.err
 	}
 	return append([]byte(nil), member.data...), nil
-}
-
-func (f *fakeZoweTransport) openDataSet(dsn string, hint downloadHint) (io.ReadCloser, error) {
-	member, ok := f.members[dsn]
-	if !ok {
-		return nil, fmt.Errorf("data set not found: %s", dsn)
-	}
-	if member.err != nil {
-		return nil, member.err
-	}
-	data := member.data
-	if limit := hint.Records * hint.RecordLength; limit > 0 && limit < len(data) {
-		data = data[:limit]
-	}
-	return io.NopCloser(bytes.NewReader(data)), nil
 }
 
 func (f *fakeZoweTransport) requestedDSNs() []string {

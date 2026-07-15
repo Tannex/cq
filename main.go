@@ -33,15 +33,15 @@ import (
 var debugLog = log.New(io.Discard, "cq: ", 0)
 
 func main() {
-	if err := run(); err != nil {
+	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "cq:", err)
 		os.Exit(1)
 	}
 }
 
-func run() error {
-	if len(os.Args) > 1 && os.Args[1] == "config" {
-		if len(os.Args) != 2 {
+func run(args []string) error {
+	if len(args) > 0 && args[0] == "config" {
+		if len(args) != 1 {
 			return errors.New("usage: cq config")
 		}
 		return editConfig()
@@ -96,7 +96,7 @@ examples:
   cq -where DTAR107-SALE -where 'not DTAR107-VOID' -c DTAR107.cbl -d sales.bin
 `)
 	}
-	fs.Parse(os.Args[1:])
+	fs.Parse(args)
 	codepageExplicit := false
 	fs.Visit(func(f *flag.Flag) {
 		if f.Name == "codepage" {
@@ -282,7 +282,7 @@ type layoutDoc struct {
 	Fields    []*layout.Field `json:"fields"`
 }
 
-func printLayout(w io.Writer, recs []*layout.Record, pretty bool) error {
+func layoutDocuments(recs []*layout.Record) []layoutDoc {
 	docs := make([]layoutDoc, 0, len(recs))
 	for _, r := range recs {
 		d := layoutDoc{Record: r.Name, Length: r.MaxLength, Fields: r.Children}
@@ -291,11 +291,15 @@ func printLayout(w io.Writer, recs []*layout.Record, pretty bool) error {
 		}
 		docs = append(docs, d)
 	}
+	return docs
+}
+
+func printLayout(w io.Writer, recs []*layout.Record, pretty bool) error {
 	enc := json.NewEncoder(w)
 	if pretty {
 		enc.SetIndent("", "  ")
 	}
-	return enc.Encode(docs)
+	return enc.Encode(layoutDocuments(recs))
 }
 
 func decodeAll(w io.Writer, d *record.Decoder, in io.Reader, pretty bool, max int, q *query.Query, rawOut bool) error {
@@ -363,11 +367,11 @@ func decodeAll(w io.Writer, d *record.Decoder, in io.Reader, pretty bool, max in
 // queryLayout runs the jq expression against the layout document (the same
 // array printLayout writes).
 func queryLayout(w io.Writer, recs []*layout.Record, q *query.Query, rawOut, pretty bool) error {
-	var buf bytes.Buffer
-	if err := printLayout(&buf, recs, false); err != nil {
+	input, err := json.Marshal(layoutDocuments(recs))
+	if err != nil {
 		return err
 	}
-	v, err := query.FromJSON(buf.Bytes())
+	v, err := query.FromJSON(input)
 	if err != nil {
 		return err
 	}

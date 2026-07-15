@@ -43,29 +43,25 @@ func expandCopies(toks []token, resolve CopyResolver, stack []string) ([]token, 
 		if resolve == nil {
 			return nil, fmt.Errorf("line %d: COPY requires a resolver", tok.line)
 		}
-		if i+1 >= len(toks) || toks[i+1].lit || toks[i+1].isTerm() {
-			return nil, fmt.Errorf("line %d: COPY requires a member name", tok.line)
-		}
-		member := toks[i+1].text
-		if i+2 >= len(toks) || !toks[i+2].isTerm() {
-			return nil, fmt.Errorf("line %d: COPY %s uses unsupported clauses; only COPY member. is supported", tok.line, member)
+		member, err := copyMemberAt(toks, i)
+		if err != nil {
+			return nil, err
 		}
 		if len(stack) >= maxCopyDepth {
 			return nil, fmt.Errorf("COPY nesting exceeds %d members: %s", maxCopyDepth, strings.Join(stack, " -> "))
 		}
+		path := append(append([]string(nil), stack...), member)
 		for _, ancestor := range stack {
 			if ancestor == member {
-				chain := append(append([]string{}, stack...), member)
-				return nil, fmt.Errorf("COPY cycle: %s", strings.Join(chain, " -> "))
+				return nil, fmt.Errorf("COPY cycle: %s", strings.Join(path, " -> "))
 			}
 		}
 
 		src, err := resolve(member)
 		if err != nil {
-			chain := append(append([]string{}, stack...), member)
-			return nil, fmt.Errorf("resolve COPY %s: %w", strings.Join(chain, " -> "), err)
+			return nil, fmt.Errorf("resolve COPY %s: %w", strings.Join(path, " -> "), err)
 		}
-		expanded, err := expandCopies(lex(src, FormatAuto), resolve, append(stack, member))
+		expanded, err := expandCopies(lex(src, FormatAuto), resolve, path)
 		if err != nil {
 			return nil, err
 		}
@@ -74,6 +70,18 @@ func expandCopies(toks []token, resolve CopyResolver, stack []string) ([]token, 
 		i += 3
 	}
 	return out, nil
+}
+
+func copyMemberAt(toks []token, i int) (string, error) {
+	tok := toks[i]
+	if i+1 >= len(toks) || toks[i+1].lit || toks[i+1].isTerm() {
+		return "", fmt.Errorf("line %d: COPY requires a member name", tok.line)
+	}
+	member := toks[i+1].text
+	if i+2 >= len(toks) || !toks[i+2].isTerm() {
+		return "", fmt.Errorf("line %d: COPY %s uses unsupported clauses; only COPY member. is supported", tok.line, member)
+	}
+	return member, nil
 }
 
 // prefetchCopies resolves the distinct COPY members of one expansion level
@@ -95,10 +103,11 @@ func prefetchCopies(toks []token, resolve CopyResolver, stack []string) {
 			statementStart = tok.isTerm()
 			continue
 		}
-		if i+2 >= len(toks) || toks[i+1].lit || toks[i+1].isTerm() || !toks[i+2].isTerm() {
+		member, err := copyMemberAt(toks, i)
+		if err != nil {
 			return // malformed COPY; the walk reports the error
 		}
-		if member := toks[i+1].text; !seen[member] {
+		if !seen[member] {
 			seen[member] = true
 			members = append(members, member)
 		}

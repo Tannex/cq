@@ -170,22 +170,16 @@ func readZoweConfigLayers(opts zoweLoadOptions) ([]zoweConfigLayer, error) {
 	}
 	cliHome = filepath.Clean(cliHome)
 
-	var candidates []struct {
+	type configCandidate struct {
 		path   string
 		global bool
 	}
 	// Low-to-high precedence: global team, global user, project team,
 	// project user.
-	candidates = append(candidates,
-		struct {
-			path   string
-			global bool
-		}{filepath.Join(cliHome, "zowe.config.json"), true},
-		struct {
-			path   string
-			global bool
-		}{filepath.Join(cliHome, "zowe.config.user.json"), true},
-	)
+	candidates := []configCandidate{
+		{filepath.Join(cliHome, "zowe.config.json"), true},
+		{filepath.Join(cliHome, "zowe.config.user.json"), true},
+	}
 
 	work, err := filepath.Abs(opts.WorkingDir)
 	if err != nil {
@@ -196,14 +190,8 @@ func readZoweConfigLayers(opts zoweLoadOptions) ([]zoweConfigLayer, error) {
 		user := filepath.Join(dir, "zowe.config.user.json")
 		if fileExists(team) || fileExists(user) {
 			candidates = append(candidates,
-				struct {
-					path   string
-					global bool
-				}{team, false},
-				struct {
-					path   string
-					global bool
-				}{user, false},
+				configCandidate{team, false},
+				configCandidate{user, false},
 			)
 			break
 		}
@@ -244,23 +232,21 @@ func readZoweConfigFile(path string) (zoweClientConfig, error) {
 	if err != nil {
 		return zoweClientConfig{}, fmt.Errorf("read Zowe config %q: %w", path, err)
 	}
-	normalized, err := normalizeJSONC(b)
-	if err != nil {
-		return zoweClientConfig{}, fmt.Errorf("parse Zowe config %q: %w", path, err)
-	}
 	var cfg zoweClientConfig
-	dec := json.NewDecoder(bytes.NewReader(normalized))
-	dec.UseNumber()
-	if err := dec.Decode(&cfg); err != nil {
+	if err := decodeZoweJSONC(b, &cfg); err != nil {
 		return zoweClientConfig{}, fmt.Errorf("parse Zowe config %q: %w", path, err)
-	}
-	if cfg.Profiles == nil {
-		cfg.Profiles = make(map[string]zoweProfile)
-	}
-	if cfg.Defaults == nil {
-		cfg.Defaults = make(map[string]string)
 	}
 	return cfg, nil
+}
+
+func decodeZoweJSONC(input []byte, dst any) error {
+	normalized, err := normalizeJSONC(input)
+	if err != nil {
+		return err
+	}
+	dec := json.NewDecoder(bytes.NewReader(normalized))
+	dec.UseNumber()
+	return dec.Decode(dst)
 }
 
 func zoweLayersHaveSecureFields(layers []zoweConfigLayer) bool {
@@ -304,14 +290,8 @@ func loadZoweVault(keyring zoweKeyring, goos string) (map[string]map[string]any,
 	if err != nil {
 		return nil, fmt.Errorf("decode secure Zowe properties: %w", err)
 	}
-	normalized, err := normalizeJSONC(decoded)
-	if err != nil {
-		return nil, fmt.Errorf("parse secure Zowe properties: %w", err)
-	}
 	var vault map[string]map[string]any
-	dec := json.NewDecoder(bytes.NewReader(normalized))
-	dec.UseNumber()
-	if err := dec.Decode(&vault); err != nil {
+	if err := decodeZoweJSONC(decoded, &vault); err != nil {
 		return nil, fmt.Errorf("parse secure Zowe properties: %w", err)
 	}
 	return vault, nil

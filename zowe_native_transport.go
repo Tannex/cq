@@ -173,9 +173,7 @@ func (r *rangedZoweStream) Read(p []byte) (int, error) {
 			return 0, r.err
 		}
 		if r.plain {
-			n, err := r.body.Read(p)
-			r.delivered += int64(n)
-			return n, err
+			return r.body.Read(p)
 		}
 
 		var header [4]byte

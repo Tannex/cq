@@ -9,10 +9,7 @@ import (
 
 func runWithArgs(t *testing.T, args ...string) error {
 	t.Helper()
-	original := os.Args
-	os.Args = append([]string{"cq"}, args...)
-	t.Cleanup(func() { os.Args = original })
-	return run()
+	return run(args)
 }
 
 // captureStdout redirects os.Stdout for the test; the returned function stops

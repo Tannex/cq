@@ -13,9 +13,13 @@ import (
 // flight at once.
 const maxConcurrentZoweFetches = 8
 
+type copybookFetcher interface {
+	fetchCopybook(context.Context, string) ([]byte, error)
+}
+
 type dsnCopyResolver struct {
 	searchPaths []string
-	transport   zoweTransport
+	transport   copybookFetcher
 	slots       chan struct{}
 
 	mu    sync.Mutex
@@ -27,7 +31,7 @@ type copyResult struct {
 	err  error
 }
 
-func newDSNCopyResolver(searchPaths []string, transport zoweTransport) *dsnCopyResolver {
+func newDSNCopyResolver(searchPaths []string, transport copybookFetcher) *dsnCopyResolver {
 	return &dsnCopyResolver{
 		searchPaths: searchPaths,
 		transport:   transport,
