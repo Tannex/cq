@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -12,6 +13,29 @@ func runWithArgs(t *testing.T, args ...string) error {
 	os.Args = append([]string{"cq"}, args...)
 	t.Cleanup(func() { os.Args = original })
 	return run()
+}
+
+// captureStdout redirects os.Stdout for the test; the returned function stops
+// capturing and returns everything written.
+func captureStdout(t *testing.T) func() string {
+	t.Helper()
+	out, err := os.Create(filepath.Join(t.TempDir(), "stdout"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := os.Stdout
+	os.Stdout = out
+	return func() string {
+		os.Stdout = original
+		if err := out.Close(); err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(out.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
 }
 
 func TestRunRejectsPositionalCopybook(t *testing.T) {

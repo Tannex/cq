@@ -81,7 +81,7 @@ var loadDefaultZoweSession = func() (zoweSession, error) {
 	})
 }
 
-// loadZoweSession resolves the same configuration surface the sidecar used:
+// loadZoweSession resolves the Zowe team configuration surface:
 // global and project team/user configs, nested profiles, the default base and
 // zosmf profiles, secure properties, and ZOWE_OPT_* overrides.
 func loadZoweSession(opts zoweLoadOptions) (zoweSession, error) {

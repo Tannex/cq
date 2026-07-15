@@ -124,17 +124,7 @@ examples:
 		return err
 	}
 
-	// Native Zowe config/keyring resolution is the default. An explicitly
-	// configured sidecar remains as a migration escape hatch while this proof
-	// of concept is exercised against more real-world configurations.
-	var transport zoweTransport
-	if cfg.Sidecar != "" {
-		sidecar := newLazySidecar(cfg.Sidecar)
-		defer sidecar.Close()
-		transport = sidecar
-	} else {
-		transport = newLazyNativeZoweTransport(loadDefaultZoweSession)
-	}
+	transport := newLazyNativeZoweTransport(loadDefaultZoweSession)
 
 	var cbFormat copybook.Format
 	switch *format {

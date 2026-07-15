@@ -6,9 +6,9 @@ import (
 	"time"
 )
 
-// zoweTransport is the data-set boundary shared by the native implementation,
-// the temporary legacy sidecar, and tests. Implementations must be safe for
-// concurrent use. Canceling the context abandons an in-flight copybook fetch.
+// zoweTransport is the data-set boundary used by the native implementation
+// and tests. Implementations must be safe for concurrent use. Canceling the
+// context abandons an in-flight copybook fetch.
 type zoweTransport interface {
 	fetchCopybook(ctx context.Context, dsn string) ([]byte, error)
 	openDataSet(dsn string, hint downloadHint) (io.ReadCloser, error)

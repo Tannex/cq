@@ -229,7 +229,7 @@ func TestRunUsesNativeZoweTransportByDefault(t *testing.T) {
 	originalLoader := loadDefaultZoweSession
 	loadDefaultZoweSession = func() (zoweSession, error) { return session, nil }
 	t.Cleanup(func() { loadDefaultZoweSession = originalLoader })
-	stubUserConfigDir(t, t.TempDir(), nil) // no legacy sidecar override
+	stubUserConfigDir(t, t.TempDir(), nil)
 	stdout := captureStdout(t)
 
 	err := runWithArgs(t,

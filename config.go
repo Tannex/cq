@@ -13,9 +13,6 @@ var userConfigDir = os.UserConfigDir
 
 type config struct {
 	DSNSearchPath []string `json:"dsnSearchPath"`
-	// Sidecar is a temporary migration escape hatch. When it is empty, cq
-	// resolves Zowe configuration and credentials natively.
-	Sidecar string `json:"sidecar,omitempty"`
 }
 
 func loadConfig() (config, error) {

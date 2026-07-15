@@ -146,13 +146,10 @@ walking up from the current directory. It supports:
 - JSON-with-comments and trailing commas, as accepted by Zowe's config
   reader.
 
-This is the native parser/keyring proof of concept. It intentionally does not
-load Zowe V1 profiles, arbitrary Imperative credential-manager plug-ins, or
-client-certificate identities yet. For a configuration that needs one of
-those SDK-specific paths, the [legacy sidecar](sidecar/README.md) remains an
-explicit migration escape hatch: install it, then set `"sidecar"` to its
-command in cq's `config.json`. An empty or absent `"sidecar"` uses the native
-path.
+cq does not currently load Zowe V1 profiles, arbitrary Imperative
+credential-manager plug-ins, or client-certificate identities. Those
+configurations must be migrated to a supported Zowe team configuration before
+using DSN sources.
 
 `cq` is an independent project and is not affiliated with or endorsed by The
 Linux Foundation or the Zowe project. Zowe® is a registered trademark of The

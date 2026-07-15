@@ -19,9 +19,7 @@ import (
 
 const maxZoweErrorBody = 16 * 1024
 
-// nativeZoweTransport talks to z/OSMF in-process. It implements the same
-// boundary as zoweSidecar, allowing the copy resolver and decoder to remain
-// unchanged while removing Node and the newline-JSON hop from the normal path.
+// nativeZoweTransport talks to z/OSMF in-process.
 type nativeZoweTransport struct {
 	session zoweSession
 	client  *http.Client
@@ -36,8 +34,7 @@ func newNativeZoweTransport(session zoweSession) *nativeZoweTransport {
 		} else {
 			tlsConfig = tlsConfig.Clone()
 		}
-		// This setting is an explicit Zowe profile choice, equivalent to the
-		// sidecar's rejectUnauthorized=false behavior.
+		// This setting is an explicit Zowe profile choice.
 		tlsConfig.InsecureSkipVerify = true //nolint:gosec
 		transport.TLSClientConfig = tlsConfig
 	}
