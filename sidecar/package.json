@@ -1,0 +1,17 @@
+{
+  "name": "cq-zowe-sidecar",
+  "version": "0.0.1",
+  "private": true,
+  "description": "cq data set access through the Zowe Node SDK (ProfileInfo auth reuse + streaming z/OSMF REST)",
+  "main": "zowe-sidecar.js",
+  "bin": {
+    "cq-zowe-sidecar": "zowe-sidecar.js"
+  },
+  "engines": {
+    "node": ">=20.9.0"
+  },
+  "dependencies": {
+    "@zowe/imperative": "^8.0.0",
+    "@zowe/secrets-for-zowe-sdk": "^8.32.0"
+  }
+}

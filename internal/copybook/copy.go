@@ -3,11 +3,14 @@ package copybook
 import (
 	"fmt"
 	"strings"
+	"sync"
 )
 
 const maxCopyDepth = 64
 
-// CopyResolver returns the source of a named copybook member.
+// CopyResolver returns the source of a named copybook member. Resolvers must
+// be safe for concurrent calls: expansion prefetches the members of a level
+// in parallel so slow lookups (such as per-member Zowe requests) overlap.
 type CopyResolver func(name string) (string, error)
 
 // ParseWithCopies expands plain COPY member statements recursively before
@@ -25,6 +28,7 @@ func ParseWithCopies(src string, f Format, resolve CopyResolver) ([]*Item, error
 }
 
 func expandCopies(toks []token, resolve CopyResolver, stack []string) ([]token, error) {
+	prefetchCopies(toks, resolve, stack)
 	var out []token
 	statementStart := true
 	for i := 0; i < len(toks); {
@@ -70,6 +74,49 @@ func expandCopies(toks []token, resolve CopyResolver, stack []string) ([]token, 
 		i += 3
 	}
 	return out, nil
+}
+
+// prefetchCopies resolves the distinct COPY members of one expansion level
+// concurrently to warm the resolver's cache. Failures are ignored here; the
+// sequential walk in expandCopies reports them in source order.
+func prefetchCopies(toks []token, resolve CopyResolver, stack []string) {
+	if resolve == nil || len(stack) >= maxCopyDepth {
+		return
+	}
+	seen := make(map[string]bool, len(stack))
+	for _, ancestor := range stack {
+		seen[ancestor] = true // the walk stops on cycles before resolving
+	}
+	var members []string
+	statementStart := true
+	for i := 0; i < len(toks); i++ {
+		tok := toks[i]
+		if !statementStart || tok.lit || tok.text != "COPY" {
+			statementStart = tok.isTerm()
+			continue
+		}
+		if i+2 >= len(toks) || toks[i+1].lit || toks[i+1].isTerm() || !toks[i+2].isTerm() {
+			return // malformed COPY; the walk reports the error
+		}
+		if member := toks[i+1].text; !seen[member] {
+			seen[member] = true
+			members = append(members, member)
+		}
+		statementStart = true
+		i += 2
+	}
+	if len(members) < 2 {
+		return
+	}
+	var wg sync.WaitGroup
+	for _, member := range members {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = resolve(member)
+		}()
+	}
+	wg.Wait()
 }
 
 func rejectProgramSource(toks []token) error {

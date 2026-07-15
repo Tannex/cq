@@ -1,9 +1,12 @@
 package copybook
 
 import (
+	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestParseWithNestedCopies(t *testing.T) {
@@ -44,6 +47,41 @@ func TestParseWithFixedFormatCopy(t *testing.T) {
 	}
 	if got := items[0].Children[0].Name; got != "VALUE-FIELD" {
 		t.Fatalf("expanded child = %q, want VALUE-FIELD", got)
+	}
+}
+
+func TestParseWithCopiesResolvesSiblingMembersConcurrently(t *testing.T) {
+	// Each resolution blocks until both siblings have been requested. A
+	// sequential expansion never issues the second request, so the first
+	// one times out and returns an error.
+	var pending atomic.Int32
+	pending.Store(2)
+	release := make(chan struct{})
+	resolve := func(name string) (string, error) {
+		if pending.Add(-1) == 0 {
+			close(release)
+		}
+		select {
+		case <-release:
+		case <-time.After(5 * time.Second):
+			return "", errors.New("sibling COPY members were not resolved concurrently")
+		}
+		switch name {
+		case "NAME":
+			return "05 NAME PIC X(3).\n", nil
+		case "FLAGS":
+			return "05 FLAG PIC X(1).\n", nil
+		default:
+			return "", fmt.Errorf("unexpected member %s", name)
+		}
+	}
+
+	items, err := ParseWithCopies("01 CUSTOMER.\n COPY NAME.\n COPY FLAGS.\n", FormatAuto, resolve)
+	if err != nil {
+		t.Fatalf("ParseWithCopies() error = %v", err)
+	}
+	if len(items[0].Children) != 2 || items[0].Children[0].Name != "NAME" || items[0].Children[1].Name != "FLAG" {
+		t.Fatalf("expanded tree = %+v, want CUSTOMER > (NAME, FLAG)", items[0])
 	}
 }
 

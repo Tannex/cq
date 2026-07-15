@@ -12,17 +12,22 @@ import (
 var userConfigDir = os.UserConfigDir
 
 type config struct {
-	DSNSearchPath []string `json:"DSNSearchPath"`
+	DSNSearchPath []string `json:"dsnSearchPath"`
+	// Sidecar overrides the command cq runs to start the Zowe sidecar for
+	// DSN access; by default cq-zowe-sidecar is found on PATH.
+	Sidecar string `json:"sidecar,omitempty"`
 }
 
 func loadConfig() (config, error) {
 	path, err := defaultConfigFile()
 	if err != nil {
+		debugLog.Printf("config: no user config directory: %v", err)
 		return config{}, nil
 	}
 	b, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
+			debugLog.Printf("config %s: not found", path)
 			return config{}, nil
 		}
 		return config{}, fmt.Errorf("read config %q: %w", path, err)
@@ -34,13 +39,14 @@ func loadConfig() (config, error) {
 	for i, dsn := range cfg.DSNSearchPath {
 		dsn = strings.TrimSpace(dsn)
 		if dsn == "" {
-			return config{}, fmt.Errorf("parse config %q: DSNSearchPath[%d] is empty", path, i)
+			return config{}, fmt.Errorf("parse config %q: dsnSearchPath[%d] is empty", path, i)
 		}
 		if strings.ContainsAny(dsn, "()") {
-			return config{}, fmt.Errorf("parse config %q: DSNSearchPath[%d] must name a library without a member: %q", path, i, dsn)
+			return config{}, fmt.Errorf("parse config %q: dsnSearchPath[%d] must name a library without a member: %q", path, i, dsn)
 		}
 		cfg.DSNSearchPath[i] = dsn
 	}
+	debugLog.Printf("config %s: dsnSearchPath %v", path, cfg.DSNSearchPath)
 	return cfg, nil
 }
 

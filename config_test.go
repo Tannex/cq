@@ -16,7 +16,7 @@ func TestLoadConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(configDir, "config.json")
-	if err := os.WriteFile(path, []byte(`{"DSNSearchPath":[" HQL.CPY.SRC ","HQL.COB.SRC"]}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"dsnSearchPath":[" HQL.CPY.SRC ","HQL.COB.SRC"]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -63,7 +63,7 @@ func TestLoadConfigRejectsMemberInSearchPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(configDir, "config.json")
-	if err := os.WriteFile(path, []byte(`{"DSNSearchPath":["HQL.CPY.SRC(MEMBER)"]}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"dsnSearchPath":["HQL.CPY.SRC(MEMBER)"]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

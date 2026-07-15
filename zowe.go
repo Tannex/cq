@@ -1,113 +1,103 @@
+// COPY member resolution through the configured DSN search path. All data
+// set access goes through the Zowe sidecar (sidecar.go).
 package main
 
 import (
-	"errors"
+	"context"
 	"fmt"
-	"os"
-	"os/exec"
 	"strings"
+	"sync"
 )
 
-var zoweCommand = func(args ...string) *exec.Cmd {
-	return exec.Command("zowe", args...)
-}
-
-func fetchZoweCopybook(dsn string) ([]byte, error) {
-	cmd := zoweCommand("zos-files", "view", "data-set", dsn)
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, zoweCommandError(dsn, err, exitStderr(err))
-	}
-	return out, nil
-}
+// maxConcurrentZoweFetches bounds the data set reads a resolver has in
+// flight at once; each is one HTTP request on the sidecar's z/OSMF session.
+const maxConcurrentZoweFetches = 8
 
 type dsnCopyResolver struct {
 	searchPaths []string
-	cache       map[string]string
+	transport   zoweTransport
+	slots       chan struct{}
+
+	mu    sync.Mutex
+	cache map[string]copyResult
 }
 
-func newDSNCopyResolver(searchPaths []string) *dsnCopyResolver {
-	return &dsnCopyResolver{searchPaths: searchPaths, cache: make(map[string]string)}
+type copyResult struct {
+	text string
+	err  error
 }
 
+func newDSNCopyResolver(searchPaths []string, transport zoweTransport) *dsnCopyResolver {
+	return &dsnCopyResolver{
+		searchPaths: searchPaths,
+		transport:   transport,
+		slots:       make(chan struct{}, maxConcurrentZoweFetches),
+		cache:       make(map[string]copyResult),
+	}
+}
+
+// Resolve is safe for concurrent use so COPY expansion can prefetch the
+// members of a level in parallel.
 func (r *dsnCopyResolver) Resolve(member string) (string, error) {
 	member = strings.ToUpper(strings.TrimSpace(member))
-	if src, ok := r.cache[member]; ok {
-		return src, nil
+	r.mu.Lock()
+	res, ok := r.cache[member]
+	r.mu.Unlock()
+	if ok {
+		debugLog.Printf("COPY %s: cached", member)
+		return res.text, res.err
 	}
 	if len(r.searchPaths) == 0 {
-		return "", fmt.Errorf("COPY %s requires DSNSearchPath in the user config file", member)
+		return "", fmt.Errorf("COPY %s requires dsnSearchPath in the user config file", member)
+	}
+	res = r.probeSearchPaths(member)
+	r.mu.Lock()
+	r.cache[member] = res
+	r.mu.Unlock()
+	return res.text, res.err
+}
+
+// probeSearchPaths queries every library concurrently and keeps the result
+// from the earliest library in search order that has the member, so the
+// configured precedence still decides which copy wins. It returns as soon as
+// the winner is decided — a success whose earlier candidates have all failed
+// — and cancels the probes still in flight, so a slow later library never
+// delays or blocks an earlier match.
+func (r *dsnCopyResolver) probeSearchPaths(member string) copyResult {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	type probe struct {
+		i   int
+		res copyResult
+	}
+	resCh := make(chan probe, len(r.searchPaths))
+	for i, library := range r.searchPaths {
+		go func() {
+			r.slots <- struct{}{}
+			defer func() { <-r.slots }()
+			src, err := r.transport.fetchCopybook(ctx, fmt.Sprintf("%s(%s)", library, member))
+			resCh <- probe{i: i, res: copyResult{text: string(src), err: err}}
+		}()
+	}
+
+	results := make([]*copyResult, len(r.searchPaths))
+	next := 0 // earliest library whose outcome is still unknown
+	for range r.searchPaths {
+		p := <-resCh
+		results[p.i] = &p.res
+		for next < len(results) && results[next] != nil {
+			if results[next].err == nil {
+				debugLog.Printf("COPY %s: using %s(%s)", member, r.searchPaths[next], member)
+				return copyResult{text: results[next].text}
+			}
+			next++
+		}
 	}
 
 	var failures []string
-	for _, library := range r.searchPaths {
-		dsn := fmt.Sprintf("%s(%s)", library, member)
-		src, err := fetchZoweCopybook(dsn)
-		if err == nil {
-			text := string(src)
-			r.cache[member] = text
-			return text, nil
-		}
-		failures = append(failures, err.Error())
+	for _, res := range results {
+		failures = append(failures, res.err.Error())
 	}
-	return "", fmt.Errorf("COPY %s was not resolved through DSNSearchPath:\n  %s", member, strings.Join(failures, "\n  "))
-}
-
-type temporaryDataFile struct {
-	*os.File
-	path string
-}
-
-func downloadZoweDataSet(dsn string) (*temporaryDataFile, error) {
-	temp, err := os.CreateTemp("", "cq-zowe-*.bin")
-	if err != nil {
-		return nil, fmt.Errorf("create temporary file for Zowe data set %q: %w", dsn, err)
-	}
-	path := temp.Name()
-	if err := temp.Close(); err != nil {
-		_ = os.Remove(path)
-		return nil, fmt.Errorf("prepare temporary file for Zowe data set %q: %w", dsn, err)
-	}
-	ok := false
-	defer func() {
-		if !ok {
-			_ = os.Remove(path)
-		}
-	}()
-
-	cmd := zoweCommand("zos-files", "download", "data-set", dsn,
-		"--binary", "--file", path, "--overwrite")
-	if _, err := cmd.Output(); err != nil {
-		return nil, zoweCommandError(dsn, err, exitStderr(err))
-	}
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("open downloaded Zowe data set %q: %w", dsn, err)
-	}
-	ok = true
-	return &temporaryDataFile{File: f, path: path}, nil
-}
-
-func (f *temporaryDataFile) Close() error {
-	closeErr := f.File.Close()
-	removeErr := os.Remove(f.path)
-	if errors.Is(removeErr, os.ErrNotExist) {
-		removeErr = nil
-	}
-	return errors.Join(closeErr, removeErr)
-}
-
-func exitStderr(err error) string {
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
-		return string(exitErr.Stderr)
-	}
-	return ""
-}
-
-func zoweCommandError(dsn string, err error, stderr string) error {
-	if message := strings.TrimSpace(stderr); message != "" {
-		return fmt.Errorf("Zowe data set %q: %s", dsn, message)
-	}
-	return fmt.Errorf("Zowe data set %q: %w", dsn, err)
+	debugLog.Printf("COPY %s: not found in any of %d libraries", member, len(r.searchPaths))
+	return copyResult{err: fmt.Errorf("COPY %s was not resolved through dsnSearchPath:\n  %s", member, strings.Join(failures, "\n  "))}
 }

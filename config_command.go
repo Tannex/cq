@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-const initialConfig = "{\n  \"DSNSearchPath\": []\n}\n"
+const initialConfig = "{\n  \"dsnSearchPath\": []\n}\n"
 
 var launchConfigEditor = func(path string) error {
 	name, args, err := configEditorInvocation(runtime.GOOS, os.Getenv, path)
@@ -52,7 +52,7 @@ func editConfig() error {
 func configEditorInvocation(goos string, getenv func(string) string, path string) (string, []string, error) {
 	for _, key := range []string{"VISUAL", "EDITOR"} {
 		if spec := strings.TrimSpace(getenv(key)); spec != "" {
-			name, args, err := splitEditorSpec(spec)
+			name, args, err := splitCommandSpec(spec)
 			if err != nil {
 				return "", nil, fmt.Errorf("parse $%s: %w", key, err)
 			}
@@ -72,20 +72,40 @@ func configEditorInvocation(goos string, getenv func(string) string, path string
 	}
 }
 
-func splitEditorSpec(spec string) (string, []string, error) {
-	if spec[0] != '\'' && spec[0] != '"' {
-		parts := strings.Fields(spec)
-		return parts[0], parts[1:], nil
+// splitCommandSpec splits one command string (an editor spec, the sidecar
+// command) into an executable and its arguments. Single- or double-quoted
+// segments keep their spaces, so executables and arguments whose paths
+// contain spaces survive.
+func splitCommandSpec(spec string) (string, []string, error) {
+	var tokens []string
+	var cur strings.Builder
+	inToken := false
+	for i := 0; i < len(spec); i++ {
+		switch c := spec[i]; {
+		case c == '\'' || c == '"':
+			end := strings.IndexByte(spec[i+1:], c)
+			if end < 0 {
+				return "", nil, fmt.Errorf("unterminated %c-quoted string", c)
+			}
+			cur.WriteString(spec[i+1 : i+1+end])
+			inToken = true
+			i += end + 1
+		case c == ' ' || c == '\t':
+			if inToken {
+				tokens = append(tokens, cur.String())
+				cur.Reset()
+				inToken = false
+			}
+		default:
+			cur.WriteByte(c)
+			inToken = true
+		}
 	}
-	quote := spec[0]
-	end := strings.IndexByte(spec[1:], quote)
-	if end < 0 {
-		return "", nil, fmt.Errorf("unterminated quoted executable")
+	if inToken {
+		tokens = append(tokens, cur.String())
 	}
-	end++
-	name := spec[1:end]
-	if name == "" {
-		return "", nil, fmt.Errorf("editor executable is empty")
+	if len(tokens) == 0 || tokens[0] == "" {
+		return "", nil, fmt.Errorf("empty executable")
 	}
-	return name, strings.Fields(spec[end+1:]), nil
+	return tokens[0], tokens[1:], nil
 }

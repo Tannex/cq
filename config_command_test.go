@@ -43,7 +43,7 @@ func TestRunConfigPreservesExistingFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(configDir, "config.json")
-	const existing = `{"DSNSearchPath":["HQL.CPY.SRC"]}`
+	const existing = `{"dsnSearchPath":["HQL.CPY.SRC"]}`
 	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -67,6 +67,38 @@ func TestRunConfigRejectsArguments(t *testing.T) {
 	err := runWithArgs(t, "config", "extra")
 	if err == nil || !strings.Contains(err.Error(), "usage: cq config") {
 		t.Fatalf("run() error = %v, want config usage", err)
+	}
+}
+
+func TestSplitCommandSpec(t *testing.T) {
+	tests := []struct {
+		spec     string
+		wantName string
+		wantArgs []string
+		wantErr  string
+	}{
+		{spec: "cq-zowe-sidecar", wantName: "cq-zowe-sidecar", wantArgs: []string{}},
+		{spec: "node zowe-sidecar.js --flag", wantName: "node", wantArgs: []string{"zowe-sidecar.js", "--flag"}},
+		{spec: `node "/opt/CQ Sidecar/zowe-sidecar.js"`, wantName: "node", wantArgs: []string{"/opt/CQ Sidecar/zowe-sidecar.js"}},
+		{spec: `"C:\Program Files\node\node.exe" 'side car.js'`, wantName: `C:\Program Files\node\node.exe`, wantArgs: []string{"side car.js"}},
+		{spec: `node "unterminated`, wantErr: "unterminated"},
+		{spec: "  ", wantErr: "empty executable"},
+		{spec: `"" arg`, wantErr: "empty executable"},
+	}
+	for _, tt := range tests {
+		name, args, err := splitCommandSpec(tt.spec)
+		if tt.wantErr != "" {
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("splitCommandSpec(%q) error = %v, want %q", tt.spec, err, tt.wantErr)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("splitCommandSpec(%q) error = %v", tt.spec, err)
+		}
+		if name != tt.wantName || !reflect.DeepEqual(args, tt.wantArgs) {
+			t.Fatalf("splitCommandSpec(%q) = %q %q, want %q %q", tt.spec, name, args, tt.wantName, tt.wantArgs)
+		}
 	}
 }
 
