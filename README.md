@@ -147,9 +147,11 @@ walking up from the current directory. It supports:
 - JSON-with-comments and trailing commas, as accepted by Zowe's config
   reader.
 
-HTTPS connections always verify the server certificate. Profiles with
-`rejectUnauthorized: false` are rejected; install the z/OSMF certificate
-authority in the operating-system trust store instead.
+HTTPS connections verify the server certificate by default. When a profile
+explicitly sets `rejectUnauthorized: false`, cq follows that setting and
+disables certificate verification for its z/OSMF connection. This permits
+man-in-the-middle attacks; prefer installing the z/OSMF certificate authority
+in the operating-system trust store.
 
 cq does not currently load Zowe V1 profiles, arbitrary Imperative
 credential-manager plug-ins, or client-certificate identities. Those
