@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -226,36 +228,70 @@ func TestNativeZoweTransportFormatsZOSMFError(t *testing.T) {
 	}
 }
 
-func TestRunUsesNativeZoweTransportByDefault(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.Header.Get("X-IBM-Data-Type") {
-		case "text":
-			_, _ = io.WriteString(w, "01 CUSTOMER.\n  05 NAME PIC X(3).\n")
-		case "binary":
-			_, _ = io.WriteString(w, "BOB")
-		default:
-			http.Error(w, "unexpected data type", http.StatusBadRequest)
-		}
-	}))
-	defer server.Close()
-	session := zoweSessionForServer(t, server)
+func TestRunSelectsCodepageForZoweDataSet(t *testing.T) {
+	tests := []struct {
+		name     string
+		encoding string
+		data     []byte
+		args     []string
+	}{
+		{name: "profile encoding", encoding: "ascii", data: []byte("BOB")},
+		{name: "explicit flag", encoding: "cp037", data: []byte("BOB"), args: []string{"-codepage", "ascii"}},
+		{name: "cp037 fallback", data: []byte{0xc2, 0xd6, 0xc2}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.Header.Get("X-IBM-Data-Type") {
+				case "text":
+					_, _ = io.WriteString(w, "01 CUSTOMER.\n  05 NAME PIC X(3).\n")
+				case "binary":
+					_, _ = w.Write(tt.data)
+				default:
+					http.Error(w, "unexpected data type", http.StatusBadRequest)
+				}
+			}))
+			defer server.Close()
+			session := zoweSessionForServer(t, server)
+			session.Encoding = tt.encoding
+			originalLoader := loadDefaultZoweSession
+			loadDefaultZoweSession = func() (zoweSession, error) { return session, nil }
+			t.Cleanup(func() { loadDefaultZoweSession = originalLoader })
+			stubUserConfigDir(t, t.TempDir(), nil)
+			stdout := captureStdout(t)
+
+			args := []string{
+				"--copybook-dsn", "HQ.COPYLIB(CUSTOMER)",
+				"--data-dsn", "HQ.CUSTOMER.DATA",
+			}
+			args = append(args, tt.args...)
+			err := runWithArgs(t, args...)
+			got := stdout()
+			if err != nil {
+				t.Fatalf("run() error = %v", err)
+			}
+			if !strings.Contains(got, `"NAME":"BOB"`) {
+				t.Fatalf("run() output = %s", got)
+			}
+		})
+	}
+}
+
+func TestRunReportsUnsupportedZoweEncoding(t *testing.T) {
+	copybook := filepath.Join(t.TempDir(), "customer.cpy")
+	if err := os.WriteFile(copybook, []byte("01 CUSTOMER.\n  05 NAME PIC X(3).\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	originalLoader := loadDefaultZoweSession
-	loadDefaultZoweSession = func() (zoweSession, error) { return session, nil }
+	loadDefaultZoweSession = func() (zoweSession, error) {
+		return zoweSession{Encoding: "utf-8"}, nil
+	}
 	t.Cleanup(func() { loadDefaultZoweSession = originalLoader })
 	stubUserConfigDir(t, t.TempDir(), nil)
-	stdout := captureStdout(t)
 
-	err := runWithArgs(t,
-		"--copybook-dsn", "HQ.COPYLIB(CUSTOMER)",
-		"--data-dsn", "HQ.CUSTOMER.DATA",
-		"-codepage", "ascii",
-	)
-	got := stdout()
-	if err != nil {
-		t.Fatalf("run() error = %v", err)
-	}
-	if !strings.Contains(got, `"NAME":"BOB"`) {
-		t.Fatalf("run() output = %s", got)
+	err := runWithArgs(t, "-c", copybook, "--data-dsn", "HQ.CUSTOMER.DATA")
+	if err == nil || !strings.Contains(err.Error(), `decode: unknown codepage "utf-8"`) {
+		t.Fatalf("run() error = %v, want normal unsupported-codepage error", err)
 	}
 }
 
@@ -269,11 +305,23 @@ func TestRunLocalInputDoesNotLoadZoweConfiguration(t *testing.T) {
 	t.Cleanup(func() { loadDefaultZoweSession = originalLoader })
 	stubUserConfigDir(t, t.TempDir(), nil)
 	stdout := captureStdout(t)
+	root := t.TempDir()
+	copybook := filepath.Join(root, "customer.cpy")
+	data := filepath.Join(root, "customer.bin")
+	if err := os.WriteFile(copybook, []byte("01 CUSTOMER.\n  05 NAME PIC X(3).\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(data, []byte{0xc2, 0xd6, 0xc2}, 0o600); err != nil {
+		t.Fatal(err)
+	}
 
-	err := runWithArgs(t, "-c", "testdata/copybooks/cb2xml/Vendor.cbl")
-	_ = stdout()
+	err := runWithArgs(t, "-c", copybook, "-d", data)
+	got := stdout()
 	if err != nil {
 		t.Fatalf("run() error = %v", err)
+	}
+	if !strings.Contains(got, `"NAME":"BOB"`) {
+		t.Fatalf("run() output = %s", got)
 	}
 	if loads.Load() != 0 {
 		t.Fatalf("Zowe config loads = %d, want zero for local input", loads.Load())

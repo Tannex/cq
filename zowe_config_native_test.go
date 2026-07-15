@@ -145,6 +145,68 @@ func TestLoadZoweSessionMergesProjectUserConfigAndEnvironment(t *testing.T) {
 	}
 }
 
+func TestLoadZoweSessionResolvesEncodingPrecedence(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	writeZoweTestFile(t, filepath.Join(home, ".zowe", "zowe.config.json"), `{
+  "profiles": {
+    "base":{"type":"base", "properties":{"host":"host", "user":"u", "password":"p", "encoding":"IBM-277"}},
+    "base_only":{"type":"zosmf"},
+    "lpar":{"properties":{"encoding":"IBM-1047"}, "profiles":{"zosmf":{"type":"zosmf"}}},
+    "layered":{"type":"zosmf", "properties":{"encoding":"IBM-037"}}
+  },
+  "defaults":{"base":"base", "zosmf":"base_only"}
+}`)
+	writeZoweTestFile(t, filepath.Join(project, "zowe.config.json"), `{
+  "profiles":{"layered":{"properties":{"encoding":"IBM-1047"}}}
+}`)
+	writeZoweTestFile(t, filepath.Join(project, "zowe.config.user.json"), `{
+  "profiles":{"layered":{"properties":{"encoding":" IBM-1140 "}}}
+}`)
+
+	tests := []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{name: "base profile", env: map[string]string{"ZOWE_OPT_ZOSMF_PROFILE": "base_only"}, want: "IBM-277"},
+		{name: "nested parent", env: map[string]string{"ZOWE_OPT_ZOSMF_PROFILE": "lpar.zosmf"}, want: "IBM-1047"},
+		{name: "project user layer", env: map[string]string{"ZOWE_OPT_ZOSMF_PROFILE": "layered"}, want: "IBM-1140"},
+		{name: "environment", env: map[string]string{
+			"ZOWE_OPT_ZOSMF_PROFILE": "layered",
+			"ZOWE_OPT_ENCODING":      "IBM-1142",
+		}, want: "IBM-1142"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			session, err := loadZoweSession(zoweTestOptions(home, project, &fakeZoweKeyring{}, tt.env))
+			if err != nil {
+				t.Fatalf("loadZoweSession() error = %v", err)
+			}
+			if session.Encoding != tt.want {
+				t.Fatalf("session.Encoding = %q, want %q", session.Encoding, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadZoweSessionRequiresStringEncoding(t *testing.T) {
+	home := t.TempDir()
+	work := t.TempDir()
+	writeZoweTestFile(t, filepath.Join(home, ".zowe", "zowe.config.json"), `{
+  "profiles": {
+    "base":{"type":"base", "properties":{"host":"host", "user":"u", "password":"p"}},
+    "zosmf":{"type":"zosmf", "properties":{"encoding":1047}}
+  },
+  "defaults":{"base":"base", "zosmf":"zosmf"}
+}`)
+
+	_, err := loadZoweSession(zoweTestOptions(home, work, &fakeZoweKeyring{}, nil))
+	if err == nil || !strings.Contains(err.Error(), "Zowe property encoding must be a string") {
+		t.Fatalf("loadZoweSession() error = %v, want string encoding error", err)
+	}
+}
+
 func TestLoadZoweSessionRejectsDisabledTLSVerification(t *testing.T) {
 	home := t.TempDir()
 	work := t.TempDir()

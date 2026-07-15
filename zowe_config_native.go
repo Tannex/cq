@@ -26,6 +26,7 @@ type zoweSession struct {
 	Host               string
 	Port               int
 	BasePath           string
+	Encoding           string
 	User               string
 	Password           string
 	TokenType          string
@@ -457,7 +458,7 @@ func zoweProfileDefined(profiles map[string]zoweProfile, prefix, wanted string) 
 func applyZoweEnvironment(properties map[string]any, getenv func(string) string) {
 	for _, name := range []string{
 		"host", "port", "basePath", "protocol", "user", "password",
-		"tokenType", "tokenValue", "rejectUnauthorized",
+		"tokenType", "tokenValue", "rejectUnauthorized", "encoding",
 	} {
 		key := "ZOWE_OPT_" + camelToEnvironment(name)
 		if value := getenv(key); value != "" {
@@ -557,6 +558,11 @@ func makeZoweSession(profileName string, properties map[string]any) (zoweSession
 	if err != nil {
 		return zoweSession{}, err
 	}
+	encoding, err := zoweStringProperty(properties, "encoding")
+	if err != nil {
+		return zoweSession{}, err
+	}
+	encoding = strings.TrimSpace(encoding)
 	rejectUnauthorized, err := zoweBoolProperty(properties, "rejectUnauthorized", true)
 	if err != nil {
 		return zoweSession{}, err
@@ -572,7 +578,7 @@ func makeZoweSession(profileName string, properties map[string]any) (zoweSession
 	}
 	return zoweSession{
 		Profile: profileName, Protocol: protocol, Host: host, Port: port,
-		BasePath: basePath, User: user, Password: password,
+		BasePath: basePath, Encoding: encoding, User: user, Password: password,
 		TokenType: tokenType, TokenValue: tokenValue,
 		RejectUnauthorized: rejectUnauthorized,
 	}, nil

@@ -262,6 +262,14 @@ func (l *lazyNativeZoweTransport) fetchCopybook(ctx context.Context, dsn string)
 	return transport.fetchCopybook(ctx, dsn)
 }
 
+func (l *lazyNativeZoweTransport) encoding() (string, error) {
+	transport, err := l.get()
+	if err != nil {
+		return "", err
+	}
+	return transport.session.Encoding, nil
+}
+
 func (l *lazyNativeZoweTransport) openDataSet(dsn string, hint downloadHint) (io.ReadCloser, error) {
 	transport, err := l.get()
 	if err != nil {
