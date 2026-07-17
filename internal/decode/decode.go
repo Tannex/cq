@@ -8,6 +8,7 @@
 package decode
 
 import (
+	"encoding/binary"
 	"fmt"
 	"math"
 	"sort"
@@ -110,12 +111,20 @@ func normalizeCodepageName(name string) string {
 // String decodes a fixed-width text field to UTF-8 using cm, then trims
 // trailing spaces and NUL bytes. cm may not be nil.
 func String(b []byte, cm *Charmap) string {
+	end := len(b)
+	for end > 0 {
+		r := cm.to[b[end-1]]
+		if r != ' ' && r != '\x00' {
+			break
+		}
+		end--
+	}
 	var sb strings.Builder
-	sb.Grow(len(b))
-	for _, c := range b {
+	sb.Grow(end)
+	for _, c := range b[:end] {
 		sb.WriteRune(cm.to[c])
 	}
-	return strings.TrimRight(sb.String(), " \x00")
+	return sb.String()
 }
 
 // EncodeString encodes a UTF-8 string to the given charmap, padding with
@@ -225,29 +234,9 @@ func Packed(b []byte, scale int) (string, error) {
 		return "", fmt.Errorf("decode: Packed: empty field")
 	}
 
-	digits := make([]byte, 0, len(b)*2)
-	for i, c := range b {
-		hi := c >> 4
-		lo := c & 0x0F
-
-		if i == len(b)-1 {
-			if hi > 9 {
-				return "", fmt.Errorf("decode: Packed: invalid digit nibble 0x%X at byte %d (0x%02X)", hi, i, c)
-			}
-			digits = append(digits, '0'+hi)
-
-			var negative bool
-			switch lo {
-			case 0xB, 0xD:
-				negative = true
-			case 0xA, 0xC, 0xE, 0xF:
-				negative = false
-			default:
-				return "", fmt.Errorf("decode: Packed: invalid sign nibble 0x%X at byte %d (0x%02X)", lo, i, c)
-			}
-			return formatDecimal(digits, negative, scale), nil
-		}
-
+	digits := make([]byte, 0, len(b)*2-1)
+	for i, c := range b[:len(b)-1] {
+		hi, lo := c>>4, c&0x0F
 		if hi > 9 {
 			return "", fmt.Errorf("decode: Packed: invalid digit nibble 0x%X at byte %d (0x%02X)", hi, i, c)
 		}
@@ -257,8 +246,22 @@ func Packed(b []byte, scale int) (string, error) {
 		digits = append(digits, '0'+hi, '0'+lo)
 	}
 
-	// unreachable: loop always returns on the last byte
-	return "", fmt.Errorf("decode: Packed: internal error")
+	i := len(b) - 1
+	last := b[i]
+	digit, sign := last>>4, last&0x0F
+	if digit > 9 {
+		return "", fmt.Errorf("decode: Packed: invalid digit nibble 0x%X at byte %d (0x%02X)", digit, i, last)
+	}
+	digits = append(digits, '0'+digit)
+	var negative bool
+	switch sign {
+	case 0xB, 0xD:
+		negative = true
+	case 0xA, 0xC, 0xE, 0xF:
+	default:
+		return "", fmt.Errorf("decode: Packed: invalid sign nibble 0x%X at byte %d (0x%02X)", sign, i, last)
+	}
+	return formatDecimal(digits, negative, scale), nil
 }
 
 // Binary decodes a big-endian integer of len(b) in 1..8 bytes -
@@ -292,11 +295,6 @@ func Binary(b []byte, signed bool, scale int) (string, error) {
 		}
 	}
 	digits = strconv.FormatUint(uval, 10)
-
-	if uval == 0 {
-		negative = false
-	}
-
 	return formatDecimal([]byte(digits), negative, scale), nil
 }
 
@@ -312,13 +310,10 @@ func Binary(b []byte, signed bool, scale int) (string, error) {
 func Float(b []byte) (string, error) {
 	switch len(b) {
 	case 4:
-		bits := uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
-		v := math.Float32frombits(bits)
+		v := math.Float32frombits(binary.BigEndian.Uint32(b))
 		return strconv.FormatFloat(float64(v), 'g', -1, 32), nil
 	case 8:
-		bits := uint64(b[0])<<56 | uint64(b[1])<<48 | uint64(b[2])<<40 | uint64(b[3])<<32 |
-			uint64(b[4])<<24 | uint64(b[5])<<16 | uint64(b[6])<<8 | uint64(b[7])
-		v := math.Float64frombits(bits)
+		v := math.Float64frombits(binary.BigEndian.Uint64(b))
 		return strconv.FormatFloat(v, 'g', -1, 64), nil
 	default:
 		return "", fmt.Errorf("decode: Float: length must be 4 or 8 bytes, got %d", len(b))
@@ -341,6 +336,9 @@ func formatDecimal(digits []byte, negative bool, scale int) string {
 		start++
 	}
 	digits = digits[start:]
+	if len(digits) == 1 && digits[0] == '0' {
+		negative = false
+	}
 
 	if scale < 0 {
 		scale = 0
@@ -348,8 +346,13 @@ func formatDecimal(digits []byte, negative bool, scale int) string {
 
 	// Left-pad with zeros if we don't have enough digits for the scale
 	// plus at least one integer digit.
-	for len(digits) < scale+1 {
-		digits = append([]byte{'0'}, digits...)
+	if padding := scale + 1 - len(digits); padding > 0 {
+		padded := make([]byte, scale+1)
+		for i := range padding {
+			padded[i] = '0'
+		}
+		copy(padded[padding:], digits)
+		digits = padded
 	}
 
 	var intPart, fracPart string
@@ -360,18 +363,6 @@ func formatDecimal(digits []byte, negative bool, scale int) string {
 		splitAt := len(digits) - scale
 		intPart = string(digits[:splitAt])
 		fracPart = string(digits[splitAt:])
-	}
-
-	// Determine if the value is zero (all digits are '0').
-	isZero := true
-	for _, d := range digits {
-		if d != '0' {
-			isZero = false
-			break
-		}
-	}
-	if isZero {
-		negative = false
 	}
 
 	var sb strings.Builder

@@ -24,7 +24,6 @@ type test struct {
 	numLo, numHi *big.Rat // numeric bound(s); numHi nil unless THRU
 	txtLo, txtHi string   // text bound(s)
 	isRange      bool
-	numeric      bool
 }
 
 // AddWhere compiles a -where clause. spec is a level-88 condition name,
@@ -103,7 +102,7 @@ func findCondition(root *layout.Field, name string) (*layout.Field, *layout.Cond
 
 // compileTest parses one VALUE literal for the comparison domain.
 func compileTest(v layout.Value, numeric bool) (test, error) {
-	t := test{isRange: v.To != "", numeric: numeric}
+	t := test{isRange: v.To != ""}
 	if numeric {
 		var err error
 		if t.numLo, err = numLiteral(v.From); err != nil {
@@ -180,8 +179,8 @@ func (w *where) match(d *Decoder, rec []byte) (bool, error) {
 	}
 	switch val := v.(type) {
 	case json.Number:
-		r, ok := new(big.Rat).SetString(string(val))
-		if !ok {
+		r, err := numLiteral(string(val))
+		if err != nil {
 			return false, fmt.Errorf("-where %s: cannot compare value %q", w.name, val)
 		}
 		for _, t := range w.tests {

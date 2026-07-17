@@ -17,15 +17,19 @@ import (
 	"time"
 )
 
-const maxZoweErrorBody = 16 * 1024
+const maxZOSMFErrorBody = 16 * 1024
 
-// nativeZoweTransport talks to z/OSMF in-process.
-type nativeZoweTransport struct {
+func elapsed(start time.Time) time.Duration {
+	return time.Since(start).Round(time.Millisecond)
+}
+
+// zosmfTransport talks to z/OSMF in-process.
+type zosmfTransport struct {
 	session zoweSession
 	client  *http.Client
 }
 
-func newNativeZoweTransport(session zoweSession) *nativeZoweTransport {
+func newZOSMFTransport(session zoweSession) *zosmfTransport {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	skipCertificateVerification := session.Protocol == "https" && !session.RejectUnauthorized
 	if skipCertificateVerification {
@@ -37,52 +41,52 @@ func newNativeZoweTransport(session zoweSession) *nativeZoweTransport {
 		// cloned transport so it cannot affect other HTTP clients.
 		transport.TLSClientConfig.InsecureSkipVerify = true // #nosec G402 -- explicitly requested by the selected Zowe profile.
 	}
-	return &nativeZoweTransport{session: session, client: &http.Client{Transport: transport}}
+	return &zosmfTransport{session: session, client: &http.Client{Transport: transport}}
 }
 
-func (z *nativeZoweTransport) fetchCopybook(ctx context.Context, dsn string) ([]byte, error) {
+func (z *zosmfTransport) fetchCopybook(ctx context.Context, dsn string) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	start := time.Now()
 	res, err := z.openRequest(ctx, dsn, "text", "")
 	if err != nil {
-		debugLog.Printf("zowe view %s: failed after %s", dsn, elapsed(start))
-		return nil, fmt.Errorf("Zowe data set %q: %w", dsn, err)
+		debugLog.Printf("z/OSMF view %s: failed after %s", dsn, elapsed(start))
+		return nil, fmt.Errorf("z/OSMF data set %q: %w", dsn, err)
 	}
 	defer res.Body.Close()
 	body, err := io.ReadAll(res.Body)
 	if err != nil {
-		return nil, fmt.Errorf("Zowe data set %q: read response: %w", dsn, err)
+		return nil, fmt.Errorf("z/OSMF data set %q: read response: %w", dsn, err)
 	}
-	debugLog.Printf("zowe view %s: %d bytes in %s", dsn, len(body), elapsed(start))
+	debugLog.Printf("z/OSMF view %s: %d bytes in %s", dsn, len(body), elapsed(start))
 	return body, nil
 }
 
-func (z *nativeZoweTransport) openDataSet(dsn string, hint downloadHint) (io.ReadCloser, error) {
+func (z *zosmfTransport) openDataSet(dsn string, hint downloadHint) (io.ReadCloser, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	if hint.Records > 0 && hint.RecordLength > 0 {
 		res, err := z.openRequest(ctx, dsn, "record", fmt.Sprintf("0,%d", hint.Records))
 		if err == nil {
-			debugLog.Printf("zowe download %s: streaming (up to %d records of %d bytes)", dsn, hint.Records, hint.RecordLength)
-			return &rangedZoweStream{
+			debugLog.Printf("z/OSMF download %s: streaming (up to %d records of %d bytes)", dsn, hint.Records, hint.RecordLength)
+			return &rangedDataSetStream{
 				transport: z, context: ctx, cancel: cancel, body: res.Body,
 				dsn: dsn, recordLength: hint.RecordLength,
 			}, nil
 		}
-		debugLog.Printf("zowe download %s: ranged request failed (%v); retrying without record range", dsn, err)
+		debugLog.Printf("z/OSMF download %s: ranged request failed (%v); retrying without record range", dsn, err)
 	}
 
 	res, err := z.openRequest(ctx, dsn, "binary", "")
 	if err != nil {
 		cancel()
-		return nil, fmt.Errorf("Zowe data set %q: %w", dsn, err)
+		return nil, fmt.Errorf("z/OSMF data set %q: %w", dsn, err)
 	}
-	debugLog.Printf("zowe download %s: streaming", dsn)
+	debugLog.Printf("z/OSMF download %s: streaming", dsn)
 	return &cancelingReadCloser{ReadCloser: res.Body, cancel: cancel}, nil
 }
 
-func (z *nativeZoweTransport) openRequest(ctx context.Context, dsn, dataType, recordRange string) (*http.Response, error) {
+func (z *zosmfTransport) openRequest(ctx context.Context, dsn, dataType, recordRange string) (*http.Response, error) {
 	host := strings.Trim(z.session.Host, "[]")
 	hostPort := net.JoinHostPort(host, strconv.Itoa(z.session.Port))
 	endpoint := fmt.Sprintf("%s://%s%s/zosmf/restfiles/ds/%s",
@@ -115,7 +119,7 @@ func (z *nativeZoweTransport) openRequest(ctx context.Context, dsn, dataType, re
 		return res, nil
 	}
 	defer res.Body.Close()
-	body, readErr := io.ReadAll(io.LimitReader(res.Body, maxZoweErrorBody))
+	body, readErr := io.ReadAll(io.LimitReader(res.Body, maxZOSMFErrorBody))
 	if readErr != nil {
 		return nil, fmt.Errorf("z/OSMF %d for %s (read error response: %v)", res.StatusCode, dsn, readErr)
 	}
@@ -143,12 +147,12 @@ func (r *cancelingReadCloser) Close() error {
 	return err
 }
 
-// rangedZoweStream removes z/OSMF's four-byte record lengths. If the server
+// rangedDataSetStream removes z/OSMF's four-byte record lengths. If the server
 // returns an unexpected record size or a partial ranged response, it switches
 // to a normal binary request and skips bytes already delivered. The hint can
 // therefore improve transfer size without changing cq's output.
-type rangedZoweStream struct {
-	transport    *nativeZoweTransport
+type rangedDataSetStream struct {
+	transport    *zosmfTransport
 	context      context.Context
 	cancel       context.CancelFunc
 	body         io.ReadCloser
@@ -161,7 +165,7 @@ type rangedZoweStream struct {
 	err          error
 }
 
-func (r *rangedZoweStream) Read(p []byte) (int, error) {
+func (r *rangedDataSetStream) Read(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
@@ -173,9 +177,7 @@ func (r *rangedZoweStream) Read(p []byte) (int, error) {
 			return 0, r.err
 		}
 		if r.plain {
-			n, err := r.body.Read(p)
-			r.delivered += int64(n)
-			return n, err
+			return r.body.Read(p)
 		}
 
 		var header [4]byte
@@ -211,18 +213,18 @@ func (r *rangedZoweStream) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-func (r *rangedZoweStream) fallBack(reason string) error {
+func (r *rangedDataSetStream) fallBack(reason string) error {
 	_ = r.body.Close()
-	debugLog.Printf("zowe download %s: %s; retrying without record range", r.dsn, reason)
+	debugLog.Printf("z/OSMF download %s: %s; retrying without record range", r.dsn, reason)
 	res, err := r.transport.openRequest(r.context, r.dsn, "binary", "")
 	if err != nil {
-		r.err = fmt.Errorf("Zowe data set %q: ranged response invalid (%s), and fallback failed: %w", r.dsn, reason, err)
+		r.err = fmt.Errorf("z/OSMF data set %q: ranged response invalid (%s), and fallback failed: %w", r.dsn, reason, err)
 		return r.err
 	}
 	if r.delivered > 0 {
 		if _, err := io.CopyN(io.Discard, res.Body, r.delivered); err != nil {
 			_ = res.Body.Close()
-			r.err = fmt.Errorf("Zowe data set %q: fallback response is shorter than the %d bytes already delivered: %w", r.dsn, r.delivered, err)
+			r.err = fmt.Errorf("z/OSMF data set %q: fallback response is shorter than the %d bytes already delivered: %w", r.dsn, r.delivered, err)
 			return r.err
 		}
 	}
@@ -231,7 +233,7 @@ func (r *rangedZoweStream) fallBack(reason string) error {
 	return nil
 }
 
-func (r *rangedZoweStream) Close() error {
+func (r *rangedDataSetStream) Close() error {
 	if r.closed {
 		return nil
 	}
@@ -240,32 +242,32 @@ func (r *rangedZoweStream) Close() error {
 	return r.body.Close()
 }
 
-// lazyNativeZoweTransport defers config parsing and keyring access until a DSN
+// lazyZOSMFTransport defers config parsing and keyring access until a DSN
 // is actually used, preserving local-only cq behavior.
-type lazyNativeZoweTransport struct {
+type lazyZOSMFTransport struct {
 	load      func() (zoweSession, error)
 	once      sync.Once
-	transport *nativeZoweTransport
+	transport *zosmfTransport
 	err       error
 }
 
-func newLazyNativeZoweTransport(load func() (zoweSession, error)) *lazyNativeZoweTransport {
-	return &lazyNativeZoweTransport{load: load}
+func newLazyZOSMFTransport(load func() (zoweSession, error)) *lazyZOSMFTransport {
+	return &lazyZOSMFTransport{load: load}
 }
 
-func (l *lazyNativeZoweTransport) get() (*nativeZoweTransport, error) {
+func (l *lazyZOSMFTransport) get() (*zosmfTransport, error) {
 	l.once.Do(func() {
 		var session zoweSession
 		session, l.err = l.load()
 		if l.err == nil {
 			debugLog.Printf("Zowe profile %s: %s://%s:%d%s", session.Profile, session.Protocol, session.Host, session.Port, session.BasePath)
-			l.transport = newNativeZoweTransport(session)
+			l.transport = newZOSMFTransport(session)
 		}
 	})
 	return l.transport, l.err
 }
 
-func (l *lazyNativeZoweTransport) fetchCopybook(ctx context.Context, dsn string) ([]byte, error) {
+func (l *lazyZOSMFTransport) fetchCopybook(ctx context.Context, dsn string) ([]byte, error) {
 	transport, err := l.get()
 	if err != nil {
 		return nil, err
@@ -273,7 +275,7 @@ func (l *lazyNativeZoweTransport) fetchCopybook(ctx context.Context, dsn string)
 	return transport.fetchCopybook(ctx, dsn)
 }
 
-func (l *lazyNativeZoweTransport) encoding() (string, error) {
+func (l *lazyZOSMFTransport) encoding() (string, error) {
 	transport, err := l.get()
 	if err != nil {
 		return "", err
@@ -281,7 +283,7 @@ func (l *lazyNativeZoweTransport) encoding() (string, error) {
 	return transport.session.Encoding, nil
 }
 
-func (l *lazyNativeZoweTransport) openDataSet(dsn string, hint downloadHint) (io.ReadCloser, error) {
+func (l *lazyZOSMFTransport) openDataSet(dsn string, hint downloadHint) (io.ReadCloser, error) {
 	transport, err := l.get()
 	if err != nil {
 		return nil, err

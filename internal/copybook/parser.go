@@ -64,7 +64,7 @@ func parseTokens(toks []token) ([]*Item, error) {
 }
 
 func validate(it *Item) error {
-	if it.Pic == nil && len(it.Children) == 0 && it.Usage != UsageFloat4 && it.Usage != UsageFloat8 {
+	if it.Group() && len(it.Children) == 0 {
 		return &ParseError{it.Line, fmt.Sprintf("%s (level %02d) has neither a PICTURE nor subordinate items", it.Name, it.Level)}
 	}
 	if it.Pic != nil && it.Pic.Category != CatNumeric && it.Usage != UsageDisplay {
@@ -102,11 +102,7 @@ var clauseKeywords = map[string]bool{
 	"OCCURS": true, "SIGN": true, "SYNC": true, "SYNCHRONIZED": true,
 	"JUSTIFIED": true, "JUST": true, "BLANK": true, "VALUE": true,
 	"VALUES": true, "RENAMES": true, "GLOBAL": true, "EXTERNAL": true,
-	"COMP": true, "COMPUTATIONAL": true, "COMP-1": true, "COMP-2": true,
-	"COMP-3": true, "COMP-4": true, "COMP-5": true, "COMPUTATIONAL-1": true,
-	"COMPUTATIONAL-2": true, "COMPUTATIONAL-3": true, "COMPUTATIONAL-4": true,
-	"COMPUTATIONAL-5": true, "BINARY": true, "PACKED-DECIMAL": true,
-	"DISPLAY": true, "POINTER": true, "INDEX": true,
+	"POINTER": true, "INDEX": true,
 }
 
 var usages = map[string]Usage{
@@ -120,6 +116,14 @@ var usages = map[string]Usage{
 	"DISPLAY": UsageDisplay,
 }
 
+func isClauseKeyword(word string) bool {
+	if clauseKeywords[word] {
+		return true
+	}
+	_, ok := usages[word]
+	return ok
+}
+
 // entry parses one data-description entry up to and including its period.
 // Returns nil for entries that are recognized and skipped (level 66).
 func (p *parser) entry() (*Item, error) {
@@ -131,24 +135,23 @@ func (p *parser) entry() (*Item, error) {
 	if !(lvl >= 1 && lvl <= 49 || lvl == 66 || lvl == 77 || lvl == 88) {
 		return nil, p.errf(t, "invalid level number %d", lvl)
 	}
+	if lvl == 66 { // RENAMES: consume to period, skip
+		for !p.eof() && !p.next().isTerm() {
+		}
+		return nil, nil
+	}
 	it := &Item{Level: lvl, Line: t.line, Name: "FILLER", Filler: true}
 
 	// Optional data name.
 	if !p.eof() && !p.peek().isTerm() && !p.peek().lit {
 		w := p.peek().text
-		if !clauseKeywords[w] {
+		if !isClauseKeyword(w) {
 			p.next()
 			if w != "FILLER" {
 				it.Name = w
 				it.Filler = false
 			}
 		}
-	}
-
-	if lvl == 66 { // RENAMES: consume to period, skip
-		for !p.eof() && !p.next().isTerm() {
-		}
-		return nil, nil
 	}
 
 	for !p.eof() {
@@ -218,7 +221,6 @@ func (p *parser) entry() (*Item, error) {
 				p.next()
 			}
 		case "JUSTIFIED", "JUST":
-			it.Justified = true
 			if p.peek().text == "RIGHT" {
 				p.next()
 			}
@@ -226,7 +228,6 @@ func (p *parser) entry() (*Item, error) {
 			for w := p.peek().text; w == "WHEN" || w == "ZERO" || w == "ZEROS" || w == "ZEROES"; w = p.peek().text {
 				p.next()
 			}
-			it.BlankZero = true
 		case "VALUE", "VALUES":
 			if err := p.values(it); err != nil {
 				return nil, err
@@ -294,7 +295,7 @@ func (p *parser) occurs(it *Item, at token) error {
 				p.next()
 			}
 			// one or more index names
-			for !p.eof() && !p.peek().isTerm() && !clauseKeywords[p.peek().text] &&
+			for !p.eof() && !p.peek().isTerm() && !isClauseKeyword(p.peek().text) &&
 				p.peek().text != "DEPENDING" && p.peek().text != "ASCENDING" &&
 				p.peek().text != "DESCENDING" && p.peek().text != "INDEXED" {
 				p.next()
@@ -316,7 +317,7 @@ func (p *parser) values(it *Item) error {
 		if t.isTerm() {
 			break
 		}
-		if !t.lit && clauseKeywords[t.text] && t.text != "VALUE" && t.text != "VALUES" {
+		if !t.lit && isClauseKeyword(t.text) && t.text != "VALUE" && t.text != "VALUES" {
 			break
 		}
 		if t.text == "THRU" || t.text == "THROUGH" {
