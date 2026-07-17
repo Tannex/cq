@@ -1,0 +1,111 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Validate release tag
+        shell: bash
+        run: |
+          semver_regex='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(\+([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?$'
+          if [[ ! "$GITHUB_REF_NAME" =~ $semver_regex ]]; then
+            echo "Release tags must be semantic versions such as v1.2.3 or v1.2.3-rc.1" >&2
+            exit 1
+          fi
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build release archives
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          targets=(
+            linux/amd64
+            linux/arm64
+            darwin/amd64
+            darwin/arm64
+            windows/amd64
+            windows/arm64
+          )
+          mkdir -p dist
+
+          for target in "${targets[@]}"; do
+            IFS=/ read -r goos goarch <<< "$target"
+            asset="cq_${GITHUB_REF_NAME}_${goos}_${goarch}"
+            package_dir="$RUNNER_TEMP/$asset"
+            binary="cq"
+            if [[ "$goos" == "windows" ]]; then
+              binary="cq.exe"
+            fi
+
+            mkdir -p "$package_dir"
+            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build \
+              -buildvcs=false \
+              -trimpath \
+              -ldflags="-s -w -X main.version=$GITHUB_REF_NAME" \
+              -o "$package_dir/$binary" \
+              .
+            cp LICENSE README.md "$package_dir/"
+
+            if [[ "$goos" == "windows" ]]; then
+              (
+                cd "$RUNNER_TEMP"
+                zip -X -qr "$GITHUB_WORKSPACE/dist/$asset.zip" "$asset"
+              )
+            else
+              tar -C "$RUNNER_TEMP" -czf "dist/$asset.tar.gz" "$asset"
+            fi
+          done
+
+          (
+            cd dist
+            sha256sum cq_* > "cq_${GITHUB_REF_NAME}_checksums.txt"
+          )
+
+      - name: Verify embedded version
+        run: |
+          package_dir="$RUNNER_TEMP/version-check"
+          mkdir -p "$package_dir"
+          tar -xzf "dist/cq_${GITHUB_REF_NAME}_linux_amd64.tar.gz" \
+            -C "$package_dir" \
+            --strip-components=1
+          test "$("$package_dir/cq" --version)" = "cq $GITHUB_REF_NAME"
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          release_args=()
+          if [[ "${GITHUB_REF_NAME%%+*}" == *-* ]]; then
+            release_args+=(--prerelease)
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            --verify-tag \
+            --generate-notes \
+            "${release_args[@]}" \
+            dist/*

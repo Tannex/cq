@@ -99,3 +99,17 @@ func TestRunRejectsDuplicateDataSources(t *testing.T) {
 		t.Fatalf("run() error = %v, want duplicate data error", err)
 	}
 }
+
+func TestRunPrintsVersion(t *testing.T) {
+	originalVersion := version
+	version = "v1.2.3"
+	t.Cleanup(func() { version = originalVersion })
+
+	stopCapture := captureStdout(t)
+	if err := runWithArgs("--version"); err != nil {
+		t.Fatalf("run() error = %v", err)
+	}
+	if got := stopCapture(); got != "cq v1.2.3\n" {
+		t.Fatalf("version output = %q, want %q", got, "cq v1.2.3\n")
+	}
+}

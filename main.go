@@ -17,6 +17,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"runtime/debug"
 
 	"github.com/itchyny/gojq"
 
@@ -31,6 +32,19 @@ import (
 // run enables it; a log.Logger serializes writes from the concurrent library
 // probes in the DSN copy resolver.
 var debugLog = log.New(io.Discard, "cq: ", 0)
+
+// version is replaced with the release tag by the release workflow.
+var version = "dev"
+
+func reportedVersion() string {
+	if version != "dev" {
+		return version
+	}
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return info.Main.Version
+	}
+	return version
+}
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -48,6 +62,7 @@ func run(args []string) error {
 	}
 
 	fs := flag.NewFlagSet("cq", flag.ExitOnError)
+	showVersion := fs.Bool("version", false, "print version and exit")
 	copybookPath := fs.String("c", "", "local copybook file")
 	copybookDSN := fs.String("copybook-dsn", "", "copybook data set or member to fetch from z/OSMF")
 	dataPath := fs.String("d", "", "data file to decode (use - for stdin; omit for layout output)")
@@ -97,6 +112,10 @@ examples:
 `)
 	}
 	fs.Parse(args)
+	if *showVersion {
+		fmt.Fprintf(os.Stdout, "cq %s\n", reportedVersion())
+		return nil
+	}
 	codepageExplicit := false
 	fs.Visit(func(f *flag.Flag) {
 		if f.Name == "codepage" {
