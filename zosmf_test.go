@@ -20,20 +20,20 @@ import (
 	"testing"
 )
 
-type fakeZoweMember struct {
+type fakeCopybookMember struct {
 	data          []byte
 	err           error
 	waitForCancel bool
 }
 
-type fakeZoweTransport struct {
-	members map[string]fakeZoweMember
+type fakeCopybookFetcher struct {
+	members map[string]fakeCopybookMember
 
 	mu       sync.Mutex
 	requests []string
 }
 
-func (f *fakeZoweTransport) fetchCopybook(ctx context.Context, dsn string) ([]byte, error) {
+func (f *fakeCopybookFetcher) fetchCopybook(ctx context.Context, dsn string) ([]byte, error) {
 	f.mu.Lock()
 	f.requests = append(f.requests, dsn)
 	f.mu.Unlock()
@@ -51,7 +51,7 @@ func (f *fakeZoweTransport) fetchCopybook(ctx context.Context, dsn string) ([]by
 	return append([]byte(nil), member.data...), nil
 }
 
-func (f *fakeZoweTransport) requestedDSNs() []string {
+func (f *fakeCopybookFetcher) requestedDSNs() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	requests := append([]string(nil), f.requests...)
@@ -59,14 +59,14 @@ func (f *fakeZoweTransport) requestedDSNs() []string {
 	return requests
 }
 
-type zoweServerMember struct {
+type zosmfServerMember struct {
 	text         string
 	binary       []byte
 	err          string
 	recordLength int
 }
 
-type zoweServerRequest struct {
+type zosmfServerRequest struct {
 	dsn         string
 	dataType    string
 	recordRange string
@@ -74,19 +74,19 @@ type zoweServerRequest struct {
 
 type testZOSMFServer struct {
 	mu       sync.Mutex
-	requests []zoweServerRequest
+	requests []zosmfServerRequest
 }
 
-func (s *testZOSMFServer) record(req zoweServerRequest) {
+func (s *testZOSMFServer) record(req zosmfServerRequest) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.requests = append(s.requests, req)
 }
 
-func (s *testZOSMFServer) allRequests() []zoweServerRequest {
+func (s *testZOSMFServer) allRequests() []zosmfServerRequest {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]zoweServerRequest(nil), s.requests...)
+	return append([]zosmfServerRequest(nil), s.requests...)
 }
 
 func (s *testZOSMFServer) requestedDSNs() []string {
@@ -99,14 +99,14 @@ func (s *testZOSMFServer) requestedDSNs() []string {
 	return dsns
 }
 
-func configureTestZOSMF(t *testing.T, members map[string]zoweServerMember, searchPaths ...string) *testZOSMFServer {
+func configureTestZOSMF(t *testing.T, members map[string]zosmfServerMember, searchPaths ...string) *testZOSMFServer {
 	t.Helper()
 	fixture := &testZOSMFServer{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		const prefix = "/zosmf/restfiles/ds/"
 		dsn := strings.TrimPrefix(r.URL.Path, prefix)
 		dataType := r.Header.Get("X-IBM-Data-Type")
-		fixture.record(zoweServerRequest{
+		fixture.record(zosmfServerRequest{
 			dsn: dsn, dataType: dataType,
 			recordRange: r.Header.Get("X-IBM-Record-Range"),
 		})
@@ -149,7 +149,7 @@ func configureTestZOSMF(t *testing.T, members map[string]zoweServerMember, searc
 
 	originalLoader := loadDefaultZoweSession
 	loadDefaultZoweSession = func() (zoweSession, error) {
-		return zoweSessionForServer(t, server), nil
+		return zosmfSessionForServer(t, server), nil
 	}
 	t.Cleanup(func() { loadDefaultZoweSession = originalLoader })
 
@@ -170,7 +170,7 @@ func configureTestZOSMF(t *testing.T, members map[string]zoweServerMember, searc
 }
 
 func TestDSNCopyResolverUsesSearchOrderAndCache(t *testing.T) {
-	transport := &fakeZoweTransport{members: map[string]fakeZoweMember{
+	transport := &fakeCopybookFetcher{members: map[string]fakeCopybookMember{
 		"HQL.COB.SRC(ADDRESS)": {data: []byte("05 ADDRESS PIC X(10).\n")},
 	}}
 	resolver := newDSNCopyResolver([]string{"HQL.CPY.SRC", "HQL.COB.SRC"}, transport)
@@ -186,12 +186,12 @@ func TestDSNCopyResolverUsesSearchOrderAndCache(t *testing.T) {
 	}
 	want := []string{"HQL.COB.SRC(ADDRESS)", "HQL.CPY.SRC(ADDRESS)"}
 	if got := transport.requestedDSNs(); !reflect.DeepEqual(got, want) {
-		t.Fatalf("Zowe requests = %q, want one probe per library, then cache hits", got)
+		t.Fatalf("data set requests = %q, want one probe per library, then cache hits", got)
 	}
 }
 
 func TestDSNCopyResolverPrefersEarlierLibrary(t *testing.T) {
-	transport := &fakeZoweTransport{members: map[string]fakeZoweMember{
+	transport := &fakeCopybookFetcher{members: map[string]fakeCopybookMember{
 		"HQL.CPY.SRC(ADDRESS)": {data: []byte("05 ADDRESS PIC X(10).\n")},
 		"HQL.COB.SRC(ADDRESS)": {data: []byte("05 ADDRESS PIC X(99).\n")},
 	}}
@@ -207,16 +207,16 @@ func TestDSNCopyResolverPrefersEarlierLibrary(t *testing.T) {
 	got := transport.requestedDSNs()
 	for _, dsn := range got {
 		if dsn != "HQL.CPY.SRC(ADDRESS)" && dsn != "HQL.COB.SRC(ADDRESS)" {
-			t.Fatalf("Zowe requests = %q, want only search-path probes", got)
+			t.Fatalf("data set requests = %q, want only search-path probes", got)
 		}
 	}
 	if !slices.Contains(got, "HQL.CPY.SRC(ADDRESS)") {
-		t.Fatalf("Zowe requests = %q, want the winning library probed", got)
+		t.Fatalf("data set requests = %q, want the winning library probed", got)
 	}
 }
 
 func TestDSNCopyResolverDoesNotWaitForSlowerLaterLibrary(t *testing.T) {
-	transport := &fakeZoweTransport{members: map[string]fakeZoweMember{
+	transport := &fakeCopybookFetcher{members: map[string]fakeCopybookMember{
 		"HQL.CPY.SRC(ADDRESS)": {data: []byte("05 ADDRESS PIC X(10).\n")},
 		"HQL.COB.SRC(ADDRESS)": {waitForCancel: true},
 	}}
@@ -232,7 +232,7 @@ func TestDSNCopyResolverDoesNotWaitForSlowerLaterLibrary(t *testing.T) {
 }
 
 func TestDSNCopyResolverCachesFailuresAndListsThemInSearchOrder(t *testing.T) {
-	transport := &fakeZoweTransport{members: map[string]fakeZoweMember{
+	transport := &fakeCopybookFetcher{members: map[string]fakeCopybookMember{
 		"HQL.CPY.SRC(ADDRESS)": {err: errors.New("first library failure")},
 		"HQL.COB.SRC(ADDRESS)": {err: errors.New("second library failure")},
 	}}
@@ -250,7 +250,7 @@ func TestDSNCopyResolverCachesFailuresAndListsThemInSearchOrder(t *testing.T) {
 		}
 	}
 	if got := transport.requestedDSNs(); len(got) != 2 {
-		t.Fatalf("Zowe requests = %q, want the failed lookup cached after one probe per library", got)
+		t.Fatalf("data set requests = %q, want the failed lookup cached after one probe per library", got)
 	}
 }
 
@@ -264,13 +264,13 @@ func TestDSNCopyResolverRequiresSearchPath(t *testing.T) {
 }
 
 func TestRunReportsDataSetErrorBeforeOutput(t *testing.T) {
-	configureTestZOSMF(t, map[string]zoweServerMember{
+	configureTestZOSMF(t, map[string]zosmfServerMember{
 		"HQ.COPYLIB(CUSTOMER)": {text: "01 CUSTOMER.\n   05 NAME PIC X(3).\n"},
 		"HQ.CUSTOMER.DATA":     {err: "connection lost"},
 	})
 	stdout := captureStdout(t)
 
-	err := runWithArgs(t,
+	err := runWithArgs(
 		"--copybook-dsn", "HQ.COPYLIB(CUSTOMER)",
 		"--data-dsn", "HQ.CUSTOMER.DATA",
 		"-codepage", "ascii",
@@ -285,7 +285,7 @@ func TestRunReportsDataSetErrorBeforeOutput(t *testing.T) {
 }
 
 func TestRunExpandsNestedCopiesThroughSearchPath(t *testing.T) {
-	fixture := configureTestZOSMF(t, map[string]zoweServerMember{
+	fixture := configureTestZOSMF(t, map[string]zosmfServerMember{
 		"HQ.COPYLIB(CUSTOMER)": {text: "01 CUSTOMER.\n   COPY DETAILS.\n"},
 		"HQL.COB.SRC(DETAILS)": {text: "05 NAME PIC X(3).\n COPY FLAGS.\n"},
 		"HQL.CPY.SRC(FLAGS)":   {text: "05 FLAG PIC X(1).\n"},
@@ -294,7 +294,7 @@ func TestRunExpandsNestedCopiesThroughSearchPath(t *testing.T) {
 	}, "HQL.CPY.SRC", "HQL.COB.SRC")
 	stdout := captureStdout(t)
 
-	err := runWithArgs(t,
+	err := runWithArgs(
 		"--copybook-dsn", "HQ.COPYLIB(CUSTOMER)",
 		"--data-dsn", "HQ.CUSTOMER.DATA",
 		"-codepage", "ascii",
@@ -316,19 +316,19 @@ func TestRunExpandsNestedCopiesThroughSearchPath(t *testing.T) {
 	dsns := fixture.requestedDSNs()
 	for _, dsn := range required {
 		if !slices.Contains(dsns, dsn) {
-			t.Fatalf("Zowe requests = %q, want them to include %q", dsns, dsn)
+			t.Fatalf("data set requests = %q, want them to include %q", dsns, dsn)
 		}
 	}
 	allowed := append(required, "HQL.COB.SRC(FLAGS)")
 	for _, dsn := range dsns {
 		if !slices.Contains(allowed, dsn) {
-			t.Fatalf("Zowe requests = %q, want only %q", dsns, allowed)
+			t.Fatalf("data set requests = %q, want only %q", dsns, allowed)
 		}
 	}
 }
 
 func TestRunVerboseWritesDebugToStderrOnly(t *testing.T) {
-	configureTestZOSMF(t, map[string]zoweServerMember{
+	configureTestZOSMF(t, map[string]zosmfServerMember{
 		"HQ.COPYLIB(CUSTOMER)": {text: "01 CUSTOMER.\n   05 NAME PIC X(3).\n"},
 		"HQ.CUSTOMER.DATA":     {binary: []byte("BOB")},
 	})
@@ -342,7 +342,7 @@ func TestRunVerboseWritesDebugToStderrOnly(t *testing.T) {
 		stdout := captureStdout(t)
 		origErr := os.Stderr
 		os.Stderr = errFile
-		runErr := runWithArgs(t, args...)
+		runErr := runWithArgs(args...)
 		os.Stderr = origErr
 		out := stdout()
 		if err := errors.Join(errFile.Close(), runErr); err != nil {
@@ -367,8 +367,8 @@ func TestRunVerboseWritesDebugToStderrOnly(t *testing.T) {
 		t.Fatalf("run() stdout = %s, want no debug lines", stdout)
 	}
 	for _, want := range []string{
-		"zowe view HQ.COPYLIB(CUSTOMER)",
-		"zowe download HQ.CUSTOMER.DATA",
+		"z/OSMF view HQ.COPYLIB(CUSTOMER)",
+		"z/OSMF download HQ.CUSTOMER.DATA",
 		"record CUSTOMER: 3 bytes per record",
 		"decoded 1 records",
 	} {
@@ -391,13 +391,13 @@ func TestRunVerboseWritesDebugToStderrOnly(t *testing.T) {
 }
 
 func TestRunMaxSendsRecordRange(t *testing.T) {
-	fixture := configureTestZOSMF(t, map[string]zoweServerMember{
+	fixture := configureTestZOSMF(t, map[string]zosmfServerMember{
 		"HQ.COPYLIB(CUSTOMER)": {text: "01 CUSTOMER.\n   05 NAME PIC X(3).\n   05 FLAG PIC X(1).\n"},
 		"HQ.CUSTOMER.DATA":     {binary: []byte("BOBYSUEN"), recordLength: 4},
 	})
 	stdout := captureStdout(t)
 
-	err := runWithArgs(t,
+	err := runWithArgs(
 		"--copybook-dsn", "HQ.COPYLIB(CUSTOMER)",
 		"--data-dsn", "HQ.CUSTOMER.DATA",
 		"-codepage", "ascii",
@@ -426,13 +426,13 @@ func TestRunWhereKeepsFullDownload(t *testing.T) {
 		"   05 FLAG PIC X(1).\n" +
 		"      88 FLAG-Y VALUE \"Y\".\n" +
 		"   05 NAME PIC X(3).\n"
-	fixture := configureTestZOSMF(t, map[string]zoweServerMember{
+	fixture := configureTestZOSMF(t, map[string]zosmfServerMember{
 		"HQ.COPYLIB(CUSTOMER)": {text: copybook},
 		"HQ.CUSTOMER.DATA":     {binary: []byte("NBOBYSUE"), recordLength: 4},
 	})
 	stdout := captureStdout(t)
 
-	err := runWithArgs(t,
+	err := runWithArgs(
 		"--copybook-dsn", "HQ.COPYLIB(CUSTOMER)",
 		"--data-dsn", "HQ.CUSTOMER.DATA",
 		"-codepage", "ascii",

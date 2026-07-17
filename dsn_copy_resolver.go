@@ -1,5 +1,4 @@
-// COPY member resolution through the configured DSN search path. Data set
-// access goes through the transport boundary in zowe_transport.go.
+// COPY member resolution through the configured DSN search path.
 package main
 
 import (
@@ -9,9 +8,9 @@ import (
 	"sync"
 )
 
-// maxConcurrentZoweFetches bounds the z/OSMF data set reads a resolver has in
+// maxConcurrentCopybookFetches bounds the remote data set reads a resolver has in
 // flight at once.
-const maxConcurrentZoweFetches = 8
+const maxConcurrentCopybookFetches = 8
 
 type copybookFetcher interface {
 	fetchCopybook(context.Context, string) ([]byte, error)
@@ -19,7 +18,7 @@ type copybookFetcher interface {
 
 type dsnCopyResolver struct {
 	searchPaths []string
-	transport   copybookFetcher
+	fetcher     copybookFetcher
 	slots       chan struct{}
 
 	mu    sync.Mutex
@@ -31,11 +30,11 @@ type copyResult struct {
 	err  error
 }
 
-func newDSNCopyResolver(searchPaths []string, transport copybookFetcher) *dsnCopyResolver {
+func newDSNCopyResolver(searchPaths []string, fetcher copybookFetcher) *dsnCopyResolver {
 	return &dsnCopyResolver{
 		searchPaths: searchPaths,
-		transport:   transport,
-		slots:       make(chan struct{}, maxConcurrentZoweFetches),
+		fetcher:     fetcher,
+		slots:       make(chan struct{}, maxConcurrentCopybookFetches),
 		cache:       make(map[string]copyResult),
 	}
 }
@@ -79,7 +78,7 @@ func (r *dsnCopyResolver) probeSearchPaths(member string) copyResult {
 		go func() {
 			r.slots <- struct{}{}
 			defer func() { <-r.slots }()
-			src, err := r.transport.fetchCopybook(ctx, fmt.Sprintf("%s(%s)", library, member))
+			src, err := r.fetcher.fetchCopybook(ctx, fmt.Sprintf("%s(%s)", library, member))
 			resCh <- probe{i: i, res: copyResult{text: string(src), err: err}}
 		}()
 	}

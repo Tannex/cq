@@ -233,13 +233,13 @@ func readZoweConfigFile(path string) (zoweClientConfig, error) {
 		return zoweClientConfig{}, fmt.Errorf("read Zowe config %q: %w", path, err)
 	}
 	var cfg zoweClientConfig
-	if err := decodeZoweJSONC(b, &cfg); err != nil {
+	if err := decodeJSONC(b, &cfg); err != nil {
 		return zoweClientConfig{}, fmt.Errorf("parse Zowe config %q: %w", path, err)
 	}
 	return cfg, nil
 }
 
-func decodeZoweJSONC(input []byte, dst any) error {
+func decodeJSONC(input []byte, dst any) error {
 	normalized, err := normalizeJSONC(input)
 	if err != nil {
 		return err
@@ -291,7 +291,7 @@ func loadZoweVault(keyring zoweKeyring, goos string) (map[string]map[string]any,
 		return nil, fmt.Errorf("decode secure Zowe properties: %w", err)
 	}
 	var vault map[string]map[string]any
-	if err := decodeZoweJSONC(decoded, &vault); err != nil {
+	if err := decodeJSONC(decoded, &vault); err != nil {
 		return nil, fmt.Errorf("parse secure Zowe properties: %w", err)
 	}
 	return vault, nil

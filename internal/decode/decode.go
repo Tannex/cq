@@ -336,7 +336,7 @@ func formatDecimal(digits []byte, negative bool, scale int) string {
 		start++
 	}
 	digits = digits[start:]
-	if len(digits) == 0 || len(digits) == 1 && digits[0] == '0' {
+	if len(digits) == 1 && digits[0] == '0' {
 		negative = false
 	}
 

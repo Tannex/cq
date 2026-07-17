@@ -19,7 +19,7 @@ func TestRunConfigCreatesAndLaunchesConfig(t *testing.T) {
 	}
 	t.Cleanup(func() { launchConfigEditor = originalLaunch })
 
-	if err := runWithArgs(t, "config"); err != nil {
+	if err := runWithArgs("config"); err != nil {
 		t.Fatalf("run() error = %v", err)
 	}
 	wantPath := filepath.Join(root, "cq", "config.json")
@@ -51,7 +51,7 @@ func TestRunConfigPreservesExistingFile(t *testing.T) {
 	launchConfigEditor = func(string) error { return nil }
 	t.Cleanup(func() { launchConfigEditor = originalLaunch })
 
-	if err := runWithArgs(t, "config"); err != nil {
+	if err := runWithArgs("config"); err != nil {
 		t.Fatalf("run() error = %v", err)
 	}
 	got, err := os.ReadFile(path)
@@ -64,7 +64,7 @@ func TestRunConfigPreservesExistingFile(t *testing.T) {
 }
 
 func TestRunConfigRejectsArguments(t *testing.T) {
-	err := runWithArgs(t, "config", "extra")
+	err := runWithArgs("config", "extra")
 	if err == nil || !strings.Contains(err.Error(), "usage: cq config") {
 		t.Fatalf("run() error = %v, want config usage", err)
 	}

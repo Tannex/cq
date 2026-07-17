@@ -10,7 +10,7 @@ const maxCopyDepth = 64
 
 // CopyResolver returns the source of a named copybook member. Resolvers must
 // be safe for concurrent calls: expansion prefetches the members of a level
-// in parallel so slow lookups (such as per-member Zowe requests) overlap.
+// in parallel so slow remote member lookups overlap.
 type CopyResolver func(name string) (string, error)
 
 // ParseWithCopies expands plain COPY member statements recursively before
