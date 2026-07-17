@@ -17,9 +17,20 @@ $ cq -where DTAR107-SALE -c DTAR107.cbl -d sales.bin
 
 ## Install
 
+Download the archive for your platform from the
+[latest GitHub release](https://github.com/Tannex/cq/releases/latest), extract
+it, and place `cq` (or `cq.exe` on Windows) somewhere on your `PATH`.
+Release archives are available for Linux, macOS, and Windows on both amd64 and
+arm64. Verify a download with the `cq_VERSION_checksums.txt` file attached to
+the same release.
+
+Alternatively, install from source with Go:
+
 ```console
 $ go install github.com/Tannex/cq@latest
 ```
+
+Confirm the installed version with `cq --version`.
 
 ## Usage
 
@@ -41,6 +52,7 @@ padding.
 | `--copybook-dsn` | one copybook source required | data set or PDS member fetched as text through Zowe (z/OSMF) |
 | `-d` | none | data file to decode (`-` for stdin); omit for layout output |
 | `--data-dsn` | none | data set streamed in binary mode through Zowe (z/OSMF) |
+| `--version` | off | print the cq version and exit |
 | `-codepage` | Zowe `encoding` for `--data-dsn`; otherwise `cp037` | EBCDIC codepage of the data (`cp037`, `cp277`, `cp1047`, `cp1140`, `cp1142`; `ascii`/`latin1` for testing); an explicit flag takes precedence |
 | `-format` | `auto` | copybook source format: `fixed` (cols 7–72), `free`, or `auto` |
 | `--verbose` | off | write debug information (config, Zowe calls, timings) to stderr |
@@ -286,3 +298,17 @@ fixtures from the [cb2xml](https://github.com/bmTas/cb2xml) project under
 LGPL-2.1. They are used to cross-check field offsets; the pinned source
 revision, per-file origins, and complete license text are recorded in
 `testdata/copybooks/cb2xml/SOURCES.md`.
+
+## Releasing
+
+GitHub Actions tests every push to `main` and every pull request. To publish a
+release, create and push a semantic-version tag from the commit to release:
+
+```console
+$ git tag -a v1.2.3 -m "v1.2.3"
+$ git push origin v1.2.3
+```
+
+The release workflow reruns the tests, builds all supported platform archives,
+embeds the tag for `cq --version`, generates SHA-256 checksums and release
+notes, and publishes the files on the repository's GitHub Releases page.
