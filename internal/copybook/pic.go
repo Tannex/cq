@@ -74,6 +74,7 @@ func parsePic(raw string) (*Picture, error) {
 			seenV = true
 		case '9':
 			p.Digits++
+			p.Width++
 			if seenV {
 				p.Scale++
 			}
@@ -85,21 +86,12 @@ func parsePic(raw string) (*Picture, error) {
 			} else {
 				p.Scale--
 			}
-		case 'X', 'A', 'Z', '*', 'B', '0', '/', '.', ',', '+', '-', '$', 'C', 'D', 'E', 'N', 'G':
-			// width handled below
+		case 'C', 'D':
+			p.Width += 2
+		case 'X', 'A', 'Z', '*', 'B', '0', '/', '.', ',', '+', '-', '$', 'E', 'N', 'G':
+			p.Width++
 		default:
 			return nil, fmt.Errorf("picture %q: unsupported symbol %q", raw, string(c))
-		}
-	}
-
-	// Storage width for USAGE DISPLAY: every position except S, V, P.
-	for i := 0; i < len(exp); i++ {
-		switch exp[i] {
-		case 'S', 'V', 'P':
-		case 'C', 'D': // CR / DB
-			p.Width += 2
-		default:
-			p.Width++
 		}
 	}
 

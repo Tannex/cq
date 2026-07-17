@@ -84,16 +84,15 @@ func Build(items []*copybook.Item) ([]*Record, error) {
 	}
 	var recs []*Record
 	for _, it := range items {
-		b := &builder{}
-		f, err := b.resolve(it, copybook.UsageDisplay, false, false, false)
+		f, err := resolve(it, copybook.UsageDisplay, false, false, false)
 		if err != nil {
 			return nil, err
 		}
-		if _, err := b.place(f, 0); err != nil {
+		if _, err := place(f, 0); err != nil {
 			return nil, err
 		}
 		rec := &Record{Field: f, MaxLength: f.Length, MinLength: f.Length}
-		if v := b.odoSlack(f); v > 0 {
+		if v := odoSlack(f); v > 0 {
 			rec.MinLength -= v
 		}
 		recs = append(recs, rec)
@@ -101,11 +100,9 @@ func Build(items []*copybook.Item) ([]*Record, error) {
 	return recs, nil
 }
 
-type builder struct{}
-
 // resolve computes kinds and per-element lengths bottom-up. usage, sign
 // options inherit from group items.
-func (b *builder) resolve(it *copybook.Item, usage copybook.Usage, sep, lead, sync bool) (*Field, error) {
+func resolve(it *copybook.Item, usage copybook.Usage, sep, lead, sync bool) (*Field, error) {
 	if it.UsageSet {
 		usage = it.Usage
 	}
@@ -138,7 +135,7 @@ func (b *builder) resolve(it *copybook.Item, usage copybook.Usage, sep, lead, sy
 			f.Picture, f.picMin = it.Pic.Raw, it.Pic.Width
 		}
 		for _, c := range it.Children {
-			cf, err := b.resolve(c, usage, sep, lead, sync)
+			cf, err := resolve(c, usage, sep, lead, sync)
 			if err != nil {
 				return nil, err
 			}
@@ -207,7 +204,7 @@ func (b *builder) resolve(it *copybook.Item, usage copybook.Usage, sep, lead, sy
 
 // place assigns offsets. Returns the end offset (start + total length).
 // Group length is derived from its children, honouring REDEFINES and SYNC.
-func (b *builder) place(f *Field, start int) (int, error) {
+func place(f *Field, start int) (int, error) {
 	f.Offset = start
 	if f.Kind != KindGroup {
 		return start + f.total(), nil
@@ -223,10 +220,10 @@ func (b *builder) place(f *Field, start int) (int, error) {
 				return 0, fmt.Errorf("%s REDEFINES %s, but %s is not an earlier item at the same level", c.Name, c.Redefines, c.Redefines)
 			}
 			at = t.Offset
-		} else if a := c.alignment(); a > 1 && at%a != 0 {
+		} else if a := c.align; a > 1 && at%a != 0 {
 			at += a - at%a // SYNC slack bytes
 		}
-		e, err := b.place(c, at)
+		e, err := place(c, at)
 		if err != nil {
 			return 0, err
 		}
@@ -258,21 +255,15 @@ func (f *Field) total() int {
 	return f.Length * n
 }
 
-// alignment returns the SYNC boundary for the field (1 = none). Only binary
-// and float items are aligned. The field records sync implicitly by kind;
-// alignment is applied in place() via this hook.
-func (f *Field) alignment() int { return f.align }
-
 // odoSlack returns the storage between minimum and maximum occurrences of
 // the record's OCCURS DEPENDING ON tables.
-func (b *builder) odoSlack(f *Field) int {
+func odoSlack(f *Field) int {
 	v := 0
-	if f.DependingOn != "" {
-		v += (f.Occurs - f.OccursMin) * f.Length
-	}
-	for _, c := range f.Children {
-		v += b.odoSlack(c)
-	}
+	Walk(f, func(f *Field) {
+		if f.DependingOn != "" {
+			v += (f.Occurs - f.OccursMin) * f.Length
+		}
+	})
 	return v
 }
 
@@ -286,11 +277,13 @@ func Walk(f *Field, fn func(*Field)) {
 
 // FindByName returns the first field with the given name (depth-first).
 func FindByName(root *Field, name string) *Field {
-	var found *Field
-	Walk(root, func(f *Field) {
-		if found == nil && f.Name == name && !f.Filler {
-			found = f
+	if root.Name == name && !root.Filler {
+		return root
+	}
+	for _, child := range root.Children {
+		if found := FindByName(child, name); found != nil {
+			return found
 		}
-	})
-	return found
+	}
+	return nil
 }

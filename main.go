@@ -1,6 +1,6 @@
 // cq — jq for COBOL. Parses a COBOL copybook and either prints the field
 // layout (offset/length per field) or decodes fixed-length EBCDIC records
-// (e.g. a binary dataset downloaded with Zowe CLI) into a UTF-8 JSON array.
+// (e.g. a binary data set streamed from z/OSMF) into a UTF-8 JSON array.
 //
 //	cq -c CUSTOMER.cpy                             # layout as JSON
 //	cq -c CUSTOMER.cpy -d customer.bin | jq '.[0]' # decode records
@@ -33,15 +33,15 @@ import (
 var debugLog = log.New(io.Discard, "cq: ", 0)
 
 func main() {
-	if err := run(); err != nil {
+	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "cq:", err)
 		os.Exit(1)
 	}
 }
 
-func run() error {
-	if len(os.Args) > 1 && os.Args[1] == "config" {
-		if len(os.Args) != 2 {
+func run(args []string) error {
+	if len(args) > 0 && args[0] == "config" {
+		if len(args) != 1 {
 			return errors.New("usage: cq config")
 		}
 		return editConfig()
@@ -49,10 +49,10 @@ func run() error {
 
 	fs := flag.NewFlagSet("cq", flag.ExitOnError)
 	copybookPath := fs.String("c", "", "local copybook file")
-	copybookDSN := fs.String("copybook-dsn", "", "copybook data set or member to fetch through Zowe (z/OSMF)")
+	copybookDSN := fs.String("copybook-dsn", "", "copybook data set or member to fetch from z/OSMF")
 	dataPath := fs.String("d", "", "data file to decode (use - for stdin; omit for layout output)")
-	dataDSN := fs.String("data-dsn", "", "data set to stream in binary mode through Zowe (z/OSMF)")
-	codepage := fs.String("codepage", "cp037", "EBCDIC codepage of the data (for --data-dsn, defaults to Zowe encoding when set; explicit flag wins)")
+	dataDSN := fs.String("data-dsn", "", "data set to stream in binary mode from z/OSMF")
+	codepage := fs.String("codepage", "cp037", "EBCDIC codepage of the data (for --data-dsn, defaults to the configured profile encoding when set; explicit flag wins)")
 	format := fs.String("format", "auto", "copybook source format: auto, fixed (cols 7-72), or free")
 	recName := fs.String("record", "", "01-level record to decode when the copybook has several (default: first)")
 	pretty := fs.Bool("pretty", false, "indent JSON output")
@@ -61,7 +61,7 @@ func run() error {
 	lrecl := fs.Int("lrecl", 0, "physical record length when it exceeds the layout (extra bytes are padding)")
 	expr := fs.String("q", "", "jq expression: run per record when decoding (output becomes a result stream, not an array), or against the layout document")
 	rawOut := fs.Bool("r", false, "with -q, print string results raw instead of JSON-quoted")
-	verbose := fs.Bool("verbose", false, "write debug information (config, Zowe calls, timings) to stderr")
+	verbose := fs.Bool("verbose", false, "write debug information (config, z/OSMF calls, timings) to stderr")
 	var wheres []string
 	fs.Func("where", "keep only records satisfying this level-88 `condition`; prefix with ! or \"not \" to negate; repeat to AND", func(s string) error {
 		wheres = append(wheres, s)
@@ -96,7 +96,7 @@ examples:
   cq -where DTAR107-SALE -where 'not DTAR107-VOID' -c DTAR107.cbl -d sales.bin
 `)
 	}
-	fs.Parse(os.Args[1:])
+	fs.Parse(args)
 	codepageExplicit := false
 	fs.Visit(func(f *flag.Flag) {
 		if f.Name == "codepage" {
@@ -130,7 +130,7 @@ examples:
 		return err
 	}
 
-	transport := newLazyNativeZoweTransport(loadDefaultZoweSession)
+	var source dataSetSource = newLazyZOSMFTransport(loadDefaultZoweSession)
 
 	var cbFormat copybook.Format
 	switch *format {
@@ -154,7 +154,7 @@ examples:
 
 	var src []byte
 	if *copybookDSN != "" {
-		src, err = transport.fetchCopybook(context.Background(), *copybookDSN)
+		src, err = source.fetchCopybook(context.Background(), *copybookDSN)
 	} else {
 		src, err = os.ReadFile(*copybookPath)
 		if err == nil {
@@ -164,7 +164,7 @@ examples:
 	if err != nil {
 		return err
 	}
-	resolver := newDSNCopyResolver(cfg.DSNSearchPath, transport)
+	resolver := newDSNCopyResolver(cfg.DSNSearchPath, source)
 	items, err := copybook.ParseWithCopies(string(src), cbFormat, resolver.Resolve)
 	if err != nil {
 		return err
@@ -195,7 +195,7 @@ examples:
 	}
 	codepageName := *codepage
 	if *dataDSN != "" && !codepageExplicit {
-		encoding, err := transport.encoding()
+		encoding, err := source.encoding()
 		if err != nil {
 			return err
 		}
@@ -236,7 +236,7 @@ examples:
 				hint.RecordLength = *lrecl
 			}
 		}
-		data, err := transport.openDataSet(*dataDSN, hint)
+		data, err := source.openDataSet(*dataDSN, hint)
 		if err != nil {
 			return err
 		}
@@ -282,7 +282,7 @@ type layoutDoc struct {
 	Fields    []*layout.Field `json:"fields"`
 }
 
-func printLayout(w io.Writer, recs []*layout.Record, pretty bool) error {
+func layoutDocuments(recs []*layout.Record) []layoutDoc {
 	docs := make([]layoutDoc, 0, len(recs))
 	for _, r := range recs {
 		d := layoutDoc{Record: r.Name, Length: r.MaxLength, Fields: r.Children}
@@ -291,11 +291,15 @@ func printLayout(w io.Writer, recs []*layout.Record, pretty bool) error {
 		}
 		docs = append(docs, d)
 	}
+	return docs
+}
+
+func printLayout(w io.Writer, recs []*layout.Record, pretty bool) error {
 	enc := json.NewEncoder(w)
 	if pretty {
 		enc.SetIndent("", "  ")
 	}
-	return enc.Encode(docs)
+	return enc.Encode(layoutDocuments(recs))
 }
 
 func decodeAll(w io.Writer, d *record.Decoder, in io.Reader, pretty bool, max int, q *query.Query, rawOut bool) error {
@@ -363,11 +367,11 @@ func decodeAll(w io.Writer, d *record.Decoder, in io.Reader, pretty bool, max in
 // queryLayout runs the jq expression against the layout document (the same
 // array printLayout writes).
 func queryLayout(w io.Writer, recs []*layout.Record, q *query.Query, rawOut, pretty bool) error {
-	var buf bytes.Buffer
-	if err := printLayout(&buf, recs, false); err != nil {
+	input, err := json.Marshal(layoutDocuments(recs))
+	if err != nil {
 		return err
 	}
-	v, err := query.FromJSON(buf.Bytes())
+	v, err := query.FromJSON(input)
 	if err != nil {
 		return err
 	}

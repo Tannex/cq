@@ -77,8 +77,6 @@ type Item struct {
 	SignSeparate bool
 	SignLeading  bool
 	Sync         bool
-	Justified    bool
-	BlankZero    bool
 	Conditions   []Condition
 	Children     []*Item
 	Line         int // 1-based source line of the entry

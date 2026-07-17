@@ -58,17 +58,14 @@ func NewDecoder(rec *layout.Record, cm *decode.Charmap) (*Decoder, error) {
 
 // Next reads the next record. io.EOF signals a clean end of input.
 func (d *Decoder) Next(r io.Reader) ([]byte, error) {
-	if d.Lrecl > 0 {
-		buf := make([]byte, d.Lrecl)
-		if _, err := io.ReadFull(r, buf); err != nil {
-			return nil, eofOr(err, d.Lrecl)
+	if d.Lrecl > 0 || d.odo == nil {
+		n := d.Rec.MaxLength
+		if d.Lrecl > 0 {
+			n = d.Lrecl
 		}
-		return buf, nil
-	}
-	if d.odo == nil {
-		buf := make([]byte, d.Rec.MaxLength)
+		buf := make([]byte, n)
 		if _, err := io.ReadFull(r, buf); err != nil {
-			return nil, eofOr(err, d.Rec.MaxLength)
+			return nil, eofOr(err, n)
 		}
 		return buf, nil
 	}
@@ -82,10 +79,8 @@ func (d *Decoder) Next(r io.Reader) ([]byte, error) {
 		return nil, err
 	}
 	tail := make([]byte, n*d.odo.Length)
-	if len(tail) > 0 {
-		if _, err := io.ReadFull(r, tail); err != nil {
-			return nil, fmt.Errorf("record truncated: wanted %d table bytes: %w", len(tail), err)
-		}
+	if _, err := io.ReadFull(r, tail); err != nil {
+		return nil, fmt.Errorf("record truncated: wanted %d table bytes: %w", len(tail), err)
 	}
 	return append(prefix, tail...), nil
 }
