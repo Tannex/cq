@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -23,7 +24,7 @@ import (
 
 const (
 	defaultRequestTimeout = 30 * time.Second
-	maxScrollOffset       = int(^uint(0) >> 1)
+	maxScrollOffset       = math.MaxInt
 	mouseWheelStep        = 3
 )
 
@@ -70,16 +71,7 @@ type status struct {
 	Text  string
 }
 
-type requestKind uint8
-
-const (
-	requestDataSets requestKind = iota
-	requestMembers
-	requestRecords
-)
-
 type requestMeta struct {
-	Kind       requestKind
 	Generation uint64
 	Screen     Screen
 	Identity   string
@@ -176,6 +168,7 @@ type Model struct {
 
 	showHelp     bool
 	helpVertical int
+	jsonCache    jsonContentCache
 
 	profiles   []string
 	active     int
@@ -268,13 +261,6 @@ func validateCopybookFormat(format string) error {
 	}
 }
 
-func firstNonEmpty(value, fallback string) string {
-	if strings.TrimSpace(value) != "" {
-		return value
-	}
-	return fallback
-}
-
 func newStatusSpinner() spinner.Model {
 	return spinner.New(spinner.WithSpinner(spinner.MiniDot))
 }
@@ -316,9 +302,7 @@ func (m *Model) loadWorkspace(index int) {
 	// A workspace created or last active under a different terminal size
 	// carries stale pager geometry; align it before anything renders or
 	// resets a pager from its own visible/budget values.
-	m.workspace.datasetPage.resize(m.visible, m.budget)
-	m.workspace.memberPage.resize(m.visible, m.budget)
-	m.workspace.recordPage.resize(m.visible, m.budget)
+	m.workspace.resizePagers(m.visible, m.budget)
 }
 
 func (m *Model) syncInputsFromWorkspace() {
@@ -528,7 +512,6 @@ func (m *Model) initialCopybookSource() CopybookSource {
 }
 
 func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
-	ws := m.ws()
 	switch msg.Button {
 	case tea.MouseWheelLeft:
 		return m.handleAction(actionWideLeft)
@@ -547,11 +530,21 @@ func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
 		m.helpVertical = max(0, m.helpVertical+delta)
 		return nil
 	}
-	if ws.screen == ScreenRecords && ws.recordMode == ModeJSON {
-		ws.jsonVertical = min(m.maxJSONVertical(), max(0, ws.jsonVertical+delta))
+	if m.scrollJSON(delta) {
 		return nil
 	}
 	return m.moveSelection(delta)
+}
+
+// scrollJSON adjusts the JSON viewport when it is the active scroll target,
+// so input handlers do not each re-derive the screen+mode special case.
+func (m *Model) scrollJSON(delta int) bool {
+	ws := m.ws()
+	if ws.screen != ScreenRecords || ws.recordMode != ModeJSON {
+		return false
+	}
+	ws.jsonVertical = min(m.maxJSONVertical(), max(0, ws.jsonVertical+delta))
+	return true
 }
 
 func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
@@ -598,18 +591,9 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 			m.cancelSearch()
 			return nil
 		default:
-			if m.prefixInput.Focused() {
-				updated, cmd := m.prefixInput.Update(msg)
-				m.prefixInput = updated
-				return cmd
-			}
-			if m.memberInput.Focused() {
-				updated, cmd := m.memberInput.Update(msg)
-				m.memberInput = updated
-				return cmd
-			}
-			updated, cmd := m.locateInput.Update(msg)
-			m.locateInput = updated
+			input := m.focusedInput()
+			updated, cmd := input.Update(msg)
+			*input = updated
 			return cmd
 		}
 	}
@@ -652,14 +636,12 @@ func (m *Model) handleAction(selected action) tea.Cmd {
 	case actionDown:
 		return m.moveSelection(1)
 	case actionPageUp:
-		if ws.screen == ScreenRecords && ws.recordMode == ModeJSON {
-			ws.jsonVertical = max(0, ws.jsonVertical-max(1, m.visible))
+		if m.scrollJSON(-max(1, m.visible)) {
 			return nil
 		}
 		return m.pageSelection(scrollUp)
 	case actionPageDown:
-		if ws.screen == ScreenRecords && ws.recordMode == ModeJSON {
-			ws.jsonVertical = min(m.maxJSONVertical(), ws.jsonVertical+max(1, m.visible))
+		if m.scrollJSON(max(1, m.visible)) {
 			return nil
 		}
 		return m.pageSelection(scrollDown)
@@ -786,8 +768,17 @@ func (m *Model) clearOverlay() {
 	ws.status = status{Level: statusReady, Text: "copybook overlay cleared"}
 }
 
+func (m *Model) focusedInput() *textinput.Model {
+	for _, input := range []*textinput.Model{&m.prefixInput, &m.memberInput, &m.locateInput} {
+		if input.Focused() {
+			return input
+		}
+	}
+	return nil
+}
+
 func (m *Model) inputFocused() bool {
-	return m.prefixInput.Focused() || m.memberInput.Focused() || m.locateInput.Focused()
+	return m.focusedInput() != nil
 }
 
 func (m *Model) acceptSearch() tea.Cmd {
@@ -853,17 +844,9 @@ func (m *Model) acceptRecordLocation() tea.Cmd {
 }
 
 func (m *Model) cancelSearch() {
-	if m.prefixInput.Focused() {
-		m.prefixInput.SetValue(m.workspace.prefix)
-		m.prefixInput.Blur()
-	}
-	if m.memberInput.Focused() {
-		m.memberInput.SetValue(m.workspace.memberPattern)
-		m.memberInput.Blur()
-	}
-	if m.locateInput.Focused() {
-		m.locateInput.SetValue("")
-		m.locateInput.Blur()
+	if input := m.focusedInput(); input != nil {
+		input.Blur()
+		m.syncInputsFromWorkspace()
 	}
 }
 
@@ -1051,9 +1034,7 @@ func (m *Model) handleResize(width, height int) tea.Cmd {
 		m.dialog.setWidth(width)
 	}
 
-	ws.datasetPage.resize(m.visible, m.budget)
-	ws.memberPage.resize(m.visible, m.budget)
-	ws.recordPage.resize(m.visible, m.budget)
+	ws.resizePagers(m.visible, m.budget)
 	ws.jsonVertical = min(ws.jsonVertical, m.maxJSONVertical())
 
 	if m.budget <= 0 {
@@ -1103,7 +1084,7 @@ func (m *Model) startDataSets(ws *workspace, plan pagePlan[string]) tea.Cmd {
 	ws.cancelBrowse()
 	ws.browseGeneration++
 	meta := requestMeta{
-		Kind: requestDataSets, Generation: ws.browseGeneration, Screen: ScreenDataSets,
+		Generation: ws.browseGeneration, Screen: ScreenDataSets,
 		Identity: ws.prefix, Profile: ws.profile, Budget: m.budget, NamePlan: plan,
 	}
 	ws.browsePending = &meta
@@ -1124,10 +1105,9 @@ func (m *Model) startMembers(ws *workspace, plan pagePlan[string]) tea.Cmd {
 	}
 	ws.cancelBrowse()
 	ws.browseGeneration++
-	identity := ws.dataSet.Name + "|" + ws.memberPattern
 	meta := requestMeta{
-		Kind: requestMembers, Generation: ws.browseGeneration, Screen: ScreenMembers,
-		Identity: identity, Profile: ws.profile, Budget: m.budget, NamePlan: plan,
+		Generation: ws.browseGeneration, Screen: ScreenMembers,
+		Identity: ws.memberIdentity(), Profile: ws.profile, Budget: m.budget, NamePlan: plan,
 	}
 	ws.browsePending = &meta
 	ctx, cancel := context.WithTimeout(context.Background(), m.deps.Timeout)
@@ -1151,9 +1131,9 @@ func (m *Model) startRecords(ws *workspace, plan pagePlan[int64]) tea.Cmd {
 	if ws.member != nil {
 		member = ws.member.Name
 	}
-	identity := ws.dataSet.Name + "(" + member + ")"
+	identity := ws.recordIdentity()
 	meta := requestMeta{
-		Kind: requestRecords, Generation: ws.browseGeneration, Screen: ScreenRecords,
+		Generation: ws.browseGeneration, Screen: ScreenRecords,
 		Identity: identity, Profile: ws.profile, Budget: m.budget, RecordPlan: plan,
 	}
 	ws.browsePending = &meta
@@ -1240,7 +1220,14 @@ func (m *Model) handleRecordsResult(ws *workspace, msg recordsResultMsg) tea.Cmd
 		msg.Page.MoreRows, msg.Meta.Budget, msg.Meta.RecordPlan,
 		func(row recordRow) string { return strconv.FormatInt(row.Record.Number, 10) },
 	)
-	ws.rawLongest = longestRawDisplayWidth(ws.records, ws.charmap)
+	if msg.Meta.RecordPlan.Direction == pageForward {
+		// Forward pages only append; scanning just the incoming rows keeps the
+		// running maximum without re-decoding the whole cache on every fetch.
+		bounded, _ := boundedWindow(incoming, msg.Meta.Budget)
+		ws.rawLongest = max(ws.rawLongest, longestRawDisplayWidth(bounded, ws.charmap))
+	} else {
+		ws.rawLongest = longestRawDisplayWidth(ws.records, ws.charmap)
+	}
 	if ended {
 		ws.status = status{Level: statusReady, Text: "end of records"}
 		return nil

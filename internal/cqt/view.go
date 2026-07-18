@@ -180,6 +180,19 @@ func (m *Model) tabBar() string {
 	return consolePalette.panel.Width(m.width).Render(bar)
 }
 
+// scrollWindow clamps offset to the scrollable range and returns the visible
+// slice of lines for a panel of the given capacity.
+func scrollWindow(lines []string, offset, capacity int) []string {
+	offset = min(offset, max(0, len(lines)-capacity))
+	if offset > 0 {
+		lines = lines[offset:]
+	}
+	if len(lines) > capacity {
+		lines = lines[:capacity]
+	}
+	return lines
+}
+
 // helpContent returns the grouped key bindings as styled text lines (no header
 // or footer) so it can be consumed by both the full-area panel and the popup.
 // Every line is rendered through the supplied styles so all cells carry the
@@ -207,14 +220,7 @@ func (m *Model) helpPanel() string {
 	lines := []string{consolePalette.panel.Bold(true).Width(m.width).Render("  HELP  press ? to close")}
 	lines = append(lines, m.helpContent(consolePalette.cyan.Bold(true), consolePalette.plain)...)
 	capacity := m.visible + 1
-	maxOffset := max(0, len(lines)-capacity)
-	offset := min(m.helpVertical, maxOffset)
-	if offset > 0 {
-		lines = lines[offset:]
-	}
-	if len(lines) > capacity {
-		lines = lines[:capacity]
-	}
+	lines = scrollWindow(lines, m.helpVertical, capacity)
 	for len(lines) < capacity {
 		lines = append(lines, "")
 	}
@@ -240,15 +246,7 @@ func (m *Model) overlayHelp(background string) string {
 	accent := consolePalette.cyan.Bold(true).Inherit(consolePalette.popup)
 	body := consolePalette.popup
 
-	contentLines := m.helpContent(accent, body)
-	maxOffset := max(0, len(contentLines)-contentHeight)
-	offset := min(m.helpVertical, maxOffset)
-	if offset > 0 {
-		contentLines = contentLines[offset:]
-	}
-	if len(contentLines) > contentHeight {
-		contentLines = contentLines[:contentHeight]
-	}
+	contentLines := scrollWindow(m.helpContent(accent, body), m.helpVertical, contentHeight)
 
 	title := accent.Render("HELP")
 	innerLines := []string{
@@ -445,13 +443,13 @@ func (m *Model) statePanel(level statusLevel, text string) string {
 	return strings.Join(lines, "\n")
 }
 
-func denseTableStyles() table.Styles {
+var denseTableStyles = func() table.Styles {
 	styles := table.DefaultStyles()
 	styles.Header = consolePalette.header.Padding(0, 1)
 	styles.Cell = lipgloss.NewStyle().Padding(0, 1)
 	styles.Selected = consolePalette.selected
 	return styles
-}
+}()
 
 func (m *Model) dataSetTableView() string {
 	showVolume := m.width >= 76
@@ -490,7 +488,7 @@ func (m *Model) dataSetTableView() string {
 		}
 		row := table.Row{marker, dataSet.Name, dataSet.Organization, dataSet.RecordFormat, dataSet.RecordLength}
 		if showVolume {
-			row = append(row, firstNonEmpty(dataSet.Volume, dataSet.Volumes))
+			row = append(row, displayOr(dataSet.Volume, dataSet.Volumes))
 		}
 		if showReferenced {
 			row = append(row, dataSet.ReferenceDate)
@@ -558,7 +556,7 @@ func renderTable(width, visible int, columns []table.Column, rows []table.Row, c
 		table.WithFocused(true),
 		table.WithWidth(width),
 		table.WithHeight(height),
-		table.WithStyles(denseTableStyles()),
+		table.WithStyles(denseTableStyles),
 	)
 	if cursorOffset >= 0 {
 		model.SetCursor(cursorOffset)
@@ -688,7 +686,7 @@ func (m *Model) recordJSONView() string {
 		return m.statePanel(statusEmpty, "no selected record")
 	}
 	row := m.records[selected]
-	content := m.recordJSONContent(row)
+	content, lineCount, _, _ := m.selectedJSONContent()
 	numberWidth := m.recordNumberWidth()
 	title := fmt.Sprintf("  %-*s │ PRETTY JSON", numberWidth, "RECORD")
 	hint := "  j/k record  pgup/pgdn scroll"
@@ -699,7 +697,7 @@ func (m *Model) recordJSONView() string {
 	model.SetHorizontalStep(hScrollStep)
 	model.SetContent(content)
 	model.SetXOffset(m.horizontal * hScrollStep)
-	maxVertical := max(0, len(strings.Split(content, "\n"))-m.visible)
+	maxVertical := max(0, lineCount-m.visible)
 	model.SetYOffset(min(m.jsonVertical, maxVertical))
 	model.LeftGutterFunc = func(context viewport.GutterContext) string {
 		if context.Index == 0 {
@@ -721,12 +719,56 @@ func (m *Model) recordJSONContent(row recordRow) string {
 	return content
 }
 
-func (m *Model) maxJSONVertical() int {
+// jsonContentCache memoizes the selected record's pretty JSON so Update
+// (scroll clamping) and View do not each re-marshal the same record. The key
+// covers everything recordJSONContent reads: the raw bytes (by slice
+// identity — fetches always allocate fresh slices), decode outcome, and
+// charmap.
+type jsonContentCache struct {
+	valid   bool
+	data    []byte
+	decoded *record.DecodedRecord
+	err     error
+	charmap *decode.Charmap
+	content string
+	lines   int
+	longest int
+}
+
+func sameSlice(a, b []byte) bool {
+	return len(a) == len(b) && (len(a) == 0 || &a[0] == &b[0])
+}
+
+// selectedJSONContent returns the selected record's pretty JSON along with its
+// line count and widest line width. ok is false when no record is selected.
+func (m *Model) selectedJSONContent() (content string, lines, longest int, ok bool) {
 	selected := m.recordPage.selectedIndex()
 	if selected < 0 || selected >= len(m.records) {
+		return "", 0, 0, false
+	}
+	row := m.records[selected]
+	cache := &m.jsonCache
+	if cache.valid && sameSlice(cache.data, row.Record.Data) && cache.decoded == row.Decoded && cache.err == row.Err && cache.charmap == m.charmap {
+		return cache.content, cache.lines, cache.longest, true
+	}
+	content = m.recordJSONContent(row)
+	for _, line := range strings.Split(content, "\n") {
+		lines++
+		longest = max(longest, lipgloss.Width(line))
+	}
+	*cache = jsonContentCache{
+		valid: true, data: row.Record.Data, decoded: row.Decoded, err: row.Err, charmap: m.charmap,
+		content: content, lines: lines, longest: longest,
+	}
+	return content, lines, longest, true
+}
+
+func (m *Model) maxJSONVertical() int {
+	_, lines, _, ok := m.selectedJSONContent()
+	if !ok {
 		return 0
 	}
-	return max(0, len(strings.Split(m.recordJSONContent(m.records[selected]), "\n"))-m.visible)
+	return max(0, lines-m.visible)
 }
 
 func (m *Model) statusLine() string {
@@ -915,13 +957,7 @@ func (m *Model) maxHorizontal() int {
 	available := max(1, m.width-(m.recordNumberWidth()+5))
 	longest := 0
 	if m.recordMode == ModeJSON {
-		selected := m.recordPage.selectedIndex()
-		if selected >= 0 && selected < len(m.records) {
-			content := m.recordJSONContent(m.records[selected])
-			for _, line := range strings.Split(content, "\n") {
-				longest = max(longest, lipgloss.Width(line))
-			}
-		}
+		_, _, longest, _ = m.selectedJSONContent()
 	} else {
 		longest = m.rawLongest
 	}
@@ -957,20 +993,6 @@ func displayOr(value, fallback string) string {
 		return fallback
 	}
 	return value
-}
-
-func truncatePlain(value string, width int) string {
-	if width <= 0 {
-		return ""
-	}
-	runes := []rune(value)
-	if len(runes) <= width {
-		return value
-	}
-	if width == 1 {
-		return "…"
-	}
-	return string(runes[:width-1]) + "…"
 }
 
 func truncateStyled(value string, width int) string {
