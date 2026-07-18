@@ -83,22 +83,42 @@ func TestRawRecordViewUsesFixedGutterAndVisibleControlMarkers(t *testing.T) {
 	}
 }
 
-func TestEndMarkerAppearsOnlyAtKnownEnd(t *testing.T) {
+func TestEndMarkerBlankLineAppearsOnlyAtKnownEnd(t *testing.T) {
 	model := recordWindowModel(t, 4, 8)
 	model.recordMode = ModeRaw
 
-	if content := ansi.Strip(model.rawRecordView()); strings.Contains(content, "end of results") {
-		t.Fatalf("end marker appeared before the last row was selected:\n%s", content)
+	// Away from the end the window shows a full four rows.
+	if content := ansi.Strip(model.rawRecordView()); !strings.Contains(content, "00000101 │") {
+		t.Fatalf("full window did not start at the first row:\n%s", content)
 	}
 
+	// At the known end the oldest visible row yields to a trailing blank line.
 	model.recordPage.bottom()
-	if content := ansi.Strip(model.rawRecordView()); !strings.Contains(content, "── end of results ──") {
-		t.Fatalf("known end did not show the marker:\n%s", content)
+	content := ansi.Strip(model.rawRecordView())
+	if strings.Contains(content, "00000105 │") || !strings.Contains(content, "00000106 │") {
+		t.Fatalf("known end did not reserve a trailing blank line:\n%s", content)
+	}
+	lines := strings.Split(content, "\n")
+	if last := strings.TrimSpace(lines[len(lines)-1]); last != "" {
+		t.Fatalf("line after the last row is not blank: %q", last)
 	}
 
+	// With more rows available the full window returns.
 	model.recordPage.more = true
-	if content := ansi.Strip(model.rawRecordView()); strings.Contains(content, "end of results") {
-		t.Fatalf("end marker appeared while more records were available:\n%s", content)
+	if content := ansi.Strip(model.rawRecordView()); !strings.Contains(content, "00000105 │") {
+		t.Fatalf("blank end line appeared while more records were available:\n%s", content)
+	}
+}
+
+func TestEndMarkerSkippedWhenListShorterThanWindow(t *testing.T) {
+	model := recordWindowModel(t, 6, 3)
+	model.recordMode = ModeRaw
+	model.recordPage.bottom()
+	content := ansi.Strip(model.rawRecordView())
+	for _, want := range []string{"00000101 │", "00000102 │", "00000103 │"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("short list dropped row %q:\n%s", want, content)
+		}
 	}
 }
 
@@ -222,9 +242,6 @@ func TestSelectedTableRowRemainsAboveStatusLine(t *testing.T) {
 	}
 	if !strings.Contains(content, "  00000007 │") || strings.Contains(content, "00000006 │") {
 		t.Fatalf("table rendered the wrong end-marker window:\n%s", content)
-	}
-	if !strings.Contains(content, "── end of results ──") {
-		t.Fatalf("table did not show the end marker:\n%s", content)
 	}
 }
 

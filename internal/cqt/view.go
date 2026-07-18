@@ -327,10 +327,10 @@ func (m *Model) memberTableView() string {
 
 func endMarkerWindow[A comparable](pager *pager[A]) (start, end int, showEnd bool) {
 	start, end = pager.windowRange()
-	showEnd = pager.visible > 1 && pager.atEnd()
-	// Reserve one row only at the true end. Dropping the oldest visible row
-	// keeps the selected final row stationary while making the boundary explicit.
-	if showEnd && end-start >= pager.visible {
+	// A trailing blank row marks the known end of data, but only when the
+	// window is otherwise full — a shorter list already has blank space below.
+	showEnd = pager.visible > 1 && pager.atEnd() && end-start >= pager.visible
+	if showEnd {
 		start++
 	}
 	return start, end, showEnd
@@ -360,7 +360,7 @@ func renderTable(width, visible int, columns []table.Column, rows []table.Row, c
 }
 
 func endMarker(width int) string {
-	return consolePalette.muted.Width(width).Render("  ── end of results ──")
+	return strings.Repeat(" ", max(0, width))
 }
 
 func (m *Model) rawRecordView() string {
