@@ -167,6 +167,10 @@ func (m *Model) searchLine() string {
 			line = fmt.Sprintf(" DATA SET  %s    MEMBER FILTER  %s", m.dataSet.Name, displayOr(m.memberPattern, "*"))
 		}
 	case ScreenRecords:
+		if m.locateInput.Focused() {
+			line = m.locateInput.View()
+			break
+		}
 		overlayText := "none"
 		if m.overlay != nil {
 			overlayText = m.overlay.Source.label()
@@ -443,7 +447,9 @@ func (m *Model) recordJSONView() string {
 	row := m.records[selected]
 	content := m.recordJSONContent(row)
 	numberWidth := m.recordNumberWidth()
-	header := consolePalette.panel.Bold(true).Render(fmt.Sprintf("  %-*s │ PRETTY JSON", numberWidth, "RECORD"))
+	title := fmt.Sprintf("  %-*s │ PRETTY JSON", numberWidth, "RECORD")
+	hint := "  j/k record  pgup/pgdn scroll"
+	header := truncateStyled(consolePalette.panel.Bold(true).Render(title)+consolePalette.panel.Faint(true).Render(hint), m.width)
 	model := viewport.New(viewport.WithWidth(m.width), viewport.WithHeight(m.visible))
 	model.SoftWrap = false
 	model.FillHeight = true

@@ -126,6 +126,9 @@ func TestRecordTableAndJSONShareTypedValueAndShowDiagnostics(t *testing.T) {
 	if model.records[0].Decoded != pointer || !strings.Contains(jsonContent, `"AMOUNT": 123456789012345678.90`) {
 		t.Fatalf("JSON view lost shared exact typed value: %q", jsonContent)
 	}
+	if !strings.Contains(jsonContent, "j/k record  pgup/pgdn scroll") {
+		t.Fatalf("JSON view missing navigation hint: %q", jsonContent)
+	}
 	model.showDiagnostics = true
 	status := model.statusLine()
 	if !strings.Contains(status, "field AMOUNT") || !strings.Contains(status, "offset 5") {
@@ -307,7 +310,7 @@ func TestFitHeightTruncatesAndPadsLinesToTerminalWidth(t *testing.T) {
 func TestHelpPanelReplacesDataAreaWithGroupedBindings(t *testing.T) {
 	model := recordViewModel(t)
 	// Use a taller terminal so every help section fits without truncation.
-	model.width, model.height = 80, 24
+	model.width, model.height = 80, 28
 	model.visible = VisibleRows(model.width, model.height)
 	model.budget = RowBudget(model.visible)
 	model.recordPage.resize(model.visible, model.budget)
@@ -321,7 +324,7 @@ func TestHelpPanelReplacesDataAreaWithGroupedBindings(t *testing.T) {
 			t.Fatalf("help panel missing section %q: %q", section, content)
 		}
 	}
-	for _, binding := range []string{"enter", "f10", "f11", "q"} {
+	for _, binding := range []string{"enter", "/", "←/h", "→/l", "q"} {
 		if !strings.Contains(content, binding) {
 			t.Fatalf("help panel missing binding %q: %q", binding, content)
 		}

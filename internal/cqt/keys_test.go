@@ -27,16 +27,46 @@ func TestFunctionKeysUseActualBubbleTeaMessagesInEveryWideMode(t *testing.T) {
 	}
 }
 
-func TestFunctionKeysAreNowhereOutsideWideRecordViews(t *testing.T) {
+func TestHorizontalPanKeysAreScopedToRecordViews(t *testing.T) {
 	keys := DefaultKeyMap()
+	records := keyContext{Screen: ScreenRecords}
+	for _, test := range []struct {
+		message tea.KeyPressMsg
+		want    action
+	}{
+		{keyPress(tea.KeyF10, ""), actionWideLeft},
+		{tea.KeyPressMsg(tea.Key{Code: tea.KeyLeft}), actionWideLeft},
+		{keyPress('h', "h"), actionWideLeft},
+		{keyPress(tea.KeyF11, ""), actionWideRight},
+		{tea.KeyPressMsg(tea.Key{Code: tea.KeyRight}), actionWideRight},
+		{keyPress('l', "l"), actionWideRight},
+	} {
+		if got := keys.actionFor(test.message, records); got != test.want {
+			t.Fatalf("records key %q action = %d, want %d", test.message.String(), got, test.want)
+		}
+	}
 	for _, screen := range []Screen{ScreenDataSets, ScreenMembers} {
 		ctx := keyContext{Screen: screen}
-		if got := keys.actionFor(keyPress(tea.KeyF10, ""), ctx); got != actionNone {
-			t.Fatalf("screen %d reused F10 as action %d", screen, got)
+		for _, message := range []tea.KeyPressMsg{
+			keyPress(tea.KeyF10, ""), tea.KeyPressMsg(tea.Key{Code: tea.KeyLeft}), keyPress('h', "h"),
+			keyPress(tea.KeyF11, ""), tea.KeyPressMsg(tea.Key{Code: tea.KeyRight}), keyPress('l', "l"),
+		} {
+			if got := keys.actionFor(message, ctx); got != actionNone {
+				t.Fatalf("screen %d key %q dispatched action %d", screen, message.String(), got)
+			}
 		}
-		if got := keys.actionFor(keyPress(tea.KeyF11, ""), ctx); got != actionNone {
-			t.Fatalf("screen %d reused F11 as action %d", screen, got)
+	}
+}
+
+func TestSlashFiltersListsAndLocatesRecords(t *testing.T) {
+	keys := DefaultKeyMap()
+	for _, screen := range []Screen{ScreenDataSets, ScreenMembers, ScreenRecords} {
+		if got := keys.actionFor(keyPress('/', "/"), keyContext{Screen: screen}); got != actionSearch {
+			t.Fatalf("screen %d slash action = %d", screen, got)
 		}
+	}
+	if help := keys.Locate.Help(); help.Desc != "locate" {
+		t.Fatalf("locate help = %#v", help)
 	}
 }
 
@@ -119,7 +149,7 @@ func TestF10AndF11DoNotCollideWithOtherBindings(t *testing.T) {
 	keys := DefaultKeyMap()
 	others := []key.Binding{
 		keys.Up, keys.Down, keys.PageUp, keys.PageDown, keys.Top, keys.Bottom,
-		keys.Open, keys.Back, keys.Search, keys.Refresh, keys.Copybook,
+		keys.Open, keys.Back, keys.Search, keys.Locate, keys.Refresh, keys.Copybook,
 		keys.ClearOverlay, keys.ToggleOverlay, keys.ToggleView, keys.Diagnostics,
 		keys.Help, keys.Quit, keys.Accept, keys.Cancel, keys.NextField, keys.PreviousField,
 	}
@@ -130,10 +160,10 @@ func TestF10AndF11DoNotCollideWithOtherBindings(t *testing.T) {
 			}
 		}
 	}
-	if got := keys.WideLeft.Keys(); len(got) != 1 || got[0] != "f10" {
-		t.Fatalf("F10 binding = %#v", got)
+	if got := keys.WideLeft.Keys(); !slices.Equal(got, []string{"f10", "left", "h"}) {
+		t.Fatalf("left pan binding = %#v", got)
 	}
-	if got := keys.WideRight.Keys(); len(got) != 1 || got[0] != "f11" {
-		t.Fatalf("F11 binding = %#v", got)
+	if got := keys.WideRight.Keys(); !slices.Equal(got, []string{"f11", "right", "l"}) {
+		t.Fatalf("right pan binding = %#v", got)
 	}
 }

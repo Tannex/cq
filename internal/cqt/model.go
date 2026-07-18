@@ -162,6 +162,7 @@ type Model struct {
 	memberPattern string
 	prefixInput   textinput.Model
 	memberInput   textinput.Model
+	locateInput   textinput.Model
 	dialog        *copybookDialog
 
 	datasets     []zosmf.DataSet
@@ -254,6 +255,14 @@ func NewModel(options Options, deps Dependencies) (*Model, error) {
 	memberStyles := memberInput.Styles()
 	memberStyles.Cursor.Blink = false
 	memberInput.SetStyles(memberStyles)
+	locateInput := textinput.New()
+	locateInput.Prompt = "RECORD  "
+	locateInput.Placeholder = "record number"
+	locateInput.CharLimit = 19
+	locateInput.SetWidth(24)
+	locateStyles := locateInput.Styles()
+	locateStyles.Cursor.Blink = false
+	locateInput.SetStyles(locateStyles)
 
 	m := &Model{
 		options:     options,
@@ -266,6 +275,7 @@ func NewModel(options Options, deps Dependencies) (*Model, error) {
 		decodedMode: ModeTable,
 		prefixInput: prefixInput,
 		memberInput: memberInput,
+		locateInput: locateInput,
 		status:      status{Level: statusLoading, Text: "loading Zowe session"},
 	}
 	return m, nil
@@ -449,8 +459,13 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 				m.prefixInput = updated
 				return cmd
 			}
-			updated, cmd := m.memberInput.Update(msg)
-			m.memberInput = updated
+			if m.memberInput.Focused() {
+				updated, cmd := m.memberInput.Update(msg)
+				m.memberInput = updated
+				return cmd
+			}
+			updated, cmd := m.locateInput.Update(msg)
+			m.locateInput = updated
 			return cmd
 		}
 	}
@@ -478,6 +493,10 @@ func (m *Model) handleAction(selected action) tea.Cmd {
 			m.memberInput.SetValue(m.memberPattern)
 			m.memberInput.CursorEnd()
 			return m.memberInput.Focus()
+		}
+		if m.screen == ScreenRecords {
+			m.locateInput.SetValue("")
+			return m.locateInput.Focus()
 		}
 	case actionUp:
 		return m.moveSelection(-1)
@@ -592,10 +611,13 @@ func (m *Model) handleAction(selected action) tea.Cmd {
 }
 
 func (m *Model) inputFocused() bool {
-	return m.prefixInput.Focused() || m.memberInput.Focused()
+	return m.prefixInput.Focused() || m.memberInput.Focused() || m.locateInput.Focused()
 }
 
 func (m *Model) acceptSearch() tea.Cmd {
+	if m.locateInput.Focused() {
+		return m.acceptRecordLocation()
+	}
 	if m.prefixInput.Focused() {
 		prefix := strings.ToUpper(strings.TrimSpace(m.prefixInput.Value()))
 		if prefix == "" {
@@ -625,10 +647,31 @@ func (m *Model) acceptSearch() tea.Cmd {
 	m.cancelDecode()
 	m.memberPattern = pattern
 	m.resetMemberState()
+	m.status = status{Level: statusReady, Text: "member filter " + displayOr(pattern, "*")}
 	if m.budget <= 0 {
 		return nil
 	}
 	return m.startMembers(m.memberPage.initialPlan(""))
+}
+
+func (m *Model) acceptRecordLocation() tea.Cmd {
+	value := strings.TrimSpace(m.locateInput.Value())
+	number, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || number <= 0 {
+		m.status = status{Level: statusError, Text: "record number must be a positive integer"}
+		return nil
+	}
+	m.locateInput.Blur()
+	if m.recordPage.selectKey(strconv.FormatInt(number, 10)) {
+		m.jsonVertical = 0
+		m.status = status{Level: statusReady, Text: fmt.Sprintf("located record %d", number)}
+		return m.maybePrefetch()
+	}
+
+	m.cancelBrowse()
+	m.cancelDecode()
+	m.resetRecordState()
+	return m.startRecords(m.recordPage.initialPlan(number))
 }
 
 func (m *Model) cancelSearch() {
@@ -639,6 +682,10 @@ func (m *Model) cancelSearch() {
 	if m.memberInput.Focused() {
 		m.memberInput.SetValue(m.memberPattern)
 		m.memberInput.Blur()
+	}
+	if m.locateInput.Focused() {
+		m.locateInput.SetValue("")
+		m.locateInput.Blur()
 	}
 }
 
@@ -838,6 +885,7 @@ func (m *Model) handleResize(width, height int) tea.Cmd {
 	m.help.SetWidth(max(1, width))
 	m.prefixInput.SetWidth(max(8, width-10))
 	m.memberInput.SetWidth(max(8, min(24, width-10)))
+	m.locateInput.SetWidth(max(8, min(24, width-10)))
 	if m.dialog != nil {
 		m.dialog.setWidth(width)
 	}
@@ -857,22 +905,10 @@ func (m *Model) handleResize(width, height int) tea.Cmd {
 	if m.browsePending != nil && m.browsePending.Budget != m.budget {
 		m.cancelBrowse()
 	}
-	if oldBudget != m.budget {
-		m.statusForRetainedWindow()
-	}
 	if oldBudget == 0 {
 		return m.ensureActivePage()
 	}
 	return m.maybePrefetch()
-}
-
-func (m *Model) statusForRetainedWindow() {
-	count := m.activeRowCount()
-	if count == 0 {
-		m.status = status{Level: statusEmpty, Text: "window resized; no cached rows"}
-		return
-	}
-	m.status = status{Level: statusReady, Text: fmt.Sprintf("window resized; %d cached rows retained", count)}
 }
 
 func (m *Model) maybePrefetch() tea.Cmd {
@@ -936,7 +972,7 @@ func (m *Model) startMembers(plan pagePlan[string]) tea.Cmd {
 	m.browsePending = &meta
 	ctx, cancel := context.WithTimeout(context.Background(), m.deps.Timeout)
 	m.browseCancel = cancel
-	m.status = status{Level: statusLoading, Text: fmt.Sprintf("listing members of %s", m.dataSet.Name)}
+	m.status = status{Level: statusLoading, Text: fmt.Sprintf("listing members of %s with filter %s", m.dataSet.Name, displayOr(m.memberPattern, "*"))}
 	browser := m.browser
 	request := zosmf.ListMembersRequest{DataSet: m.dataSet.Name, Start: plan.Anchor, Pattern: m.memberPattern, MaxItems: m.budget}
 	return m.loadingCommand(func() tea.Msg {

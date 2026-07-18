@@ -484,6 +484,9 @@ func TestMemberPrefixSearchAndNavigationToRecords(t *testing.T) {
 	model.memberInput.Focus()
 	model.memberInput.SetValue("mem")
 	command := model.acceptSearch()
+	if !strings.Contains(model.status.Text, "filter MEM*") {
+		t.Fatalf("effective member filter not echoed in status: %#v", model.status)
+	}
 	executeCommand(t, model, command)
 	last := browser.memberRequests[len(browser.memberRequests)-1]
 	if last.Pattern != "MEM*" || last.Start != "" || last.MaxItems != model.budget {
@@ -499,6 +502,85 @@ func TestMemberPrefixSearchAndNavigationToRecords(t *testing.T) {
 	executeCommand(t, model, command)
 	if model.screen != ScreenRecords || len(browser.recordRequests) != 1 || browser.recordRequests[0].Member != "MEMBER1" {
 		t.Fatalf("member navigation screen=%d records=%#v", model.screen, browser.recordRequests)
+	}
+}
+
+func TestLocateCachedRecordSelectsItWithoutFetching(t *testing.T) {
+	browser := &fakeBrowser{
+		listDataSets: func(context.Context, zosmf.ListDataSetsRequest) (zosmf.DataSetPage, error) {
+			return zosmf.DataSetPage{Items: []zosmf.DataSet{{Name: "HQ.DATA", Organization: "PS"}}}, nil
+		},
+		readRecords: func(context.Context, zosmf.ReadRecordsRequest) (zosmf.RecordPage, error) {
+			return zosmf.RecordPage{Records: []zosmf.Record{{Number: 10}, {Number: 20}, {Number: 30}}}, nil
+		},
+	}
+	model := readyModel(t, Options{Prefix: "HQ.*"}, browser, "HQ", "", 90, 15)
+	executeCommand(t, model, model.openSelection())
+	before := len(browser.recordRequests)
+	model.jsonVertical = 4
+	model.locateInput.Focus()
+	model.locateInput.SetValue("20")
+
+	if command := model.acceptSearch(); command != nil {
+		t.Fatal("cached locate dispatched a fetch")
+	}
+	if got := model.recordPage.selectedKey(); got != "20" {
+		t.Fatalf("selected record = %q, want 20", got)
+	}
+	if model.jsonVertical != 0 || model.locateInput.Focused() {
+		t.Fatalf("cached locate vertical=%d focused=%v", model.jsonVertical, model.locateInput.Focused())
+	}
+	if len(browser.recordRequests) != before {
+		t.Fatalf("cached locate made %d requests, want %d", len(browser.recordRequests), before)
+	}
+}
+
+func TestLocateUncachedRecordFetchesFromRequestedAnchor(t *testing.T) {
+	browser := &fakeBrowser{
+		listDataSets: func(context.Context, zosmf.ListDataSetsRequest) (zosmf.DataSetPage, error) {
+			return zosmf.DataSetPage{Items: []zosmf.DataSet{{Name: "HQ.DATA", Organization: "PS"}}}, nil
+		},
+		readRecords: func(_ context.Context, request zosmf.ReadRecordsRequest) (zosmf.RecordPage, error) {
+			number := request.Start
+			if number == 0 {
+				number = 1
+			}
+			return zosmf.RecordPage{Records: []zosmf.Record{{Number: number}}}, nil
+		},
+	}
+	model := readyModel(t, Options{Prefix: "HQ.*"}, browser, "HQ", "", 90, 15)
+	executeCommand(t, model, model.openSelection())
+	model.locateInput.Focus()
+	model.locateInput.SetValue("900")
+
+	command := model.acceptSearch()
+	if command == nil {
+		t.Fatal("uncached locate did not dispatch a fetch")
+	}
+	executeCommand(t, model, command)
+	last := browser.recordRequests[len(browser.recordRequests)-1]
+	if last.Start != 900 || last.MaxItems != model.budget {
+		t.Fatalf("locate request = %#v", last)
+	}
+	if len(model.records) != 1 || model.records[0].Record.Number != 900 || model.recordPage.selectedKey() != "900" {
+		t.Fatalf("located records=%#v selected=%q", model.records, model.recordPage.selectedKey())
+	}
+}
+
+func TestLocateRejectsInvalidRecordNumber(t *testing.T) {
+	model := newTestModel(t, Options{}, &fakeBrowser{}, "HQ", "latin1")
+	model.screen = ScreenRecords
+	model.locateInput.Focus()
+	model.locateInput.SetValue("not-a-number")
+
+	if command := model.acceptSearch(); command != nil {
+		t.Fatal("invalid locate dispatched a command")
+	}
+	if model.status.Level != statusError || model.status.Text != "record number must be a positive integer" {
+		t.Fatalf("invalid locate status = %#v", model.status)
+	}
+	if !model.locateInput.Focused() {
+		t.Fatal("invalid locate did not retain input focus")
 	}
 }
 
@@ -593,7 +675,7 @@ func mBrowseBudget(model *Model) int {
 	return model.browsePending.Budget
 }
 
-func TestResizeShrinkUpdatesStatusForRetainedRowsWithoutFetching(t *testing.T) {
+func TestResizeShrinkPreservesStatusAndRetainedRowsWithoutFetching(t *testing.T) {
 	browser := &fakeBrowser{listDataSets: func(_ context.Context, request zosmf.ListDataSetsRequest) (zosmf.DataSetPage, error) {
 		items := make([]zosmf.DataSet, request.MaxItems)
 		for i := range items {
@@ -603,14 +685,15 @@ func TestResizeShrinkUpdatesStatusForRetainedRowsWithoutFetching(t *testing.T) {
 	}}
 	model := readyModel(t, Options{Prefix: "A*"}, browser, "A", "", 90, 15)
 	before := len(browser.dataSetRequests)
+	beforeStatus := model.status
 	if command := applyMessage(t, model, tea.WindowSizeMsg{Width: 90, Height: 10}); command != nil {
 		t.Fatal("shrink dispatched a request")
 	}
 	if len(browser.dataSetRequests) != before || len(model.datasets) != 20 {
 		t.Fatalf("requests=%d before=%d cached=%d", len(browser.dataSetRequests), before, len(model.datasets))
 	}
-	if model.status.Level != statusReady || !strings.Contains(model.status.Text, "20 cached rows retained") {
-		t.Fatalf("shrink status = %#v", model.status)
+	if model.status != beforeStatus {
+		t.Fatalf("shrink changed status from %#v to %#v", beforeStatus, model.status)
 	}
 }
 

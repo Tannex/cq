@@ -98,6 +98,18 @@ func (p *pager[A]) selectedIndex() int {
 	return p.selected
 }
 
+func (p *pager[A]) selectKey(key string) bool {
+	index := indexOfKey(p.keys, key)
+	if index < 0 {
+		return false
+	}
+	p.selected = index
+	p.scrolling = scrollIdle
+	p.normalizeWindow()
+	p.preserve = p.selectedKey()
+	return true
+}
+
 func (p *pager[A]) windowRange() (int, int) {
 	if len(p.keys) == 0 || p.visible <= 0 {
 		return 0, 0

@@ -76,6 +76,7 @@ type KeyMap struct {
 	Open          key.Binding
 	Back          key.Binding
 	Search        key.Binding
+	Locate        key.Binding
 	Refresh       key.Binding
 	Copybook      key.Binding
 	ClearOverlay  key.Binding
@@ -103,6 +104,7 @@ func DefaultKeyMap() KeyMap {
 		Open:          key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open")),
 		Back:          key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 		Search:        key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
+		Locate:        key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "locate")),
 		Refresh:       key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh")),
 		Copybook:      key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "copybook")),
 		ClearOverlay:  key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "clear overlay")),
@@ -111,8 +113,8 @@ func DefaultKeyMap() KeyMap {
 		Diagnostics:   key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "diagnostics")),
 		Help:          key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 		Quit:          key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
-		WideLeft:      key.NewBinding(key.WithKeys("f10"), key.WithHelp("f10", "left")),
-		WideRight:     key.NewBinding(key.WithKeys("f11"), key.WithHelp("f11", "right")),
+		WideLeft:      key.NewBinding(key.WithKeys("f10", "left", "h"), key.WithHelp("←/h", "pan left")),
+		WideRight:     key.NewBinding(key.WithKeys("f11", "right", "l"), key.WithHelp("→/l", "pan right")),
 		Accept:        key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "apply")),
 		Cancel:        key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
 		NextField:     key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next field")),
@@ -187,6 +189,8 @@ func (k KeyMap) actionFor(msg tea.KeyPressMsg, ctx keyContext) action {
 		return actionBack
 	case key.Matches(msg, k.Search) && ctx.Screen != ScreenRecords:
 		return actionSearch
+	case key.Matches(msg, k.Locate) && ctx.Screen == ScreenRecords:
+		return actionSearch
 	case key.Matches(msg, k.Refresh):
 		return actionRefresh
 	case key.Matches(msg, k.Copybook) && ctx.Screen == ScreenRecords:
@@ -226,7 +230,7 @@ func (k KeyMap) shortHelp(ctx keyContext, overlay bool) []key.Binding {
 	if ctx.Screen != ScreenRecords {
 		bindings = append(bindings, k.Search)
 	} else {
-		bindings = append(bindings, k.WideLeft, k.WideRight, k.Copybook)
+		bindings = append(bindings, k.Locate, k.WideLeft, k.WideRight, k.Copybook)
 		if overlay {
 			bindings = append(bindings, k.ToggleOverlay, k.ToggleView)
 		}
@@ -253,7 +257,7 @@ func (k KeyMap) fullHelp(ctx keyContext, overlay bool) []helpGroup {
 	if ctx.Screen != ScreenRecords {
 		actions = append(actions, k.Search)
 	} else {
-		actions = append(actions, k.WideLeft, k.WideRight, k.Copybook)
+		actions = append(actions, k.Locate, k.WideLeft, k.WideRight, k.Copybook)
 		if overlay {
 			actions = append(actions, k.ToggleOverlay, k.ToggleView, k.Diagnostics, k.ClearOverlay)
 		}
