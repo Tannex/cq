@@ -167,11 +167,12 @@ profile's `encoding`, then `cp037`. The default data set search is
 focused and sends no automatic query. A literal prefix without `*` or `%` is
 treated as a prefix search by appending `*`.
 
-The data set screen keeps unsupported organizations visible. Enter opens PS or
-SEQ data sets directly as records and opens PO/PDS or PO-E/PDSE data sets as a
-member list. Other DSORG values produce an actionable warning and are not
-read. On the data set and member screens, `/` edits the prefix or member
-filter; short literal member filters are expanded as prefix patterns.
+The data set screen keeps unsupported organizations visible. Enter opens PS,
+PS-L (large-format sequential), or SEQ data sets directly as records and opens
+PO/PDS or PO-E/PDSE data sets as a member list. Other DSORG values produce an
+actionable warning and are not read. On the data set and member screens, `/`
+edits the prefix or member filter; short literal member filters are expanded as
+prefix patterns.
 
 ### cqt keys
 

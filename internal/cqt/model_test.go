@@ -303,6 +303,7 @@ func TestDatasetRoutingMembersAndUnsupportedOrganizations(t *testing.T) {
 		listDataSets: func(context.Context, zosmf.ListDataSetsRequest) (zosmf.DataSetPage, error) {
 			return zosmf.DataSetPage{Items: []zosmf.DataSet{
 				{Name: "IBMUSER.SEQ", Organization: "PS"},
+				{Name: "IBMUSER.LARGE", Organization: "PS-L"},
 				{Name: "IBMUSER.PDSE", Organization: "PO-E"},
 				{Name: "IBMUSER.VSAM", Organization: "VS"},
 			}}, nil
@@ -328,6 +329,17 @@ func TestDatasetRoutingMembersAndUnsupportedOrganizations(t *testing.T) {
 	executeCommand(t, model, model.navigateBack())
 	model.datasetPage.selected = 1
 	command = model.openSelection()
+	if model.screen != ScreenRecords || command == nil {
+		t.Fatalf("PS-L route screen=%d command=%v", model.screen, command)
+	}
+	executeCommand(t, model, command)
+	if len(browser.recordRequests) != 2 || browser.recordRequests[1].DataSet != "IBMUSER.LARGE" || browser.recordRequests[1].Member != "" || browser.recordRequests[1].MaxItems != model.budget {
+		t.Fatalf("PS-L record request = %#v", browser.recordRequests)
+	}
+
+	executeCommand(t, model, model.navigateBack())
+	model.datasetPage.selected = 2
+	command = model.openSelection()
 	if model.screen != ScreenMembers || command == nil {
 		t.Fatalf("PDSE route screen=%d command=%v", model.screen, command)
 	}
@@ -337,7 +349,7 @@ func TestDatasetRoutingMembersAndUnsupportedOrganizations(t *testing.T) {
 	}
 
 	executeCommand(t, model, model.navigateBack())
-	model.datasetPage.selected = 2
+	model.datasetPage.selected = 3
 	if command := model.openSelection(); command != nil {
 		t.Fatal("unsupported DSORG dispatched a command")
 	}

@@ -704,7 +704,7 @@ func (m *Model) openSelection() tea.Cmd {
 		selected := m.datasets[index]
 		organization := strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(selected.Organization), " ", ""))
 		switch organization {
-		case "PS", "SEQ":
+		case "PS", "SEQ", "PS-L", "PSL":
 			m.cancelBrowse()
 			m.cancelDecode()
 			m.dataSet = selected
@@ -735,7 +735,7 @@ func (m *Model) openSelection() tea.Cmd {
 			if organization == "" {
 				organization = "unknown"
 			}
-			m.status = status{Level: statusWarn, Text: fmt.Sprintf("%s uses unsupported DSORG %s; only PS, PDS, and PDSE are readable", selected.Name, organization)}
+			m.status = status{Level: statusWarn, Text: fmt.Sprintf("%s uses unsupported DSORG %s; sequential, large-format sequential, PDS, and PDSE data sets are readable", selected.Name, organization)}
 		}
 	case ScreenMembers:
 		index := m.memberPage.selectedIndex()
