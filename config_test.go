@@ -75,7 +75,7 @@ func TestLoadConfigRejectsMemberInSearchPath(t *testing.T) {
 
 func stubUserConfigDir(t *testing.T, dir string, err error) {
 	t.Helper()
-	original := userConfigDir
-	userConfigDir = func() (string, error) { return dir, err }
-	t.Cleanup(func() { userConfigDir = original })
+	original := configLoader.UserConfigDir
+	configLoader.UserConfigDir = func() (string, error) { return dir, err }
+	t.Cleanup(func() { configLoader.UserConfigDir = original })
 }

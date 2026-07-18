@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Tannex/cq/internal/buildinfo"
 )
 
 func runWithArgs(args ...string) error {
@@ -101,9 +103,9 @@ func TestRunRejectsDuplicateDataSources(t *testing.T) {
 }
 
 func TestRunPrintsVersion(t *testing.T) {
-	originalVersion := version
-	version = "v1.2.3"
-	t.Cleanup(func() { version = originalVersion })
+	originalVersion := buildinfo.Version
+	buildinfo.Version = "v1.2.3"
+	t.Cleanup(func() { buildinfo.Version = originalVersion })
 
 	stopCapture := captureStdout(t)
 	if err := runWithArgs("--version"); err != nil {

@@ -3,9 +3,13 @@
 `cq` parses a COBOL copybook and either prints the record layout (byte
 offset and length of every field) or decodes fixed-length EBCDIC records —
 for example a binary dataset streamed straight from z/OS through the user's
-Zowe configuration — into UTF-8 JSON. The
-output is plain JSON on stdout; a built-in jq (`-q`) covers most filtering
-and reshaping, and anything else can be piped into the real `jq`.
+Zowe configuration — into UTF-8 JSON. The output is plain JSON on stdout; a
+built-in jq (`-q`) covers most filtering and reshaping, and anything else can
+be piped into the real `jq`.
+
+The separate `cqt` executable is a read-only terminal browser for z/OSMF data
+sets, PDS/PDSE members, and bounded record windows. It can display raw records
+or apply the same COBOL copybook parser as a table or ordered JSON overlay.
 
 ```console
 $ cq -c CUSTOMER.cpy                         # layout: offset/length of each field
@@ -18,19 +22,21 @@ $ cq -where DTAR107-SALE -c DTAR107.cbl -d sales.bin
 ## Install
 
 Download the archive for your platform from the
-[latest GitHub release](https://github.com/Tannex/cq/releases/latest), extract
-it, and place `cq` (or `cq.exe` on Windows) somewhere on your `PATH`.
-Release archives are available for Linux, macOS, and Windows on both amd64 and
-arm64. Verify a download with the `cq_VERSION_checksums.txt` file attached to
-the same release.
+[latest GitHub release](https://github.com/Tannex/cq/releases/latest). Existing
+`cq_VERSION_OS_ARCH` archives contain the `cq` CLI; separate
+`cqt_VERSION_OS_ARCH` archives contain the terminal browser. Both are available
+for Linux, macOS, and Windows on amd64 and arm64. Extract the archive you need
+and place `cq`/`cqt` (or the corresponding `.exe` on Windows) on your `PATH`.
+The attached `cq_VERSION_checksums.txt` covers both sets of release archives.
 
-Alternatively, install from source with Go:
+Alternatively, install either executable from source with Go:
 
 ```console
 $ go install github.com/Tannex/cq@latest
+$ go install github.com/Tannex/cq/cmd/cqt@latest
 ```
 
-Confirm the installed version with `cq --version`.
+Confirm the installed versions with `cq --version` and `cqt --version`.
 
 ## Usage
 
@@ -133,18 +139,135 @@ the raw bytes before any JSON is built, and combines with `-q` (filter
 first, query after). Conditions inside `OCCURS` tables aren't supported
 yet.
 
+## cqt — read-only z/OSMF browser
+
+`cqt` uses the same Zowe team configuration, operating-system credential
+entry, TLS settings, profile encoding, and `cq/config.json` file as `cq`. It
+does not have a separate credential or application configuration. Run
+`cq config` to create or edit the shared application config. Start `cqt` with
+no copybook for a raw browser, or provide an optional display copybook:
+
+```console
+$ cqt
+$ cqt --prefix 'IBMUSER.*'
+$ cqt --prefix 'PROD.CUSTOMER.*' -c CUSTOMER.cpy --format fixed
+$ cqt --copybook-dsn 'HQ.COPYLIB(CUSTOMER)' --record CUSTOMER-RECORD
+```
+
+```text
+cqt [--prefix PREFIX]
+    [-c COPYBOOK | --copybook COPYBOOK | --copybook-dsn DSN[(MEMBER)]]
+    [--format auto|fixed|free] [--record NAME] [--codepage CODEPAGE]
+```
+
+A copybook is optional, but local and DSN copybook sources are mutually
+exclusive. Codepage precedence is an explicit `--codepage`, the selected Zowe
+profile's `encoding`, then `cp037`. The default data set search is
+`<Zowe user>.*`; a token-only profile with no user opens with the prefix input
+focused and sends no automatic query. A literal prefix without `*` or `%` is
+treated as a prefix search by appending `*`.
+
+The data set screen keeps unsupported organizations visible. Enter opens PS or
+SEQ data sets directly as records and opens PO/PDS or PO-E/PDSE data sets as a
+member list. Other DSORG values produce an actionable warning and are not
+read. On the data set and member screens, `/` edits the prefix or member
+filter; short literal member filters are expanded as prefix patterns.
+
+### cqt keys
+
+| Key | Action |
+| --- | --- |
+| `↑`/`k`, `↓`/`j` | move the selected row |
+| `PgUp`, `PgDn` | move by one visible page |
+| `g`/`Home`, `G`/`End` | first or last row in the current bounded window |
+| `Enter` | open the selected data set/member, or accept focused input/dialog fields |
+| `Esc` | return to the previous screen, or cancel focused input/dialog fields |
+| `/` | edit the data set prefix or member filter |
+| `r` | refresh the current bounded window |
+| `c` | open the copybook overlay dialog on the record screen |
+| `x` | clear the active copybook overlay |
+| `o` | toggle raw records and the active copybook overlay |
+| `v` | toggle copybook table and pretty JSON views without refetching records |
+| `d` | show or hide the selected record/field diagnostic |
+| `F10` | scroll wide raw, table, or JSON data left |
+| `F11` | scroll wide raw, table, or JSON data right |
+| `?` | toggle expanded help |
+| `q`, `Ctrl-C` | quit |
+
+`F10` and `F11` are reserved exclusively for horizontal data movement and are
+not reused in any mode. Global shortcuts are suppressed while a search input
+or copybook dialog is focused; use `Tab`/`Shift-Tab` to move between dialog
+fields.
+
+### Bounded 2× browsing guarantee
+
+For each terminal size, `cqt` calculates the data rows visible after the fixed
+title, search/breadcrumb, table header, status/detail, and help lines. Its row
+budget is **exactly `2 × visible rows`**:
+
+- every data set list, member list, and record read is sent with that exact
+  maximum item/count value;
+- every in-memory data set, member, and record window is trimmed to at most that
+  budget;
+- movement inside the current window does not fetch; crossing a boundary uses a
+  sliding refetch with overlap rather than accumulating pages; and
+- when the terminal is too small to have a positive row count, `cqt` cancels
+  pending row work, displays a resize instruction, and dispatches no row fetch.
+
+Record browsing uses only z/OSMF record ranges. Unlike the `cq --data-dsn`
+streaming optimization, `cqt` never falls back to a whole-data-set download,
+because doing so would violate the browsing cap. Copybook source files are
+metadata for the display overlay and are not record-window rows.
+
+### Copybook and display modes
+
+Raw mode is always available and preserves the fixed record/range gutter. Load
+a copybook at startup with `-c`/`--copybook` or `--copybook-dsn`, or press `c`
+to choose a local file or DSN, source format, and optional 01-level record.
+Nested `COPY MEMBER.` statements use the ordered `dsnSearchPath` libraries in
+the shared `cq/config.json`; this requires the active z/OSMF session even when
+the top-level copybook is local.
+
+A valid overlay persists while browsing data sets and members. If a replacement
+copybook fails to load or parse, the previous valid overlay remains active.
+Press `o` for raw versus overlay, `v` for flattened table versus pretty ordered
+JSON, and `x` to clear the overlay. OCCURS values remain compact JSON cells in
+table mode. A structural row failure automatically falls back to that record's
+raw display.
+
+`cq` remains the strict batch/CLI decoder: malformed zoned, packed, or
+separate-sign data stops decoding with an error, and its established text
+semantics are unchanged. `cqt` uses an explicitly lenient display decoder so
+the browser remains usable on imperfect operational data:
+
+- every text or edited `0x00` LOW-VALUE byte, including trailing bytes, is shown
+  as `·` and diagnosed;
+- malformed zoned, packed, or separate-sign scalar cells become visible strings
+  containing replacement markers, are prefixed with `!` in table view, and keep
+  field path, byte offset/length, bounded raw hex, and the original error in the
+  diagnostic view;
+- valid numeric fields remain exact JSON numbers; and
+- short records, impossible OCCURS DEPENDING ON counters, and other
+  layout-determining failures remain row-level errors with a raw fallback.
+
+This release of `cqt` is strictly read-only. It has no allocate, write, rename,
+delete, save, or edit operations, and its z/OSMF browser interface exposes only
+list/read/fetch methods. The separate `cq` command and its existing behavior and
+installation path are unchanged.
+
 ## Using Zowe
 
-DSN sources are streamed directly from z/OSMF by cq's native Go transport.
-There is no Node.js or npm setup. cq reads the same Zowe team configuration
-and operating-system credential entry as Zowe CLI and Zowe Explorer, then:
+Both `cq` and `cqt` connect directly to z/OSMF through the shared native Go
+transport; there is no Node.js or npm setup. They read the same Zowe team
+configuration and operating-system credential entry as Zowe CLI and Zowe
+Explorer. For example, `cq` can stream both sources directly:
 
 ```console
 $ cq --copybook-dsn "HQ.COPYLIB(CUSTOMER)" --data-dsn "HQ.CUSTOMER.DATA"
 ```
 
-A Zowe team configuration (from Zowe CLI or Zowe Explorer) must exist. cq
-loads the global `zowe.config.json` and `zowe.config.user.json` from
+A Zowe team configuration (from Zowe CLI or Zowe Explorer) must exist. Both
+executables load the global `zowe.config.json` and `zowe.config.user.json` from
 `$ZOWE_CLI_HOME` (or `$HOME/.zowe`) and the nearest project pair found by
 walking up from the current directory. It supports:
 
@@ -160,19 +283,19 @@ walking up from the current directory. It supports:
   reader.
 
 HTTPS connections verify the server certificate by default. When a profile
-explicitly sets `rejectUnauthorized: false`, cq follows that setting and
-disables certificate verification for its z/OSMF connection. This permits
-man-in-the-middle attacks; prefer installing the z/OSMF certificate authority
-in the operating-system trust store.
+explicitly sets `rejectUnauthorized: false`, both executables follow that
+setting and disable certificate verification for their z/OSMF connection. This
+permits man-in-the-middle attacks; prefer installing the z/OSMF certificate
+authority in the operating-system trust store.
 
-cq does not currently load Zowe V1 profiles, arbitrary Imperative
+Neither executable currently loads Zowe V1 profiles, arbitrary Imperative
 credential-manager plug-ins, or client-certificate identities. Those
 configurations must be migrated to a supported Zowe team configuration before
-using DSN sources.
+using DSN sources or the browser.
 
-`cq` is an independent project and is not affiliated with or endorsed by The
-Linux Foundation or the Zowe project. Zowe® is a registered trademark of The
-Linux Foundation.
+`cq` and `cqt` are part of an independent project that is not affiliated with
+or endorsed by The Linux Foundation or the Zowe project. Zowe® is a registered
+trademark of The Linux Foundation.
 
 The copybook is fetched as text so z/OSMF converts its EBCDIC source, while
 the data set is streamed in binary mode to preserve packed and binary fields
@@ -309,6 +432,8 @@ $ git tag -a v1.2.3 -m "v1.2.3"
 $ git push origin v1.2.3
 ```
 
-The release workflow reruns the tests, builds all supported platform archives,
-embeds the tag for `cq --version`, generates SHA-256 checksums and release
-notes, and publishes the files on the repository's GitHub Releases page.
+The release workflow reruns the tests, builds unchanged `cq_VERSION_OS_ARCH`
+archives and separate `cqt_VERSION_OS_ARCH` archives for all supported targets,
+embeds the same tag for both `cq --version` and `cqt --version`, generates one
+SHA-256 checksum file covering both archive sets, creates release notes, and
+publishes the files on the repository's GitHub Releases page.

@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"golang.org/x/text/encoding/charmap"
 )
@@ -123,6 +124,49 @@ func String(b []byte, cm *Charmap) string {
 	sb.Grow(end)
 	for _, c := range b[:end] {
 		sb.WriteRune(cm.to[c])
+	}
+	return sb.String()
+}
+
+// DisplayString decodes a fixed-width text field for an operator display.
+// Unlike String, decoded control characters are replaced with U+00B7 MIDDLE
+// DOT, including trailing LOW-VALUE bytes. Trailing codepage
+// spaces are still trimmed. This helper is intentionally separate so strict
+// decoding keeps its existing semantics.
+func DisplayString(b []byte, cm *Charmap) string {
+	end := len(b)
+	for end > 0 && cm.to[b[end-1]] == ' ' {
+		end--
+	}
+	var sb strings.Builder
+	sb.Grow(end)
+	for _, c := range b[:end] {
+		r := cm.to[c]
+		if unicode.IsControl(r) {
+			sb.WriteRune('·')
+			continue
+		}
+		sb.WriteRune(r)
+	}
+	return sb.String()
+}
+
+// DisplayBytes decodes a complete raw record without trimming fixed-width
+// padding. LOW-VALUE and decoded control characters are rendered visibly so a
+// record can never inject terminal control sequences or line breaks.
+func DisplayBytes(b []byte, cm *Charmap) string {
+	if cm == nil {
+		return strings.Repeat("·", len(b))
+	}
+	var sb strings.Builder
+	sb.Grow(len(b))
+	for _, c := range b {
+		r := cm.to[c]
+		if c == 0 || unicode.IsControl(r) {
+			sb.WriteRune('·')
+			continue
+		}
+		sb.WriteRune(r)
 	}
 	return sb.String()
 }

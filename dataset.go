@@ -1,17 +1,14 @@
 package main
 
-import "io"
+import (
+	"io"
+
+	"github.com/Tannex/cq/internal/dsncopy"
+	"github.com/Tannex/cq/internal/zosmf"
+)
 
 type dataSetSource interface {
-	copybookFetcher
-	encoding() (string, error)
-	openDataSet(string, downloadHint) (io.ReadCloser, error)
-}
-
-// downloadHint bounds a download when cq knows it will not need the whole
-// data set. It is only an optimization: sources must fall back safely when
-// the server cannot prove that its records have RecordLength bytes.
-type downloadHint struct {
-	Records      int
-	RecordLength int
+	dsncopy.Fetcher
+	Encoding() (string, error)
+	OpenDataSet(string, zosmf.DownloadHint) (io.ReadCloser, error)
 }

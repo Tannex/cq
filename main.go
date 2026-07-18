@@ -17,15 +17,18 @@ import (
 	"io"
 	"log"
 	"os"
-	"runtime/debug"
 
 	"github.com/itchyny/gojq"
 
+	"github.com/Tannex/cq/internal/buildinfo"
 	"github.com/Tannex/cq/internal/copybook"
 	"github.com/Tannex/cq/internal/decode"
+	"github.com/Tannex/cq/internal/dsncopy"
 	"github.com/Tannex/cq/internal/layout"
 	"github.com/Tannex/cq/internal/query"
 	"github.com/Tannex/cq/internal/record"
+	"github.com/Tannex/cq/internal/zosmf"
+	"github.com/Tannex/cq/internal/zowe"
 )
 
 // debugLog carries --verbose diagnostics to stderr. It stays discarded until
@@ -33,17 +36,12 @@ import (
 // probes in the DSN copy resolver.
 var debugLog = log.New(io.Discard, "cq: ", 0)
 
-// version is replaced with the release tag by the release workflow.
-var version = "dev"
+// loadDefaultZoweSession remains injectable at the executable boundary so
+// integration tests never touch a user's real Zowe configuration or keyring.
+var loadDefaultZoweSession = zowe.LoadDefault
 
 func reportedVersion() string {
-	if version != "dev" {
-		return version
-	}
-	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
-		return info.Main.Version
-	}
-	return version
+	return buildinfo.Reported()
 }
 
 func main() {
@@ -149,7 +147,7 @@ examples:
 		return err
 	}
 
-	var source dataSetSource = newLazyZOSMFTransport(loadDefaultZoweSession)
+	var source dataSetSource = zosmf.NewLazy(loadDefaultZoweSession, debugLog.Printf)
 
 	var cbFormat copybook.Format
 	switch *format {
@@ -173,7 +171,7 @@ examples:
 
 	var src []byte
 	if *copybookDSN != "" {
-		src, err = source.fetchCopybook(context.Background(), *copybookDSN)
+		src, err = source.FetchText(context.Background(), *copybookDSN)
 	} else {
 		src, err = os.ReadFile(*copybookPath)
 		if err == nil {
@@ -183,7 +181,7 @@ examples:
 	if err != nil {
 		return err
 	}
-	resolver := newDSNCopyResolver(cfg.DSNSearchPath, source)
+	resolver := dsncopy.New(cfg.DSNSearchPath, source, debugLog.Printf)
 	items, err := copybook.ParseWithCopies(string(src), cbFormat, resolver.Resolve)
 	if err != nil {
 		return err
@@ -214,7 +212,7 @@ examples:
 	}
 	codepageName := *codepage
 	if *dataDSN != "" && !codepageExplicit {
-		encoding, err := source.encoding()
+		encoding, err := source.Encoding()
 		if err != nil {
 			return err
 		}
@@ -248,14 +246,14 @@ examples:
 		// With -max and no -where filter, every decoded record is emitted, so
 		// the transfer can be bounded server-side to that many records.
 		// -where decides matches only after decoding, so it needs the stream.
-		var hint downloadHint
+		var hint zosmf.DownloadHint
 		if *maxRecs > 0 && len(wheres) == 0 && !rec.Variable() {
-			hint = downloadHint{Records: *maxRecs, RecordLength: rec.MaxLength}
+			hint = zosmf.DownloadHint{Records: *maxRecs, RecordLength: rec.MaxLength}
 			if *lrecl > 0 {
 				hint.RecordLength = *lrecl
 			}
 		}
-		data, err := source.openDataSet(*dataDSN, hint)
+		data, err := source.OpenDataSet(*dataDSN, hint)
 		if err != nil {
 			return err
 		}

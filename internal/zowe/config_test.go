@@ -1,9 +1,10 @@
-package main
+package zowe
 
 import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -27,11 +28,11 @@ func (k *fakeZoweKeyring) Get(service, account string) (string, error) {
 	if value, ok := k.values[key]; ok {
 		return value, nil
 	}
-	return "", errZoweSecretNotFound
+	return "", ErrSecretNotFound
 }
 
-func zoweTestOptions(home, work string, keyring zoweKeyring, env map[string]string) zoweLoadOptions {
-	return zoweLoadOptions{
+func zoweTestOptions(home, work string, keyring Keyring, env map[string]string) LoadOptions {
+	return LoadOptions{
 		HomeDir: home, WorkingDir: work, GOOS: "linux", Keyring: keyring,
 		Getenv: func(name string) string { return env[name] },
 	}
@@ -81,20 +82,43 @@ func TestLoadZoweSessionResolvesNestedProfileAndSecureBase(t *testing.T) {
 		"Zowe\x00" + zoweSecureAccount: base64.StdEncoding.EncodeToString(vault),
 	}}
 
-	session, err := loadZoweSession(zoweTestOptions(home, work, keyring, nil))
+	session, err := Load(zoweTestOptions(home, work, keyring, nil))
 	if err != nil {
-		t.Fatalf("loadZoweSession() error = %v", err)
+		t.Fatalf("Load() error = %v", err)
 	}
-	want := zoweSession{
+	want := Session{
 		Profile: "lpar1.zosmf", Protocol: "https", Host: "mainframe.example",
 		Port: 1443, BasePath: "/api/v1", User: "IBMUSER", Password: "secret",
 		RejectUnauthorized: true,
 	}
 	if !reflect.DeepEqual(session, want) {
-		t.Fatalf("loadZoweSession() = %#v, want %#v", session, want)
+		t.Fatalf("Load() = %#v, want %#v", session, want)
 	}
 	if !reflect.DeepEqual(keyring.calls, []string{"Zowe\x00" + zoweSecureAccount}) {
 		t.Fatalf("keyring calls = %q", keyring.calls)
+	}
+}
+
+func TestSessionFormattingAndJSONDoNotExposeCredentials(t *testing.T) {
+	session := Session{
+		Profile: "test", Protocol: "https", Host: "host", Port: 443,
+		User: "IBMUSER", Password: "password-secret", TokenType: "LtpaToken2", TokenValue: "token-secret",
+	}
+	for _, formatted := range []string{
+		fmt.Sprint(session),
+		fmt.Sprintf("%+v", session),
+		fmt.Sprintf("%#v", session),
+	} {
+		if strings.Contains(formatted, "password-secret") || strings.Contains(formatted, "token-secret") {
+			t.Fatalf("formatted session exposes credentials: %q", formatted)
+		}
+	}
+	encoded, err := json.Marshal(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "password-secret") || strings.Contains(string(encoded), "token-secret") {
+		t.Fatalf("session JSON exposes credentials: %s", encoded)
 	}
 }
 
@@ -130,9 +154,9 @@ func TestLoadZoweSessionMergesProjectUserConfigAndEnvironment(t *testing.T) {
 		"ZOWE_OPT_REJECT_UNAUTHORIZED": "false",
 	}
 
-	session, err := loadZoweSession(zoweTestOptions(home, work, &fakeZoweKeyring{}, env))
+	session, err := Load(zoweTestOptions(home, work, &fakeZoweKeyring{}, env))
 	if err != nil {
-		t.Fatalf("loadZoweSession() error = %v", err)
+		t.Fatalf("Load() error = %v", err)
 	}
 	if session.Profile != "lpar.zosmf" || session.Protocol != "http" || session.Host != "override.example" || session.Port != 7554 {
 		t.Fatalf("session selection/overrides = %#v", session)
@@ -179,9 +203,9 @@ func TestLoadZoweSessionResolvesEncodingPrecedence(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			session, err := loadZoweSession(zoweTestOptions(home, project, &fakeZoweKeyring{}, tt.env))
+			session, err := Load(zoweTestOptions(home, project, &fakeZoweKeyring{}, tt.env))
 			if err != nil {
-				t.Fatalf("loadZoweSession() error = %v", err)
+				t.Fatalf("Load() error = %v", err)
 			}
 			if session.Encoding != tt.want {
 				t.Fatalf("session.Encoding = %q, want %q", session.Encoding, tt.want)
@@ -201,9 +225,9 @@ func TestLoadZoweSessionRequiresStringEncoding(t *testing.T) {
   "defaults":{"base":"base", "zosmf":"zosmf"}
 }`)
 
-	_, err := loadZoweSession(zoweTestOptions(home, work, &fakeZoweKeyring{}, nil))
+	_, err := Load(zoweTestOptions(home, work, &fakeZoweKeyring{}, nil))
 	if err == nil || !strings.Contains(err.Error(), "Zowe property encoding must be a string") {
-		t.Fatalf("loadZoweSession() error = %v, want string encoding error", err)
+		t.Fatalf("Load() error = %v, want string encoding error", err)
 	}
 }
 
@@ -218,9 +242,9 @@ func TestLoadZoweSessionAllowsDisabledTLSVerification(t *testing.T) {
   "defaults":{"base":"base", "zosmf":"zosmf"}
 }`)
 
-	session, err := loadZoweSession(zoweTestOptions(home, work, &fakeZoweKeyring{}, nil))
+	session, err := Load(zoweTestOptions(home, work, &fakeZoweKeyring{}, nil))
 	if err != nil {
-		t.Fatalf("loadZoweSession() error = %v", err)
+		t.Fatalf("Load() error = %v", err)
 	}
 	if session.RejectUnauthorized {
 		t.Fatal("RejectUnauthorized = true, want false")
@@ -242,9 +266,9 @@ func TestLoadZoweSessionUsesGlobalBaseForGlobalProfile(t *testing.T) {
   "defaults":{"base":"project_base"}
 }`)
 
-	session, err := loadZoweSession(zoweTestOptions(home, project, &fakeZoweKeyring{}, nil))
+	session, err := Load(zoweTestOptions(home, project, &fakeZoweKeyring{}, nil))
 	if err != nil {
-		t.Fatalf("loadZoweSession() error = %v", err)
+		t.Fatalf("Load() error = %v", err)
 	}
 	if session.Profile != "only_global" || session.Host != "global.example" || session.User != "global" {
 		t.Fatalf("global session = %#v, want global base properties", session)
@@ -263,11 +287,11 @@ func TestLoadZoweSessionSelectsNamedProfile(t *testing.T) {
   "defaults":{"base":"base", "zosmf":"first"}
 }`)
 
-	session, err := loadZoweSession(zoweTestOptions(home, work, &fakeZoweKeyring{}, map[string]string{
+	session, err := Load(zoweTestOptions(home, work, &fakeZoweKeyring{}, map[string]string{
 		"ZOWE_OPT_ZOSMF_PROFILE": "second",
 	}))
 	if err != nil {
-		t.Fatalf("loadZoweSession() error = %v", err)
+		t.Fatalf("Load() error = %v", err)
 	}
 	if session.Profile != "second" || session.Host != "second.example" {
 		t.Fatalf("session = %#v, want named second profile", session)
@@ -310,16 +334,16 @@ func TestLoadZoweSessionReportsMissingSecureStore(t *testing.T) {
   "defaults":{"base":"base", "zosmf":"zosmf"}
 }`)
 
-	_, err := loadZoweSession(zoweTestOptions(home, work, &fakeZoweKeyring{}, nil))
+	_, err := Load(zoweTestOptions(home, work, &fakeZoweKeyring{}, nil))
 	if err == nil || !strings.Contains(err.Error(), "secure credential store") || !strings.Contains(err.Error(), zoweSecureAccount) {
-		t.Fatalf("loadZoweSession() error = %v, want secure-store guidance", err)
+		t.Fatalf("Load() error = %v, want secure-store guidance", err)
 	}
 }
 
 func TestLoadZoweSessionReportsMissingConfig(t *testing.T) {
-	_, err := loadZoweSession(zoweTestOptions(t.TempDir(), t.TempDir(), &fakeZoweKeyring{}, nil))
+	_, err := Load(zoweTestOptions(t.TempDir(), t.TempDir(), &fakeZoweKeyring{}, nil))
 	if err == nil || !strings.Contains(err.Error(), "no Zowe team configuration") {
-		t.Fatalf("loadZoweSession() error = %v, want missing-config guidance", err)
+		t.Fatalf("Load() error = %v, want missing-config guidance", err)
 	}
 }
 
@@ -336,9 +360,9 @@ func TestLoadZoweSessionHonorsZoweCLIHome(t *testing.T) {
 }`)
 	opts := zoweTestOptions(home, work, &fakeZoweKeyring{}, map[string]string{"ZOWE_CLI_HOME": cliHome})
 
-	session, err := loadZoweSession(opts)
+	session, err := Load(opts)
 	if err != nil {
-		t.Fatalf("loadZoweSession() error = %v", err)
+		t.Fatalf("Load() error = %v", err)
 	}
 	if session.Host != "custom.example" {
 		t.Fatalf("session host = %q, want config from ZOWE_CLI_HOME", session.Host)

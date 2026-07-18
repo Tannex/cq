@@ -15,9 +15,12 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/Tannex/cq/internal/zosmf"
+	"github.com/Tannex/cq/internal/zowe"
 )
 
-func zosmfSessionForServer(t *testing.T, server *httptest.Server) zoweSession {
+func zosmfSessionForServer(t *testing.T, server *httptest.Server) zowe.Session {
 	t.Helper()
 	u, err := url.Parse(server.URL)
 	if err != nil {
@@ -31,10 +34,14 @@ func zosmfSessionForServer(t *testing.T, server *httptest.Server) zoweSession {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return zoweSession{
+	return zowe.Session{
 		Profile: "test", Protocol: u.Scheme, Host: host, Port: port,
 		User: "IBMUSER", Password: "secret", RejectUnauthorized: true,
 	}
+}
+
+func newTestZOSMFClient(session zowe.Session) *zosmf.Client {
+	return zosmf.New(session, nil)
 }
 
 func TestZOSMFTransportFetchesCopybookWithToken(t *testing.T) {
@@ -60,9 +67,9 @@ func TestZOSMFTransportFetchesCopybookWithToken(t *testing.T) {
 	session.BasePath = "/gateway"
 	session.TokenType = "LtpaToken2"
 	session.TokenValue = "token-value"
-	transport := newZOSMFTransport(session)
+	transport := newTestZOSMFClient(session)
 
-	got, err := transport.fetchCopybook(context.Background(), "HQ.COPYLIB(CUSTOMER)")
+	got, err := transport.FetchText(context.Background(), "HQ.COPYLIB(CUSTOMER)")
 	if err != nil {
 		t.Fatalf("fetchCopybook() error = %v", err)
 	}
@@ -79,9 +86,9 @@ func TestZOSMFTransportRejectsUntrustedTLSCertificate(t *testing.T) {
 		_, _ = io.WriteString(w, "must not be trusted")
 	}))
 	defer server.Close()
-	transport := newZOSMFTransport(zosmfSessionForServer(t, server))
+	transport := newTestZOSMFClient(zosmfSessionForServer(t, server))
 
-	_, err := transport.fetchCopybook(context.Background(), "HQ.COPYLIB(CUSTOMER)")
+	_, err := transport.FetchText(context.Background(), "HQ.COPYLIB(CUSTOMER)")
 	if err == nil || !strings.Contains(err.Error(), "certificate") {
 		t.Fatalf("fetchCopybook() error = %v, want certificate verification failure", err)
 	}
@@ -94,9 +101,9 @@ func TestZOSMFTransportAllowsUntrustedTLSWhenConfigured(t *testing.T) {
 	defer server.Close()
 	session := zosmfSessionForServer(t, server)
 	session.RejectUnauthorized = false
-	transport := newZOSMFTransport(session)
+	transport := newTestZOSMFClient(session)
 
-	got, err := transport.fetchCopybook(context.Background(), "HQ.COPYLIB(CUSTOMER)")
+	got, err := transport.FetchText(context.Background(), "HQ.COPYLIB(CUSTOMER)")
 	if err != nil {
 		t.Fatalf("fetchCopybook() error = %v", err)
 	}
@@ -119,9 +126,9 @@ func TestZOSMFTransportStreamsBinaryWithBasicAuth(t *testing.T) {
 		_, _ = w.Write(want)
 	}))
 	defer server.Close()
-	transport := newZOSMFTransport(zosmfSessionForServer(t, server))
+	transport := newTestZOSMFClient(zosmfSessionForServer(t, server))
 
-	stream, err := transport.openDataSet("HQ.DATA", downloadHint{})
+	stream, err := transport.OpenDataSet("HQ.DATA", zosmf.DownloadHint{})
 	if err != nil {
 		t.Fatalf("openDataSet() error = %v", err)
 	}
@@ -153,9 +160,9 @@ func TestZOSMFTransportDecodesRangedRecords(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	transport := newZOSMFTransport(zosmfSessionForServer(t, server))
+	transport := newTestZOSMFClient(zosmfSessionForServer(t, server))
 
-	stream, err := transport.openDataSet("HQ.DATA", downloadHint{Records: 2, RecordLength: 3})
+	stream, err := transport.OpenDataSet("HQ.DATA", zosmf.DownloadHint{Records: 2, RecordLength: 3})
 	if err != nil {
 		t.Fatalf("openDataSet() error = %v", err)
 	}
@@ -186,9 +193,9 @@ func TestZOSMFTransportFallsBackWithoutDuplicatingRecords(t *testing.T) {
 		_, _ = io.WriteString(w, "ABCDEF")
 	}))
 	defer server.Close()
-	transport := newZOSMFTransport(zosmfSessionForServer(t, server))
+	transport := newTestZOSMFClient(zosmfSessionForServer(t, server))
 
-	stream, err := transport.openDataSet("HQ.DATA", downloadHint{Records: 2, RecordLength: 3})
+	stream, err := transport.OpenDataSet("HQ.DATA", zosmf.DownloadHint{Records: 2, RecordLength: 3})
 	if err != nil {
 		t.Fatalf("openDataSet() error = %v", err)
 	}
@@ -216,9 +223,9 @@ func TestZOSMFTransportFallsBackAfterRangeHTTPError(t *testing.T) {
 		_, _ = io.WriteString(w, "ABCDEF")
 	}))
 	defer server.Close()
-	transport := newZOSMFTransport(zosmfSessionForServer(t, server))
+	transport := newTestZOSMFClient(zosmfSessionForServer(t, server))
 
-	stream, err := transport.openDataSet("HQ.DATA", downloadHint{Records: 2, RecordLength: 3})
+	stream, err := transport.OpenDataSet("HQ.DATA", zosmf.DownloadHint{Records: 2, RecordLength: 3})
 	if err != nil {
 		t.Fatalf("openDataSet() error = %v", err)
 	}
@@ -238,9 +245,9 @@ func TestZOSMFTransportFormatsZOSMFError(t *testing.T) {
 		_, _ = io.WriteString(w, `{"message":"data set is not cataloged"}`)
 	}))
 	defer server.Close()
-	transport := newZOSMFTransport(zosmfSessionForServer(t, server))
+	transport := newTestZOSMFClient(zosmfSessionForServer(t, server))
 
-	_, err := transport.fetchCopybook(context.Background(), "HQ.MISSING")
+	_, err := transport.FetchText(context.Background(), "HQ.MISSING")
 	if err == nil || !strings.Contains(err.Error(), "z/OSMF 404") || !strings.Contains(err.Error(), "not cataloged") {
 		t.Fatalf("fetchCopybook() error = %v", err)
 	}
@@ -273,7 +280,7 @@ func TestRunSelectsCodepageForZOSMFDataSet(t *testing.T) {
 			session := zosmfSessionForServer(t, server)
 			session.Encoding = tt.encoding
 			originalLoader := loadDefaultZoweSession
-			loadDefaultZoweSession = func() (zoweSession, error) { return session, nil }
+			loadDefaultZoweSession = func() (zowe.Session, error) { return session, nil }
 			t.Cleanup(func() { loadDefaultZoweSession = originalLoader })
 			stubUserConfigDir(t, t.TempDir(), nil)
 			stdout := captureStdout(t)
@@ -301,8 +308,8 @@ func TestRunReportsUnsupportedProfileEncoding(t *testing.T) {
 		t.Fatal(err)
 	}
 	originalLoader := loadDefaultZoweSession
-	loadDefaultZoweSession = func() (zoweSession, error) {
-		return zoweSession{Encoding: "utf-8"}, nil
+	loadDefaultZoweSession = func() (zowe.Session, error) {
+		return zowe.Session{Encoding: "utf-8"}, nil
 	}
 	t.Cleanup(func() { loadDefaultZoweSession = originalLoader })
 	stubUserConfigDir(t, t.TempDir(), nil)
@@ -316,9 +323,9 @@ func TestRunReportsUnsupportedProfileEncoding(t *testing.T) {
 func TestRunLocalInputDoesNotLoadZoweConfiguration(t *testing.T) {
 	var loads atomic.Int32
 	originalLoader := loadDefaultZoweSession
-	loadDefaultZoweSession = func() (zoweSession, error) {
+	loadDefaultZoweSession = func() (zowe.Session, error) {
 		loads.Add(1)
-		return zoweSession{}, fmt.Errorf("must not be called")
+		return zowe.Session{}, fmt.Errorf("must not be called")
 	}
 	t.Cleanup(func() { loadDefaultZoweSession = originalLoader })
 	stubUserConfigDir(t, t.TempDir(), nil)

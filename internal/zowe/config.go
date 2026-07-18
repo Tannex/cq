@@ -1,4 +1,5 @@
-package main
+// Package zowe resolves Zowe CLI team configuration and credentials.
+package zowe
 
 import (
 	"bytes"
@@ -18,28 +19,38 @@ const zoweSecureAccount = "secure_config_props"
 
 var zoweCredentialServices = []string{"Zowe", "@zowe/cli", "Zowe-Plugin", "Broadcom-Plugin"}
 
-// zoweSession is the fully resolved subset of a Zowe zosmf profile needed by
-// cq. Password and token values are deliberately kept out of diagnostics.
-type zoweSession struct {
-	Profile            string
-	Protocol           string
-	Host               string
-	Port               int
-	BasePath           string
-	Encoding           string
-	User               string
-	Password           string
-	TokenType          string
-	TokenValue         string
-	RejectUnauthorized bool
+// Session is the fully resolved subset of a Zowe zosmf profile needed by cq.
+// Its formatting methods deliberately omit password and token values.
+type Session struct {
+	Profile            string `json:"profile"`
+	Protocol           string `json:"protocol"`
+	Host               string `json:"host"`
+	Port               int    `json:"port"`
+	BasePath           string `json:"basePath,omitempty"`
+	Encoding           string `json:"encoding,omitempty"`
+	User               string `json:"user,omitempty"`
+	Password           string `json:"-"`
+	TokenType          string `json:"tokenType,omitempty"`
+	TokenValue         string `json:"-"`
+	RejectUnauthorized bool   `json:"rejectUnauthorized"`
 }
 
-type zoweLoadOptions struct {
+// String returns a credential-safe session description.
+func (s Session) String() string {
+	return fmt.Sprintf("Zowe profile %q: %s://%s:%d%s (user %q)", s.Profile, s.Protocol, s.Host, s.Port, s.BasePath, s.User)
+}
+
+// GoString keeps %#v formatting credential-safe as well.
+func (s Session) GoString() string { return s.String() }
+
+// LoadOptions supplies the environment and credential-store seams used while
+// resolving a Zowe session.
+type LoadOptions struct {
 	HomeDir    string
 	WorkingDir string
 	GOOS       string
 	Getenv     func(string) string
-	Keyring    zoweKeyring
+	Keyring    Keyring
 }
 
 type zoweClientConfig struct {
@@ -65,28 +76,26 @@ type resolvedZoweProfile struct {
 	properties map[string]any
 }
 
-// loadDefaultZoweSession is a variable so integration tests can put the
-// network boundary behind a deterministic session without touching a user's
-// real Zowe configuration or keyring.
-var loadDefaultZoweSession = func() (zoweSession, error) {
+// LoadDefault resolves the current user's default Zowe session.
+func LoadDefault() (Session, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return zoweSession{}, fmt.Errorf("locate home directory: %w", err)
+		return Session{}, fmt.Errorf("locate home directory: %w", err)
 	}
 	work, err := os.Getwd()
 	if err != nil {
-		return zoweSession{}, fmt.Errorf("locate working directory: %w", err)
+		return Session{}, fmt.Errorf("locate working directory: %w", err)
 	}
-	return loadZoweSession(zoweLoadOptions{
+	return Load(LoadOptions{
 		HomeDir: home, WorkingDir: work, GOOS: runtime.GOOS,
-		Getenv: os.Getenv, Keyring: systemZoweKeyring{},
+		Getenv: os.Getenv, Keyring: systemKeyring{},
 	})
 }
 
-// loadZoweSession resolves the Zowe team configuration surface:
+// Load resolves the Zowe team configuration surface:
 // global and project team/user configs, nested profiles, the default base and
 // zosmf profiles, secure properties, and ZOWE_OPT_* overrides.
-func loadZoweSession(opts zoweLoadOptions) (zoweSession, error) {
+func Load(opts LoadOptions) (Session, error) {
 	if opts.Getenv == nil {
 		opts.Getenv = func(string) string { return "" }
 	}
@@ -94,21 +103,21 @@ func loadZoweSession(opts zoweLoadOptions) (zoweSession, error) {
 		opts.GOOS = runtime.GOOS
 	}
 	if opts.Keyring == nil {
-		opts.Keyring = systemZoweKeyring{}
+		opts.Keyring = systemKeyring{}
 	}
 
 	layers, err := readZoweConfigLayers(opts)
 	if err != nil {
-		return zoweSession{}, err
+		return Session{}, err
 	}
 	if len(layers) == 0 {
-		return zoweSession{}, errors.New("no Zowe team configuration found; run 'zowe config init --global-config' or create zowe.config.json in this project")
+		return Session{}, errors.New("no Zowe team configuration found; run 'zowe config init --global-config' or create zowe.config.json in this project")
 	}
 
 	if zoweLayersHaveSecureFields(layers) {
 		vault, err := loadZoweVault(opts.Keyring, opts.GOOS)
 		if err != nil {
-			return zoweSession{}, fmt.Errorf("cannot open the secure credential store used by the Zowe configuration: %w", err)
+			return Session{}, fmt.Errorf("cannot open the secure credential store used by the Zowe configuration: %w", err)
 		}
 		for i := range layers {
 			applyZoweSecureValues(&layers[i], vault)
@@ -129,7 +138,7 @@ func loadZoweSession(opts zoweLoadOptions) (zoweSession, error) {
 		profileName = allConfig.Defaults["zosmf"]
 	}
 	if profileName == "" {
-		return zoweSession{}, errors.New("no default zosmf profile found in the Zowe configuration; run 'zowe config init' or set ZOWE_OPT_ZOSMF_PROFILE")
+		return Session{}, errors.New("no default zosmf profile found in the Zowe configuration; run 'zowe config init' or set ZOWE_OPT_ZOSMF_PROFILE")
 	}
 
 	// A profile which only exists globally must use the global default base,
@@ -143,16 +152,16 @@ func loadZoweSession(opts zoweLoadOptions) (zoweSession, error) {
 	profile, ok := profiles[profileName]
 	if !ok || profile.typeName != "zosmf" {
 		if wanted := strings.TrimSpace(opts.Getenv("ZOWE_OPT_ZOSMF_PROFILE")); wanted != "" {
-			return zoweSession{}, fmt.Errorf("ZOWE_OPT_ZOSMF_PROFILE names zosmf profile %q, but the Zowe configuration has no such profile", wanted)
+			return Session{}, fmt.Errorf("ZOWE_OPT_ZOSMF_PROFILE names zosmf profile %q, but the Zowe configuration has no such profile", wanted)
 		}
-		return zoweSession{}, fmt.Errorf("default zosmf profile %q does not exist", profileName)
+		return Session{}, fmt.Errorf("default zosmf profile %q does not exist", profileName)
 	}
 
 	props := map[string]any{}
 	if baseName := scope.Defaults["base"]; baseName != "" {
 		base, ok := profiles[baseName]
 		if !ok || base.typeName != "base" {
-			return zoweSession{}, fmt.Errorf("default base profile %q does not exist", baseName)
+			return Session{}, fmt.Errorf("default base profile %q does not exist", baseName)
 		}
 		props = mergeZoweProperties(props, base.properties)
 	}
@@ -161,7 +170,7 @@ func loadZoweSession(opts zoweLoadOptions) (zoweSession, error) {
 	return makeZoweSession(profileName, props)
 }
 
-func readZoweConfigLayers(opts zoweLoadOptions) ([]zoweConfigLayer, error) {
+func readZoweConfigLayers(opts LoadOptions) ([]zoweConfigLayer, error) {
 	cliHome := strings.TrimSpace(opts.Getenv("ZOWE_CLI_HOME"))
 	if cliHome == "" {
 		cliHome = filepath.Join(opts.HomeDir, ".zowe")
@@ -267,7 +276,7 @@ func zoweProfilesHaveSecureFields(profiles map[string]zoweProfile) bool {
 	return false
 }
 
-func loadZoweVault(keyring zoweKeyring, goos string) (map[string]map[string]any, error) {
+func loadZoweVault(keyring Keyring, goos string) (map[string]map[string]any, error) {
 	var value string
 	for _, service := range zoweCredentialServices {
 		v, err := loadZoweCredential(keyring, service, zoweSecureAccount, goos)
@@ -275,7 +284,7 @@ func loadZoweVault(keyring zoweKeyring, goos string) (map[string]map[string]any,
 			value = v
 			break
 		}
-		if !errors.Is(err, errZoweSecretNotFound) {
+		if !errors.Is(err, ErrSecretNotFound) {
 			return nil, fmt.Errorf("load service %q account %q: %w", service, zoweSecureAccount, err)
 		}
 	}
@@ -297,9 +306,9 @@ func loadZoweVault(keyring zoweKeyring, goos string) (map[string]map[string]any,
 	return vault, nil
 }
 
-func loadZoweCredential(keyring zoweKeyring, service, account, goos string) (string, error) {
+func loadZoweCredential(keyring Keyring, service, account, goos string) (string, error) {
 	value, err := keyring.Get(service, account)
-	if err == nil || goos != "windows" || !errors.Is(err, errZoweSecretNotFound) {
+	if err == nil || goos != "windows" || !errors.Is(err, ErrSecretNotFound) {
 		return value, err
 	}
 
@@ -309,8 +318,8 @@ func loadZoweCredential(keyring zoweKeyring, service, account, goos string) (str
 	for i := 1; i <= 4096; i++ {
 		chunk, chunkErr := keyring.Get(service, fmt.Sprintf("%s-%d", account, i))
 		if chunkErr != nil {
-			if errors.Is(chunkErr, errZoweSecretNotFound) && i == 1 {
-				return "", errZoweSecretNotFound
+			if errors.Is(chunkErr, ErrSecretNotFound) && i == 1 {
+				return "", ErrSecretNotFound
 			}
 			return "", fmt.Errorf("load chunk %d: %w", i, chunkErr)
 		}
@@ -476,32 +485,32 @@ func parseZoweEnvironmentValue(value string) any {
 	return value
 }
 
-func makeZoweSession(profileName string, properties map[string]any) (zoweSession, error) {
+func makeZoweSession(profileName string, properties map[string]any) (Session, error) {
 	protocol, err := zoweStringProperty(properties, "protocol")
 	if err != nil {
-		return zoweSession{}, err
+		return Session{}, err
 	}
 	if protocol == "" {
 		protocol = "https"
 	}
 	protocol = strings.ToLower(protocol)
 	if protocol != "https" && protocol != "http" {
-		return zoweSession{}, fmt.Errorf("zosmf profile %q has unsupported protocol %q", profileName, protocol)
+		return Session{}, fmt.Errorf("zosmf profile %q has unsupported protocol %q", profileName, protocol)
 	}
 
 	host, err := zoweStringProperty(properties, "host")
 	if err != nil {
-		return zoweSession{}, err
+		return Session{}, err
 	}
 	if host == "" {
-		return zoweSession{}, fmt.Errorf("zosmf profile %q has no host", profileName)
+		return Session{}, fmt.Errorf("zosmf profile %q has no host", profileName)
 	}
 	if strings.Contains(host, "://") {
-		return zoweSession{}, fmt.Errorf("zosmf profile %q host must not include a URL scheme: %q", profileName, host)
+		return Session{}, fmt.Errorf("zosmf profile %q host must not include a URL scheme: %q", profileName, host)
 	}
 	port, err := zoweIntProperty(properties, "port")
 	if err != nil {
-		return zoweSession{}, err
+		return Session{}, err
 	}
 	if port == 0 {
 		if protocol == "http" {
@@ -511,12 +520,12 @@ func makeZoweSession(profileName string, properties map[string]any) (zoweSession
 		}
 	}
 	if port < 1 || port > 65535 {
-		return zoweSession{}, fmt.Errorf("zosmf profile %q has invalid port %d", profileName, port)
+		return Session{}, fmt.Errorf("zosmf profile %q has invalid port %d", profileName, port)
 	}
 
 	basePath, err := zoweStringProperty(properties, "basePath")
 	if err != nil {
-		return zoweSession{}, err
+		return Session{}, err
 	}
 	basePath = strings.TrimRight(strings.TrimSpace(basePath), "/")
 	if basePath != "" && !strings.HasPrefix(basePath, "/") {
@@ -524,36 +533,36 @@ func makeZoweSession(profileName string, properties map[string]any) (zoweSession
 	}
 	user, err := zoweStringProperty(properties, "user")
 	if err != nil {
-		return zoweSession{}, err
+		return Session{}, err
 	}
 	password, err := zoweStringProperty(properties, "password")
 	if err != nil {
-		return zoweSession{}, err
+		return Session{}, err
 	}
 	tokenType, err := zoweStringProperty(properties, "tokenType")
 	if err != nil {
-		return zoweSession{}, err
+		return Session{}, err
 	}
 	tokenValue, err := zoweStringProperty(properties, "tokenValue")
 	if err != nil {
-		return zoweSession{}, err
+		return Session{}, err
 	}
 	encoding, err := zoweStringProperty(properties, "encoding")
 	if err != nil {
-		return zoweSession{}, err
+		return Session{}, err
 	}
 	encoding = strings.TrimSpace(encoding)
 	rejectUnauthorized, err := zoweBoolProperty(properties, "rejectUnauthorized", true)
 	if err != nil {
-		return zoweSession{}, err
+		return Session{}, err
 	}
 	if tokenValue == "" && user == "" {
-		return zoweSession{}, fmt.Errorf("zosmf profile %q has neither a token nor a user; log in with 'zowe auth login' or add credentials to the profile", profileName)
+		return Session{}, fmt.Errorf("zosmf profile %q has neither a token nor a user; log in with 'zowe auth login' or add credentials to the profile", profileName)
 	}
 	if tokenValue == "" && password == "" {
-		return zoweSession{}, fmt.Errorf("zosmf profile %q has a user but no password; add the password to the profile or its secure credential store", profileName)
+		return Session{}, fmt.Errorf("zosmf profile %q has a user but no password; add the password to the profile or its secure credential store", profileName)
 	}
-	return zoweSession{
+	return Session{
 		Profile: profileName, Protocol: protocol, Host: host, Port: port,
 		BasePath: basePath, Encoding: encoding, User: user, Password: password,
 		TokenType: tokenType, TokenValue: tokenValue,
