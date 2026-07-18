@@ -10,6 +10,7 @@ import (
 
 	"github.com/Tannex/cq/internal/buildinfo"
 	"github.com/Tannex/cq/internal/cqt"
+	"github.com/Tannex/cq/internal/zosmf"
 	"github.com/Tannex/cq/internal/zowe"
 )
 
@@ -33,7 +34,7 @@ func TestLoadSessionReturnsWhenContextIsCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
 	go func() {
-		_, err := loadSession(ctx)
+		_, err := loadSession(ctx, "")
 		result <- err
 	}()
 	<-started
@@ -59,7 +60,7 @@ func TestLoadSessionMapsLoadedSession(t *testing.T) {
 	}
 	t.Cleanup(func() { loadDefaultSession = originalLoader })
 
-	session, err := loadSession(context.Background())
+	session, err := loadSession(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,5 +131,164 @@ func TestRunRejectsInvalidFlagCombinationsAndPositionals(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), test.want) {
 			t.Fatalf("run(%v) error = %v, want %q", test.args, err, test.want)
 		}
+	}
+}
+
+func TestRunDemoModeWiresModelWithoutError(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	originalRunner := runProgram
+	var model *cqt.Model
+	runProgram = func(m *cqt.Model) error {
+		model = m
+		return nil
+	}
+	t.Cleanup(func() { runProgram = originalRunner })
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"--demo"}, &stdout, &stderr); err != nil {
+		t.Fatalf("run(--demo) error = %v", err)
+	}
+	if model == nil {
+		t.Fatal("run(--demo) did not create a model")
+	}
+}
+
+func TestDemoSessionReturnsConfiguredSession(t *testing.T) {
+	session, err := loadDemoSession(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.User != "DEMOUSER" || session.Encoding != "latin1" || session.Browser == nil {
+		t.Fatalf("demo session = %#v", session)
+	}
+}
+
+func TestDemoBrowserPagesDataSets(t *testing.T) {
+	browser := &demoBrowser{}
+
+	first, err := browser.ListDataSets(context.Background(), zosmf.ListDataSetsRequest{Prefix: "DEMO.*", MaxItems: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Items) != 10 || !first.MoreRows {
+		t.Fatalf("first page = %d items, more=%v", len(first.Items), first.MoreRows)
+	}
+	for i := 1; i < len(first.Items); i++ {
+		if first.Items[i-1].Name >= first.Items[i].Name {
+			t.Fatalf("items not sorted: %q before %q", first.Items[i-1].Name, first.Items[i].Name)
+		}
+	}
+
+	mid := first.Items[len(first.Items)/2].Name
+	midPage, err := browser.ListDataSets(context.Background(), zosmf.ListDataSetsRequest{
+		Prefix:   "DEMO.*",
+		Start:    mid,
+		MaxItems: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(midPage.Items) == 0 {
+		t.Fatal("mid-list page returned no items")
+	}
+	if midPage.Items[0].Name <= mid {
+		t.Fatalf("mid-list page did not start after %q: first=%q", mid, midPage.Items[0].Name)
+	}
+	if !midPage.MoreRows && len(first.Items)+len(midPage.Items) < len(demoDataSetDefs) {
+		t.Fatalf("mid-list page incorrectly reported end of data")
+	}
+
+	lastStart := "DEMO.TEST.DATA"
+	lastPage, err := browser.ListDataSets(context.Background(), zosmf.ListDataSetsRequest{
+		Prefix:   "DEMO.*",
+		Start:    lastStart,
+		MaxItems: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantLast := 1
+	if len(lastPage.Items) != wantLast || lastPage.MoreRows {
+		t.Fatalf("last page = %d items, more=%v, want %d/false", len(lastPage.Items), lastPage.MoreRows, wantLast)
+	}
+	if lastPage.Items[0].Name != "DEMO.UTILITY.CTL" {
+		t.Fatalf("last page first item = %q, want DEMO.UTILITY.CTL", lastPage.Items[0].Name)
+	}
+}
+
+func TestDemoBrowserPagesMembersAndRecords(t *testing.T) {
+	browser := &demoBrowser{}
+
+	members, err := browser.ListMembers(context.Background(), zosmf.ListMembersRequest{
+		DataSet:  "DEMO.COPYLIB",
+		MaxItems: 100,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(members.Items) < 8 || len(members.Items) > 12 {
+		t.Fatalf("member count = %d, want 8..12", len(members.Items))
+	}
+	if members.MoreRows {
+		t.Fatal("member page reported more rows when all fit")
+	}
+
+	records, err := browser.ReadRecords(context.Background(), zosmf.ReadRecordsRequest{
+		DataSet:  "DEMO.CUSTOMER.MASTER",
+		Start:    50,
+		MaxItems: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records.Records) != 10 {
+		t.Fatalf("record window = %d, want 10", len(records.Records))
+	}
+	if records.Records[0].Number != 51 {
+		t.Fatalf("first record number = %d, want 51", records.Records[0].Number)
+	}
+	if !records.MoreRows {
+		t.Fatal("record page should report more rows")
+	}
+
+	end, err := browser.ReadRecords(context.Background(), zosmf.ReadRecordsRequest{
+		DataSet:  "DEMO.CUSTOMER.MASTER",
+		Start:    115,
+		MaxItems: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(end.Records) != 5 || end.MoreRows {
+		t.Fatalf("tail page = %d items, more=%v, want 5/false", len(end.Records), end.MoreRows)
+	}
+}
+
+func TestDemoBrowserFetchTextReturnsValidCopybook(t *testing.T) {
+	browser := &demoBrowser{}
+	raw, err := browser.FetchText(context.Background(), "DEMO.COPYLIB(CUSTREC)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "01  CUSTOMER-REC") {
+		t.Fatalf("copybook missing record: %q", string(raw))
+	}
+	if !strings.Contains(string(raw), "CUST-ID") {
+		t.Fatalf("copybook missing fields: %q", string(raw))
+	}
+}
+
+func TestDemoBrowserRespectsContextCancellation(t *testing.T) {
+	browser := &demoBrowser{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := browser.ListDataSets(ctx, zosmf.ListDataSetsRequest{Prefix: "DEMO.*", MaxItems: 10}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("ListDataSets error = %v, want context.Canceled", err)
+	}
+	if _, err := browser.ListMembers(ctx, zosmf.ListMembersRequest{DataSet: "DEMO.COPYLIB"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("ListMembers error = %v, want context.Canceled", err)
+	}
+	if _, err := browser.ReadRecords(ctx, zosmf.ReadRecordsRequest{DataSet: "DEMO.CUSTOMER.MASTER"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("ReadRecords error = %v, want context.Canceled", err)
 	}
 }

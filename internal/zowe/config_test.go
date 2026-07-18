@@ -408,6 +408,177 @@ func TestLoadZoweVaultPropagatesKeyringFailure(t *testing.T) {
 	}
 }
 
+func TestListProfilesReturnsSortedZosmfProfilesWithDefaultFirst(t *testing.T) {
+	home := t.TempDir()
+	work := t.TempDir()
+	writeZoweTestFile(t, filepath.Join(home, ".zowe", "zowe.config.json"), `{
+  "profiles": {
+    "base": {"type": "base", "properties": {"host": "host", "user": "u", "password": "p"}},
+    "first": {"type": "zosmf", "properties": {"host": "first.example"}},
+    "second": {"type": "zosmf", "properties": {"host": "second.example"}},
+    "lpar": {"properties": {"host": "lpar.example"}, "profiles": {"zosmf": {"type": "zosmf", "properties": {}}}},
+    "ignored": {"type": "tso", "properties": {"host": "tso.example"}}
+  },
+  "defaults": {"base": "base", "zosmf": "second"}
+}`)
+
+	names, err := ListProfiles(zoweTestOptions(home, work, &fakeZoweKeyring{}, nil))
+	if err != nil {
+		t.Fatalf("ListProfiles() error = %v", err)
+	}
+	want := []string{"second", "first", "lpar.zosmf"}
+	if !reflect.DeepEqual(names, want) {
+		t.Fatalf("ListProfiles() = %v, want %v", names, want)
+	}
+}
+
+func TestListProfilesRespectsEnvDefault(t *testing.T) {
+	home := t.TempDir()
+	work := t.TempDir()
+	writeZoweTestFile(t, filepath.Join(home, ".zowe", "zowe.config.json"), `{
+  "profiles": {
+    "alpha": {"type": "zosmf", "properties": {"host": "alpha.example"}},
+    "beta": {"type": "zosmf", "properties": {"host": "beta.example"}},
+    "gamma": {"type": "zosmf", "properties": {"host": "gamma.example"}}
+  },
+  "defaults": {"zosmf": "gamma"}
+}`)
+
+	env := map[string]string{"ZOWE_OPT_ZOSMF_PROFILE": "beta"}
+	names, err := ListProfiles(zoweTestOptions(home, work, &fakeZoweKeyring{}, env))
+	if err != nil {
+		t.Fatalf("ListProfiles() error = %v", err)
+	}
+	want := []string{"beta", "alpha", "gamma"}
+	if !reflect.DeepEqual(names, want) {
+		t.Fatalf("ListProfiles() = %v, want %v", names, want)
+	}
+}
+
+func TestListProfilesDoesNotRequireVault(t *testing.T) {
+	home := t.TempDir()
+	work := t.TempDir()
+	writeZoweTestFile(t, filepath.Join(home, ".zowe", "zowe.config.json"), `{
+  "profiles": {
+    "secure_zosmf": {"type": "zosmf", "properties": {}, "secure": ["user", "password"]}
+  },
+  "defaults": {"zosmf": "secure_zosmf"}
+}`)
+
+	keyring := &fakeZoweKeyring{errs: map[string]error{
+		"Zowe\x00" + zoweSecureAccount: errors.New("vault should not be opened"),
+	}}
+	names, err := ListProfiles(zoweTestOptions(home, work, keyring, nil))
+	if err != nil {
+		t.Fatalf("ListProfiles() error = %v", err)
+	}
+	if len(keyring.calls) != 0 {
+		t.Fatalf("ListProfiles() opened the vault unexpectedly: calls = %q", keyring.calls)
+	}
+	want := []string{"secure_zosmf"}
+	if !reflect.DeepEqual(names, want) {
+		t.Fatalf("ListProfiles() = %v, want %v", names, want)
+	}
+}
+
+func TestLoadNamedLoadsNonDefaultProfileWithBaseMerge(t *testing.T) {
+	home := t.TempDir()
+	work := t.TempDir()
+	writeZoweTestFile(t, filepath.Join(home, ".zowe", "zowe.config.json"), `{
+  "profiles": {
+    "base": {"type": "base", "properties": {"host": "mainframe.example", "port": 1443, "user": "IBMUSER", "password": "secret"}},
+    "first": {"type": "zosmf", "properties": {"host": "first.example"}},
+    "second": {"type": "zosmf", "properties": {"host": "second.example", "basePath": "/api/v1/"}}
+  },
+  "defaults": {"base": "base", "zosmf": "first"}
+}`)
+
+	session, err := LoadNamed(zoweTestOptions(home, work, &fakeZoweKeyring{}, nil), "second")
+	if err != nil {
+		t.Fatalf("LoadNamed() error = %v", err)
+	}
+	want := Session{
+		Profile: "second", Protocol: "https", Host: "second.example",
+		Port: 1443, BasePath: "/api/v1", User: "IBMUSER", Password: "secret",
+		RejectUnauthorized: true,
+	}
+	if !reflect.DeepEqual(session, want) {
+		t.Fatalf("LoadNamed() = %#v, want %#v", session, want)
+	}
+}
+
+func TestLoadNamedAppliesEnvironmentOverrides(t *testing.T) {
+	home := t.TempDir()
+	work := t.TempDir()
+	writeZoweTestFile(t, filepath.Join(home, ".zowe", "zowe.config.json"), `{
+  "profiles": {
+    "base": {"type": "base", "properties": {"host": "host", "user": "u", "password": "p"}},
+    "first": {"type": "zosmf", "properties": {"host": "first.example"}},
+    "second": {"type": "zosmf", "properties": {"host": "second.example"}}
+  },
+  "defaults": {"base": "base", "zosmf": "first"}
+}`)
+
+	env := map[string]string{
+		"ZOWE_OPT_HOST":     "override.example",
+		"ZOWE_OPT_PORT":     "7554",
+		"ZOWE_OPT_PROTOCOL": "http",
+	}
+	session, err := LoadNamed(zoweTestOptions(home, work, &fakeZoweKeyring{}, env), "second")
+	if err != nil {
+		t.Fatalf("LoadNamed() error = %v", err)
+	}
+	if session.Profile != "second" || session.Host != "override.example" || session.Port != 7554 || session.Protocol != "http" {
+		t.Fatalf("LoadNamed() = %#v, want environment overrides", session)
+	}
+}
+
+func TestLoadNamedUnknownProfileReturnsError(t *testing.T) {
+	home := t.TempDir()
+	work := t.TempDir()
+	writeZoweTestFile(t, filepath.Join(home, ".zowe", "zowe.config.json"), `{
+  "profiles": {
+    "base": {"type": "base", "properties": {"host": "host", "user": "u", "password": "p"}},
+    "zosmf": {"type": "zosmf", "properties": {"host": "host.example"}}
+  },
+  "defaults": {"base": "base", "zosmf": "zosmf"}
+}`)
+
+	_, err := LoadNamed(zoweTestOptions(home, work, &fakeZoweKeyring{}, nil), "missing")
+	if err == nil || !strings.Contains(err.Error(), `zosmf profile "missing" does not exist`) {
+		t.Fatalf("LoadNamed() error = %v, want does-not-exist error", err)
+	}
+}
+
+func TestLoadNamedEmptyProfileReturnsError(t *testing.T) {
+	_, err := LoadNamed(zoweTestOptions(t.TempDir(), t.TempDir(), &fakeZoweKeyring{}, nil), "")
+	if err == nil || !strings.Contains(err.Error(), "no zosmf profile name provided") {
+		t.Fatalf("LoadNamed() error = %v, want empty-name error", err)
+	}
+}
+
+func TestLoadNamedIgnoresZOWE_OPT_ZOSMF_PROFILE(t *testing.T) {
+	home := t.TempDir()
+	work := t.TempDir()
+	writeZoweTestFile(t, filepath.Join(home, ".zowe", "zowe.config.json"), `{
+  "profiles": {
+    "base": {"type": "base", "properties": {"host": "host", "user": "u", "password": "p"}},
+    "first": {"type": "zosmf", "properties": {"host": "first.example"}},
+    "second": {"type": "zosmf", "properties": {"host": "second.example"}}
+  },
+  "defaults": {"base": "base", "zosmf": "first"}
+}`)
+
+	env := map[string]string{"ZOWE_OPT_ZOSMF_PROFILE": "first"}
+	session, err := LoadNamed(zoweTestOptions(home, work, &fakeZoweKeyring{}, env), "second")
+	if err != nil {
+		t.Fatalf("LoadNamed() error = %v", err)
+	}
+	if session.Profile != "second" || session.Host != "second.example" {
+		t.Fatalf("LoadNamed() = %#v, want named second profile", session)
+	}
+}
+
 func TestNormalizeJSONCPreservesCommentMarkersInStrings(t *testing.T) {
 	input := []byte(`{"url":"https://example/*literal*/",/* comment */"list":[1,2,],}`)
 	normalized, err := normalizeJSONC(input)

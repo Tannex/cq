@@ -9,15 +9,19 @@ func TestVisibleRowsAndExactBudget(t *testing.T) {
 		budget        int
 	}{
 		{width: MinTerminalWidth - 1, height: 40},
-		{width: 100, height: MinTerminalHeight - 1},
-		{width: MinTerminalWidth, height: MinTerminalHeight, visible: 3, budget: 6},
+		{width: 100, height: MinTerminalHeight(false) - 1},
+		{width: MinTerminalWidth, height: MinTerminalHeight(false), visible: 3, budget: 6},
 		{width: 100, height: 25, visible: 20, budget: 40},
 	}
 	for _, test := range tests {
-		visible := VisibleRows(test.width, test.height)
+		visible := VisibleRows(test.width, test.height, false)
 		if visible != test.visible || RowBudget(visible) != test.budget {
-			t.Fatalf("VisibleRows(%d,%d)=%d budget=%d, want %d/%d", test.width, test.height, visible, RowBudget(visible), test.visible, test.budget)
+			t.Fatalf("VisibleRows(%d,%d,false)=%d budget=%d, want %d/%d", test.width, test.height, visible, RowBudget(visible), test.visible, test.budget)
 		}
+	}
+	// With the tab bar visible one extra chrome row is reserved.
+	if visible := VisibleRows(MinTerminalWidth, MinTerminalHeight(true), true); visible != 3 {
+		t.Fatalf("VisibleRows with tab bar = %d, want 3", visible)
 	}
 	if RowBudget(0) != 0 || RowBudget(-1) != 0 {
 		t.Fatal("non-positive visible rows must not produce a request budget")

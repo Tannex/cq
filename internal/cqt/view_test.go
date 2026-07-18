@@ -25,18 +25,20 @@ func recordViewModel(t *testing.T) *Model {
 		t.Fatal(err)
 	}
 	model := &Model{
-		width:        80,
-		height:       12,
-		visible:      VisibleRows(80, 12),
-		budget:       RowBudget(VisibleRows(80, 12)),
-		screen:       ScreenRecords,
-		dataSet:      zosmf.DataSet{Name: "HQ.DATA", Organization: "PS"},
-		codepageName: "latin1",
-		charmap:      cm,
-		keys:         DefaultKeyMap(),
-		help:         helpModelForTest(),
-		spinner:      newStatusSpinner(),
-		status:       status{Level: statusReady, Text: "records ready"},
+		width:   80,
+		height:  12,
+		visible: VisibleRows(80, 12, false),
+		budget:  RowBudget(VisibleRows(80, 12, false)),
+		keys:    DefaultKeyMap(),
+		help:    helpModelForTest(),
+		spinner: newStatusSpinner(),
+		workspace: workspace{
+			screen:       ScreenRecords,
+			dataSet:      zosmf.DataSet{Name: "HQ.DATA", Organization: "PS"},
+			codepageName: "latin1",
+			charmap:      cm,
+			status:       status{Level: statusReady, Text: "records ready"},
+		},
 	}
 	model.records = []recordRow{
 		{Record: zosmf.Record{Number: 1, Data: []byte{'A', 0, '\n', 'B'}}},
@@ -358,7 +360,7 @@ func TestHelpPanelReplacesDataAreaWithGroupedBindings(t *testing.T) {
 	model := recordViewModel(t)
 	// Use a taller terminal so every help section fits without truncation.
 	model.width, model.height = 80, 28
-	model.visible = VisibleRows(model.width, model.height)
+	model.visible = VisibleRows(model.width, model.height, false)
 	model.budget = RowBudget(model.visible)
 	model.recordPage.resize(model.visible, model.budget)
 	model.showHelp = true
@@ -444,7 +446,7 @@ func TestTinyLoadingEmptyErrorAndDialogViewsAreExplicit(t *testing.T) {
 	}
 
 	model.width, model.height = 80, 12
-	model.visible = VisibleRows(80, 12)
+	model.visible = VisibleRows(80, 12, false)
 	model.budget = RowBudget(model.visible)
 	model.recordPage.resize(model.visible, model.budget)
 	model.records = nil

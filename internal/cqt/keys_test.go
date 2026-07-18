@@ -188,3 +188,71 @@ func TestF10AndF11DoNotCollideWithOtherBindings(t *testing.T) {
 		t.Fatalf("right pan binding = %#v", got)
 	}
 }
+
+func TestProfileKeysSwitchOnlyWhenTabsEnabledAndUnfocused(t *testing.T) {
+	keys := DefaultKeyMap()
+	tab := tea.KeyPressMsg(tea.Key{Code: tea.KeyTab})
+	shiftTab := tea.KeyPressMsg(tea.Key{Code: tea.KeyTab, Mod: tea.ModShift})
+
+	if got := keys.actionFor(tab, keyContext{Tabs: true}); got != actionNextProfile {
+		t.Fatalf("tab without tabs action = %d", got)
+	}
+	if got := keys.actionFor(shiftTab, keyContext{Tabs: true}); got != actionPreviousProfile {
+		t.Fatalf("shift+tab without tabs action = %d", got)
+	}
+	if got := keys.actionFor(tab, keyContext{Tabs: false}); got != actionNone {
+		t.Fatalf("tab dispatched profile action without tabs: %d", got)
+	}
+	if got := keys.actionFor(tab, keyContext{Tabs: true, InputFocused: true}); got != actionNone {
+		t.Fatalf("tab switched profiles while input focused: %d", got)
+	}
+	if got := keys.actionFor(tab, keyContext{Tabs: true, DialogOpen: true}); got != actionNextField {
+		t.Fatalf("tab did not move dialog field while dialog open: %d", got)
+	}
+	if got := keys.actionFor(tab, keyContext{Tabs: true, ShowHelp: true}); got != actionNone {
+		t.Fatalf("tab switched profiles while help open: %d", got)
+	}
+}
+
+func TestProfileHelpAppearsOnlyWithTabs(t *testing.T) {
+	keys := DefaultKeyMap()
+	withoutTabs := keys.shortHelp(keyContext{Screen: ScreenDataSets, Tabs: false}, false)
+	withTabs := keys.shortHelp(keyContext{Screen: ScreenDataSets, Tabs: true}, false)
+
+	contains := func(bindings []key.Binding, want key.Binding) bool {
+		for _, binding := range bindings {
+			if slices.Equal(binding.Keys(), want.Keys()) {
+				return true
+			}
+		}
+		return false
+	}
+	if contains(withoutTabs, keys.NextProfile) {
+		t.Fatal("next profile appeared in short help without tabs")
+	}
+	if !contains(withTabs, keys.NextProfile) || !contains(withTabs, keys.PreviousProfile) {
+		t.Fatalf("profile keys missing from tab short help: %#v", withTabs)
+	}
+
+	fullWithout := keys.fullHelp(keyContext{Screen: ScreenDataSets, Tabs: false}, false)
+	fullWith := keys.fullHelp(keyContext{Screen: ScreenDataSets, Tabs: true}, false)
+	bindingInGroup := func(groups []helpGroup, groupName string, want key.Binding) bool {
+		for _, group := range groups {
+			if group.Name != groupName {
+				continue
+			}
+			for _, binding := range group.Bindings {
+				if slices.Equal(binding.Keys(), want.Keys()) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	if bindingInGroup(fullWithout, "GENERAL", keys.NextProfile) {
+		t.Fatal("next profile appeared in full help without tabs")
+	}
+	if !bindingInGroup(fullWith, "GENERAL", keys.NextProfile) || !bindingInGroup(fullWith, "GENERAL", keys.PreviousProfile) {
+		t.Fatalf("profile keys missing from full help GENERAL group with tabs")
+	}
+}

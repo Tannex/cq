@@ -52,23 +52,120 @@ func (m *Model) tinyView() string {
 	width := max(1, m.width)
 	height := max(1, m.height)
 	title := consolePalette.navy.Bold(true).Width(width).Render(" CQT  z/OSMF DATA SET CONSOLE ")
-	message := fmt.Sprintf("TERMINAL TOO SMALL\nresize to at least %d columns × %d rows\ncurrent %d × %d\nno row request dispatched", MinTerminalWidth, MinTerminalHeight, m.width, m.height)
+	message := fmt.Sprintf("TERMINAL TOO SMALL\nresize to at least %d columns × %d rows\ncurrent %d × %d\nno row request dispatched", MinTerminalWidth, MinTerminalHeight(m.hasTabs()), m.width, m.height)
 	body := lipgloss.Place(width, max(1, height-1), lipgloss.Center, lipgloss.Center, consolePalette.amber.Render(message))
 	return fitHeight(title+"\n"+body, width, height)
 }
 
 func (m *Model) mainView() string {
-	title := m.titleLine()
-	search := m.searchLine()
+	var lines []string
+	if m.hasTabs() {
+		lines = append(lines, m.tabBar())
+	}
 	data := m.dataView()
 	if m.showHelp {
 		// Full help replaces the data area so every binding stays readable;
 		// the chrome row count (and therefore the row budget) is unchanged.
 		data = m.helpPanel()
 	}
-	statusLine := m.statusLine()
-	helpLine := m.helpLine()
-	return fitHeight(strings.Join([]string{title, search, data, statusLine, helpLine}, "\n"), m.width, m.height)
+	lines = append(lines, m.titleLine(), m.searchLine(), data, m.statusLine(), m.helpLine())
+	return fitHeight(strings.Join(lines, "\n"), m.width, m.height)
+}
+
+// tabBar renders the profile tab strip. The active tab is always visible;
+// inactive tabs are dropped from either end when the bar is too narrow.
+func (m *Model) tabBar() string {
+	if !m.hasTabs() {
+		return strings.Repeat(" ", max(0, m.width))
+	}
+	activeStyle := consolePalette.selected.Bold(true)
+	inactiveStyle := consolePalette.panel
+	separator := consolePalette.panel.Render("│")
+
+	type tab struct {
+		label  string
+		width  int
+		render string
+	}
+	tabs := make([]tab, len(m.profiles))
+	totalWidth := 0
+	for i, profile := range m.profiles {
+		label := " " + profile + " "
+		var rendered string
+		if i == m.active {
+			rendered = activeStyle.Render(label)
+		} else {
+			rendered = inactiveStyle.Render(label)
+		}
+		w := lipgloss.Width(rendered)
+		tabs[i] = tab{label: label, width: w, render: rendered}
+		totalWidth += w
+		if i > 0 {
+			totalWidth += lipgloss.Width(separator)
+		}
+	}
+	if totalWidth <= m.width {
+		var parts []string
+		for i, t := range tabs {
+			if i > 0 {
+				parts = append(parts, separator)
+			}
+			parts = append(parts, t.render)
+		}
+		return consolePalette.panel.Width(m.width).Render(strings.Join(parts, ""))
+	}
+
+	// Narrow terminal: keep the active tab and add neighbors while they fit.
+	ellipsis := consolePalette.panel.Render("…")
+	ellipsisWidth := lipgloss.Width(ellipsis)
+	available := m.width - tabs[m.active].width
+	if m.active > 0 {
+		available -= ellipsisWidth
+	}
+	if m.active < len(tabs)-1 {
+		available -= ellipsisWidth
+	}
+
+	left := m.active - 1
+	right := m.active + 1
+	for left >= 0 {
+		need := tabs[left].width
+		if left < m.active-1 || right < len(tabs) {
+			need += lipgloss.Width(separator)
+		}
+		if available < need {
+			break
+		}
+		available -= need
+		left--
+	}
+	for right < len(tabs) {
+		need := tabs[right].width
+		if right > m.active+1 || left >= 0 {
+			need += lipgloss.Width(separator)
+		}
+		if available < need {
+			break
+		}
+		available -= need
+		right++
+	}
+
+	var parts []string
+	if left >= 0 {
+		parts = append(parts, ellipsis)
+	}
+	for i := left + 1; i < right; i++ {
+		if len(parts) > 0 {
+			parts = append(parts, separator)
+		}
+		parts = append(parts, tabs[i].render)
+	}
+	if right < len(tabs) {
+		parts = append(parts, ellipsis)
+	}
+	bar := strings.Join(parts, "")
+	return consolePalette.panel.Width(m.width).Render(bar)
 }
 
 // helpPanel renders the grouped key map as a dedicated panel in the data

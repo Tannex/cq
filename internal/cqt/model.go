@@ -48,7 +48,8 @@ type Session struct {
 // Dependencies provide test seams without weakening the production command's
 // read-only boundaries.
 type Dependencies struct {
-	LoadSession   func(context.Context) (Session, error)
+	LoadSession   func(ctx context.Context, profile string) (Session, error)
+	ListProfiles  func(context.Context) ([]string, error)
 	LoadFile      func(context.Context, string) ([]byte, error)
 	DSNSearchPath []string
 	Timeout       time.Duration
@@ -82,12 +83,19 @@ type requestMeta struct {
 	Generation uint64
 	Screen     Screen
 	Identity   string
+	Profile    string
 	Budget     int
 	NamePlan   pagePlan[string]
 	RecordPlan pagePlan[int64]
 }
 
+type profileListMsg struct {
+	Profiles []string
+	Err      error
+}
+
 type sessionResultMsg struct {
+	Profile    string
 	Generation uint64
 	Session    Session
 	Err        error
@@ -112,6 +120,7 @@ type recordsResultMsg struct {
 }
 
 type overlayResultMsg struct {
+	Profile    string
 	Generation uint64
 	Source     CopybookSource
 	Overlay    *overlay
@@ -125,6 +134,7 @@ type decodedRow struct {
 }
 
 type decodeResultMsg struct {
+	Profile    string
 	Generation uint64
 	Identity   string
 	Overlay    *overlay
@@ -140,7 +150,14 @@ type recordRow struct {
 
 // Model is the Bubble Tea state machine. It is read-only: actions can only
 // navigate, filter, fetch, decode, or change presentation.
+//
+// The active workspace is embedded so that existing code paths can continue to
+// read per-profile fields (datasets, records, pagers, etc.) directly. Inactive
+// workspaces are stored in the workspaces slice and swapped in on profile
+// switches.
 type Model struct {
+	workspace
+
 	options Options
 	deps    Dependencies
 	keys    KeyMap
@@ -151,58 +168,18 @@ type Model struct {
 	height  int
 	visible int
 	budget  int
-	screen  Screen
 
-	sessionReady bool
-	browser      zosmf.Browser
-	user         string
-	codepageName string
-	charmap      *decode.Charmap
+	prefixInput textinput.Model
+	memberInput textinput.Model
+	locateInput textinput.Model
+	dialog      *copybookDialog
 
-	prefix        string
-	memberPattern string
-	prefixInput   textinput.Model
-	memberInput   textinput.Model
-	locateInput   textinput.Model
-	dialog        *copybookDialog
+	showHelp     bool
+	helpVertical int
 
-	datasets     []zosmf.DataSet
-	datasetPage  pager[string]
-	datasetTotal *int
-
-	dataSet     zosmf.DataSet
-	members     []zosmf.Member
-	memberPage  pager[string]
-	memberTotal *int
-	member      *zosmf.Member
-
-	records    []recordRow
-	recordPage pager[int64]
-
-	overlay         *overlay
-	overlaySource   CopybookSource
-	overlayError    string
-	recordMode      RecordMode
-	decodedMode     RecordMode
-	horizontal      int
-	jsonVertical    int
-	showDiagnostics bool
-	showHelp        bool
-	helpVertical    int
-
-	status status
-
-	sessionGeneration uint64
-	sessionCancel     context.CancelFunc
-	browseGeneration  uint64
-	browseCancel      context.CancelFunc
-	browsePending     *requestMeta
-	overlayGeneration uint64
-	overlayCancel     context.CancelFunc
-	overlayPending    bool
-	decodeGeneration  uint64
-	decodeCancel      context.CancelFunc
-	decodePending     bool
+	profiles   []string
+	active     int
+	workspaces []*workspace
 }
 
 // NewModel validates static options and constructs a model whose work begins in
@@ -265,20 +242,20 @@ func NewModel(options Options, deps Dependencies) (*Model, error) {
 	locateStyles.Cursor.Blink = false
 	locateInput.SetStyles(locateStyles)
 
+	ws := newWorkspace("")
 	m := &Model{
+		workspace:   ws,
 		options:     options,
 		deps:        deps,
 		keys:        DefaultKeyMap(),
 		help:        help.New(),
 		spinner:     newStatusSpinner(),
-		screen:      ScreenDataSets,
-		recordMode:  ModeRaw,
-		decodedMode: ModeTable,
 		prefixInput: prefixInput,
 		memberInput: memberInput,
 		locateInput: locateInput,
-		status:      status{Level: statusLoading, Text: "loading Zowe session"},
+		profiles:    []string{""},
 	}
+	m.workspaces = []*workspace{&m.workspace}
 	return m, nil
 }
 
@@ -309,23 +286,122 @@ func (m *Model) loadingCommand(command tea.Cmd) tea.Cmd {
 	return tea.Batch(command, m.spinner.Tick)
 }
 
+func (m *Model) ws() *workspace {
+	return &m.workspace
+}
+
+func (m *Model) hasTabs() bool {
+	return len(m.profiles) > 1
+}
+
+func (m *Model) activeProfile() string {
+	if m.active < 0 || m.active >= len(m.profiles) {
+		return ""
+	}
+	return m.profiles[m.active]
+}
+
+func (m *Model) saveActiveWorkspace() {
+	if m.active >= 0 && m.active < len(m.workspaces) {
+		*m.workspaces[m.active] = m.workspace
+	}
+}
+
+func (m *Model) loadWorkspace(index int) {
+	if index < 0 || index >= len(m.workspaces) {
+		return
+	}
+	m.workspace = *m.workspaces[index]
+	m.active = index
+}
+
+func (m *Model) syncInputsFromWorkspace() {
+	m.prefixInput.SetValue(m.workspace.prefix)
+	m.memberInput.SetValue(m.workspace.memberPattern)
+	m.locateInput.SetValue("")
+}
+
 // Init loads the Zowe session in a typed command. Window-size handling remains
 // independent, so a session can resolve in a tiny terminal without dispatching
 // a row request.
 func (m *Model) Init() tea.Cmd {
-	m.cancelSession()
-	m.sessionGeneration++
-	generation := m.sessionGeneration
+	if m.deps.ListProfiles == nil {
+		return m.loadActiveSession()
+	}
+	return m.loadingCommand(m.loadProfileList())
+}
+
+func (m *Model) loadProfileList() tea.Cmd {
+	loader := m.deps.ListProfiles
+	return func() tea.Msg {
+		if loader == nil {
+			return profileListMsg{Profiles: []string{""}}
+		}
+		profiles, err := loader(context.Background())
+		return profileListMsg{Profiles: profiles, Err: err}
+	}
+}
+
+func (m *Model) handleProfileList(msg profileListMsg) tea.Cmd {
+	if msg.Err != nil {
+		m.workspace.status = status{Level: statusError, Text: msg.Err.Error()}
+		return nil
+	}
+	profiles := msg.Profiles
+	if len(profiles) == 0 {
+		profiles = []string{""}
+	}
+	m.profiles = profiles
+	if len(profiles) == 1 {
+		m.workspace.profile = profiles[0]
+		m.workspaces = []*workspace{&m.workspace}
+	} else {
+		m.workspaces = make([]*workspace, len(profiles))
+		for i, profile := range profiles {
+			ws := newWorkspace(profile)
+			m.workspaces[i] = &ws
+		}
+		m.loadWorkspace(0)
+	}
+	m.syncInputsFromWorkspace()
+	return m.loadActiveSession()
+}
+
+func (m *Model) loadActiveSession() tea.Cmd {
+	ws := m.ws()
+	ws.cancelSession()
+	ws.sessionGeneration++
+	generation := ws.sessionGeneration
+	profile := m.activeProfile()
 	ctx, cancel := context.WithTimeout(context.Background(), m.deps.Timeout)
-	m.sessionCancel = cancel
+	ws.sessionCancel = cancel
 	loader := m.deps.LoadSession
+	ws.status = status{Level: statusLoading, Text: ws.sessionStatusText()}
 	return m.loadingCommand(func() tea.Msg {
 		if loader == nil {
-			return sessionResultMsg{Generation: generation, Err: errors.New("Zowe session loader is unavailable")}
+			return sessionResultMsg{Profile: profile, Generation: generation, Err: errors.New("Zowe session loader is unavailable")}
 		}
-		session, err := loader(ctx)
-		return sessionResultMsg{Generation: generation, Session: session, Err: err}
+		session, err := loader(ctx, profile)
+		return sessionResultMsg{Profile: profile, Generation: generation, Session: session, Err: err}
 	})
+}
+
+func (m *Model) targetWorkspace(profile string) *workspace {
+	if len(m.profiles) == 0 {
+		if m.workspace.profile == profile {
+			return &m.workspace
+		}
+		return nil
+	}
+	for i, p := range m.profiles {
+		if p == profile {
+			if i == m.active {
+				return &m.workspace
+			}
+			return m.workspaces[i]
+		}
+	}
+	return nil
 }
 
 // Update implements tea.Model.
@@ -333,18 +409,33 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := message.(type) {
 	case tea.WindowSizeMsg:
 		return m, m.handleResize(msg.Width, msg.Height)
+	case profileListMsg:
+		return m, m.handleProfileList(msg)
 	case sessionResultMsg:
-		return m, m.handleSessionResult(msg)
+		if ws := m.targetWorkspace(msg.Profile); ws != nil {
+			return m, m.handleSessionResult(ws, msg)
+		}
 	case dataSetsResultMsg:
-		return m, m.handleDataSetsResult(msg)
+		if ws := m.targetWorkspace(msg.Meta.Profile); ws != nil {
+			return m, m.handleDataSetsResult(ws, msg)
+		}
 	case membersResultMsg:
-		return m, m.handleMembersResult(msg)
+		if ws := m.targetWorkspace(msg.Meta.Profile); ws != nil {
+			return m, m.handleMembersResult(ws, msg)
+		}
 	case recordsResultMsg:
-		return m, m.handleRecordsResult(msg)
+		if ws := m.targetWorkspace(msg.Meta.Profile); ws != nil {
+			return m, m.handleRecordsResult(ws, msg)
+		}
 	case overlayResultMsg:
-		return m, m.handleOverlayResult(msg)
+		if ws := m.targetWorkspace(msg.Profile); ws != nil {
+			return m, m.handleOverlayResult(ws, msg)
+		}
 	case decodeResultMsg:
-		return m, m.handleDecodeResult(msg)
+		ws := m.targetWorkspace(msg.Profile)
+		if ws != nil {
+			return m, m.handleDecodeResult(ws, msg)
+		}
 	case spinner.TickMsg:
 		level, _ := m.effectiveStatus()
 		if level != statusLoading {
@@ -360,19 +451,20 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	default:
 		return m, nil
 	}
+	return m, nil
 }
 
-func (m *Model) handleSessionResult(msg sessionResultMsg) tea.Cmd {
-	if msg.Generation != m.sessionGeneration {
+func (m *Model) handleSessionResult(ws *workspace, msg sessionResultMsg) tea.Cmd {
+	if msg.Generation != ws.sessionGeneration {
 		return nil
 	}
-	m.cancelSession()
+	ws.cancelSession()
 	if msg.Err != nil {
-		m.status = status{Level: statusError, Text: msg.Err.Error()}
+		ws.status = status{Level: statusError, Text: msg.Err.Error()}
 		return nil
 	}
 	if msg.Session.Browser == nil {
-		m.status = status{Level: statusError, Text: "Zowe session did not provide a browser client"}
+		ws.status = status{Level: statusError, Text: "Zowe session did not provide a browser client"}
 		return nil
 	}
 
@@ -385,32 +477,37 @@ func (m *Model) handleSessionResult(msg sessionResultMsg) tea.Cmd {
 	}
 	cm, err := decode.Codepage(codepage)
 	if err != nil {
-		m.status = status{Level: statusError, Text: err.Error()}
+		ws.status = status{Level: statusError, Text: err.Error()}
 		return nil
 	}
-	m.sessionReady = true
-	m.browser = msg.Session.Browser
-	m.user = strings.ToUpper(strings.TrimSpace(msg.Session.User))
-	m.codepageName = cm.Name()
-	m.charmap = cm
+	ws.sessionReady = true
+	ws.browser = msg.Session.Browser
+	ws.user = strings.ToUpper(strings.TrimSpace(msg.Session.User))
+	ws.codepageName = cm.Name()
+	ws.charmap = cm
 
-	m.prefix = strings.ToUpper(strings.TrimSpace(m.options.Prefix))
-	if m.prefix == "" && m.user != "" {
-		m.prefix = m.user + ".*"
+	ws.prefix = strings.ToUpper(strings.TrimSpace(m.options.Prefix))
+	if ws.prefix == "" && ws.user != "" {
+		ws.prefix = ws.user + ".*"
 	}
-	m.prefixInput.SetValue(m.prefix)
-	m.status = status{Level: statusReady, Text: "session ready"}
+	ws.status = status{Level: statusReady, Text: "session ready"}
+
+	// Only the active workspace should drive initial fetch and input focus.
+	if ws != &m.workspace {
+		return nil
+	}
+	m.prefixInput.SetValue(ws.prefix)
 
 	var commands []tea.Cmd
 	if source := m.initialCopybookSource(); !source.empty() {
-		commands = append(commands, m.startOverlay(source))
+		commands = append(commands, m.startOverlay(ws, source))
 	}
-	if m.prefix == "" {
-		m.status = status{Level: statusReady, Text: "enter a data set prefix"}
+	if ws.prefix == "" {
+		ws.status = status{Level: statusReady, Text: "enter a data set prefix"}
 		commands = append(commands, m.prefixInput.Focus())
 	} else if m.budget > 0 {
-		m.datasetPage.reset(m.visible, m.budget)
-		commands = append(commands, m.startDataSets(m.datasetPage.initialPlan("")))
+		ws.datasetPage.reset(m.visible, m.budget)
+		commands = append(commands, m.startDataSets(ws, ws.datasetPage.initialPlan("")))
 	}
 	return tea.Batch(commands...)
 }
@@ -422,6 +519,7 @@ func (m *Model) initialCopybookSource() CopybookSource {
 }
 
 func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
+	ws := m.ws()
 	switch msg.Button {
 	case tea.MouseWheelLeft:
 		return m.handleAction(actionWideLeft)
@@ -440,18 +538,19 @@ func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
 		m.helpVertical = max(0, m.helpVertical+delta)
 		return nil
 	}
-	if m.screen == ScreenRecords && m.recordMode == ModeJSON {
-		m.jsonVertical = min(m.maxJSONVertical(), max(0, m.jsonVertical+delta))
+	if ws.screen == ScreenRecords && ws.recordMode == ModeJSON {
+		ws.jsonVertical = min(m.maxJSONVertical(), max(0, ws.jsonVertical+delta))
 		return nil
 	}
 	return m.moveSelection(delta)
 }
 
 func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
+	ws := m.ws()
 	ctx := keyContext{
-		Screen: m.screen, Mode: m.recordMode,
+		Screen: ws.screen, Mode: ws.recordMode,
 		InputFocused: m.inputFocused(), DialogOpen: m.dialog != nil,
-		ShowHelp: m.showHelp,
+		ShowHelp: m.showHelp, Tabs: m.hasTabs(),
 	}
 	selectedAction := m.keys.actionFor(msg, ctx)
 	if m.dialog != nil {
@@ -460,7 +559,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 			source := m.dialog.source()
 			if source.empty() {
 				m.dialog = nil
-				if m.overlay != nil {
+				if ws.overlay != nil {
 					m.clearOverlay()
 				}
 				return nil
@@ -470,7 +569,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 				return nil
 			}
 			m.dialog = nil
-			return m.startOverlay(source)
+			return m.startOverlay(ws, source)
 		case actionCancel:
 			m.dialog = nil
 			return nil
@@ -509,6 +608,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 }
 
 func (m *Model) handleAction(selected action) tea.Cmd {
+	ws := m.ws()
 	switch selected {
 	case actionNone:
 		return nil
@@ -519,18 +619,22 @@ func (m *Model) handleAction(selected action) tea.Cmd {
 		m.showHelp = !m.showHelp
 		m.helpVertical = 0
 		return nil
+	case actionNextProfile:
+		return m.switchProfile(1)
+	case actionPreviousProfile:
+		return m.switchProfile(-1)
 	case actionSearch:
-		if m.screen == ScreenDataSets {
-			m.prefixInput.SetValue(m.prefix)
+		if ws.screen == ScreenDataSets {
+			m.prefixInput.SetValue(ws.prefix)
 			m.prefixInput.CursorEnd()
 			return m.prefixInput.Focus()
 		}
-		if m.screen == ScreenMembers {
-			m.memberInput.SetValue(m.memberPattern)
+		if ws.screen == ScreenMembers {
+			m.memberInput.SetValue(ws.memberPattern)
 			m.memberInput.CursorEnd()
 			return m.memberInput.Focus()
 		}
-		if m.screen == ScreenRecords {
+		if ws.screen == ScreenRecords {
 			m.locateInput.SetValue("")
 			return m.locateInput.Focus()
 		}
@@ -539,14 +643,14 @@ func (m *Model) handleAction(selected action) tea.Cmd {
 	case actionDown:
 		return m.moveSelection(1)
 	case actionPageUp:
-		if m.screen == ScreenRecords && m.recordMode == ModeJSON {
-			m.jsonVertical = max(0, m.jsonVertical-max(1, m.visible))
+		if ws.screen == ScreenRecords && ws.recordMode == ModeJSON {
+			ws.jsonVertical = max(0, ws.jsonVertical-max(1, m.visible))
 			return nil
 		}
 		return m.pageSelection(scrollUp)
 	case actionPageDown:
-		if m.screen == ScreenRecords && m.recordMode == ModeJSON {
-			m.jsonVertical = min(m.maxJSONVertical(), m.jsonVertical+max(1, m.visible))
+		if ws.screen == ScreenRecords && ws.recordMode == ModeJSON {
+			ws.jsonVertical = min(m.maxJSONVertical(), ws.jsonVertical+max(1, m.visible))
 			return nil
 		}
 		return m.pageSelection(scrollDown)
@@ -562,53 +666,53 @@ func (m *Model) handleAction(selected action) tea.Cmd {
 	case actionRefresh:
 		return m.refresh()
 	case actionCopybook:
-		m.dialog = newCopybookDialog(m.overlaySource)
+		m.dialog = newCopybookDialog(ws.overlaySource)
 		m.dialog.setWidth(m.width)
 		return nil
 	case actionClearOverlay:
 		m.clearOverlay()
 		return nil
 	case actionToggleOverlay:
-		if m.overlay == nil {
-			m.status = status{Level: statusWarn, Text: "load a copybook with c before enabling an overlay"}
+		if ws.overlay == nil {
+			ws.status = status{Level: statusWarn, Text: "load a copybook with c before enabling an overlay"}
 			return nil
 		}
-		if m.recordMode == ModeRaw {
-			m.recordMode = m.decodedMode
+		if ws.recordMode == ModeRaw {
+			ws.recordMode = ws.decodedMode
 		} else {
-			m.decodedMode = m.recordMode
-			m.recordMode = ModeRaw
+			ws.decodedMode = ws.recordMode
+			ws.recordMode = ModeRaw
 		}
-		m.horizontal = 0
-		m.jsonVertical = 0
+		ws.horizontal = 0
+		ws.jsonVertical = 0
 		return nil
 	case actionToggleView:
-		if m.overlay == nil {
-			m.status = status{Level: statusWarn, Text: "load a copybook with c before selecting table or JSON"}
+		if ws.overlay == nil {
+			ws.status = status{Level: statusWarn, Text: "load a copybook with c before selecting table or JSON"}
 			return nil
 		}
-		if m.decodedMode == ModeTable {
-			m.decodedMode = ModeJSON
+		if ws.decodedMode == ModeTable {
+			ws.decodedMode = ModeJSON
 		} else {
-			m.decodedMode = ModeTable
+			ws.decodedMode = ModeTable
 		}
-		if m.recordMode != ModeRaw {
-			m.recordMode = m.decodedMode
+		if ws.recordMode != ModeRaw {
+			ws.recordMode = ws.decodedMode
 		}
-		m.horizontal = 0
-		m.jsonVertical = 0
+		ws.horizontal = 0
+		ws.jsonVertical = 0
 		return nil
 	case actionDiagnostics:
-		m.showDiagnostics = !m.showDiagnostics
+		ws.showDiagnostics = !ws.showDiagnostics
 		return nil
 	case actionWideLeft:
-		if m.horizontal > 0 {
-			m.horizontal--
+		if ws.horizontal > 0 {
+			ws.horizontal--
 		}
 		return nil
 	case actionWideRight:
-		if m.horizontal < m.maxHorizontal() {
-			m.horizontal++
+		if ws.horizontal < m.maxHorizontal() {
+			ws.horizontal++
 		}
 		return nil
 	case actionHelpUp:
@@ -633,21 +737,44 @@ func (m *Model) handleAction(selected action) tea.Cmd {
 	return nil
 }
 
-func (m *Model) clearOverlay() {
-	m.cancelOverlay()
-	m.overlayGeneration++
-	m.cancelDecode()
-	m.overlay = nil
-	m.overlaySource = CopybookSource{}
-	m.overlayError = ""
-	m.recordMode = ModeRaw
-	m.horizontal = 0
-	m.jsonVertical = 0
-	for i := range m.records {
-		m.records[i].Decoded = nil
-		m.records[i].Err = nil
+func (m *Model) switchProfile(delta int) tea.Cmd {
+	if !m.hasTabs() {
+		return nil
 	}
-	m.status = status{Level: statusReady, Text: "copybook overlay cleared"}
+	m.cancelSearch()
+	m.saveActiveWorkspace()
+	m.active += delta
+	if m.active >= len(m.profiles) {
+		m.active = 0
+	} else if m.active < 0 {
+		m.active = len(m.profiles) - 1
+	}
+	m.loadWorkspace(m.active)
+	ws := m.ws()
+	m.syncInputsFromWorkspace()
+	m.helpVertical = 0
+	if !ws.sessionReady && ws.sessionCancel == nil {
+		return m.loadActiveSession()
+	}
+	return m.ensureActivePage()
+}
+
+func (m *Model) clearOverlay() {
+	ws := m.ws()
+	ws.cancelOverlay()
+	ws.overlayGeneration++
+	ws.cancelDecode()
+	ws.overlay = nil
+	ws.overlaySource = CopybookSource{}
+	ws.overlayError = ""
+	ws.recordMode = ModeRaw
+	ws.horizontal = 0
+	ws.jsonVertical = 0
+	for i := range ws.records {
+		ws.records[i].Decoded = nil
+		ws.records[i].Err = nil
+	}
+	ws.status = status{Level: statusReady, Text: "copybook overlay cleared"}
 }
 
 func (m *Model) inputFocused() bool {
@@ -655,72 +782,74 @@ func (m *Model) inputFocused() bool {
 }
 
 func (m *Model) acceptSearch() tea.Cmd {
+	ws := m.ws()
 	if m.locateInput.Focused() {
 		return m.acceptRecordLocation()
 	}
 	if m.prefixInput.Focused() {
 		prefix := strings.ToUpper(strings.TrimSpace(m.prefixInput.Value()))
 		if prefix == "" {
-			m.status = status{Level: statusError, Text: "data set prefix must not be empty"}
+			ws.status = status{Level: statusError, Text: "data set prefix must not be empty"}
 			return nil
 		}
 		m.prefixInput.Blur()
-		m.cancelBrowse()
-		m.cancelDecode()
-		m.prefix = prefix
-		m.datasetPage.reset(m.visible, m.budget)
-		m.datasets = nil
-		m.datasetTotal = nil
-		m.dataSet = zosmf.DataSet{}
-		m.resetMemberState()
+		ws.cancelBrowse()
+		ws.cancelDecode()
+		ws.prefix = prefix
+		ws.datasetPage.reset(m.visible, m.budget)
+		ws.datasets = nil
+		ws.datasetTotal = nil
+		ws.dataSet = zosmf.DataSet{}
+		ws.resetMemberState()
 		if m.budget <= 0 {
 			return nil
 		}
-		return m.startDataSets(m.datasetPage.initialPlan(""))
+		return m.startDataSets(ws, ws.datasetPage.initialPlan(""))
 	}
 	pattern := strings.ToUpper(strings.TrimSpace(m.memberInput.Value()))
 	if pattern != "" && len(pattern) < 8 && !strings.ContainsAny(pattern, "*%") {
 		pattern += "*"
 	}
 	m.memberInput.Blur()
-	m.cancelBrowse()
-	m.cancelDecode()
-	m.memberPattern = pattern
-	m.resetMemberState()
-	m.status = status{Level: statusReady, Text: "member filter " + displayOr(pattern, "*")}
+	ws.cancelBrowse()
+	ws.cancelDecode()
+	ws.memberPattern = pattern
+	ws.resetMemberState()
+	ws.status = status{Level: statusReady, Text: "member filter " + displayOr(pattern, "*")}
 	if m.budget <= 0 {
 		return nil
 	}
-	return m.startMembers(m.memberPage.initialPlan(""))
+	return m.startMembers(ws, ws.memberPage.initialPlan(""))
 }
 
 func (m *Model) acceptRecordLocation() tea.Cmd {
+	ws := m.ws()
 	value := strings.TrimSpace(m.locateInput.Value())
 	number, err := strconv.ParseInt(value, 10, 64)
 	if err != nil || number <= 0 {
-		m.status = status{Level: statusError, Text: "record number must be a positive integer"}
+		ws.status = status{Level: statusError, Text: "record number must be a positive integer"}
 		return nil
 	}
 	m.locateInput.Blur()
-	if m.recordPage.selectKey(strconv.FormatInt(number, 10)) {
-		m.jsonVertical = 0
-		m.status = status{Level: statusReady, Text: fmt.Sprintf("located record %d", number)}
-		return m.maybePrefetch()
+	if ws.recordPage.selectKey(strconv.FormatInt(number, 10)) {
+		ws.jsonVertical = 0
+		ws.status = status{Level: statusReady, Text: fmt.Sprintf("located record %d", number)}
+		return m.maybePrefetch(ws)
 	}
 
-	m.cancelBrowse()
-	m.cancelDecode()
-	m.resetRecordState()
-	return m.startRecords(m.recordPage.initialPlan(number))
+	ws.cancelBrowse()
+	ws.cancelDecode()
+	ws.resetRecordState()
+	return m.startRecords(ws, ws.recordPage.initialPlan(number))
 }
 
 func (m *Model) cancelSearch() {
 	if m.prefixInput.Focused() {
-		m.prefixInput.SetValue(m.prefix)
+		m.prefixInput.SetValue(m.workspace.prefix)
 		m.prefixInput.Blur()
 	}
 	if m.memberInput.Focused() {
-		m.memberInput.SetValue(m.memberPattern)
+		m.memberInput.SetValue(m.workspace.memberPattern)
 		m.memberInput.Blur()
 	}
 	if m.locateInput.Focused() {
@@ -729,54 +858,31 @@ func (m *Model) cancelSearch() {
 	}
 }
 
-func (m *Model) resetRecordState() {
-	m.records = nil
-	m.recordPage.reset(m.visible, m.budget)
-	m.horizontal = 0
-	m.jsonVertical = 0
-}
-
-func (m *Model) resetMemberState() {
-	m.members = nil
-	m.memberTotal = nil
-	m.memberPage.reset(m.visible, m.budget)
-	m.member = nil
-	m.resetRecordState()
-}
-
 func (m *Model) activePager() pagerNavigator {
-	switch m.screen {
-	case ScreenDataSets:
-		return &m.datasetPage
-	case ScreenMembers:
-		return &m.memberPage
-	case ScreenRecords:
-		return &m.recordPage
-	default:
-		return nil
-	}
+	return m.ws().activePager()
 }
 
 func (m *Model) updateActivePager(update func(pagerNavigator)) {
-	pager := m.activePager()
+	ws := m.ws()
+	pager := ws.activePager()
 	if pager == nil {
 		return
 	}
 	selected := pager.selectedKey()
 	update(pager)
-	if m.screen == ScreenRecords && pager.selectedKey() != selected {
-		m.jsonVertical = 0
+	if ws.screen == ScreenRecords && pager.selectedKey() != selected {
+		ws.jsonVertical = 0
 	}
 }
 
 func (m *Model) moveSelection(delta int) tea.Cmd {
 	m.updateActivePager(func(pager pagerNavigator) { pager.move(delta) })
-	return m.maybePrefetch()
+	return m.maybePrefetch(m.ws())
 }
 
 func (m *Model) pageSelection(direction scrollDirection) tea.Cmd {
 	m.updateActivePager(func(pager pagerNavigator) { pager.page(direction) })
-	return m.maybePrefetch()
+	return m.maybePrefetch(m.ws())
 }
 
 func (m *Model) activePagerTop() {
@@ -785,142 +891,147 @@ func (m *Model) activePagerTop() {
 
 func (m *Model) activePagerBottom() tea.Cmd {
 	m.updateActivePager(func(pager pagerNavigator) { pager.bottom() })
-	return m.maybePrefetch()
+	return m.maybePrefetch(m.ws())
 }
 
 func (m *Model) openSelection() tea.Cmd {
+	ws := m.ws()
 	if m.budget <= 0 {
 		return nil
 	}
-	switch m.screen {
+	switch ws.screen {
 	case ScreenDataSets:
-		index := m.datasetPage.selectedIndex()
-		if index < 0 || index >= len(m.datasets) {
+		index := ws.datasetPage.selectedIndex()
+		if index < 0 || index >= len(ws.datasets) {
 			return nil
 		}
-		selected := m.datasets[index]
+		selected := ws.datasets[index]
 		organization := strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(selected.Organization), " ", ""))
 		switch organization {
 		case "PS", "SEQ", "PS-L", "PSL":
-			m.cancelBrowse()
-			m.cancelDecode()
-			m.dataSet = selected
-			m.resetMemberState()
-			m.screen = ScreenRecords
-			return m.startRecords(m.recordPage.initialPlan(0))
+			ws.cancelBrowse()
+			ws.cancelDecode()
+			ws.dataSet = selected
+			ws.resetMemberState()
+			ws.screen = ScreenRecords
+			return m.startRecords(ws, ws.recordPage.initialPlan(0))
 		case "PO", "PO-E", "POE", "PDS", "PDSE":
-			m.cancelBrowse()
-			m.cancelDecode()
-			m.dataSet = selected
-			m.resetMemberState()
-			m.screen = ScreenMembers
-			m.memberPattern = ""
+			ws.cancelBrowse()
+			ws.cancelDecode()
+			ws.dataSet = selected
+			ws.resetMemberState()
+			ws.screen = ScreenMembers
+			ws.memberPattern = ""
 			m.memberInput.SetValue("")
-			return m.startMembers(m.memberPage.initialPlan(""))
+			return m.startMembers(ws, ws.memberPage.initialPlan(""))
 		default:
 			if organization == "" {
 				organization = "unknown"
 			}
-			m.status = status{Level: statusWarn, Text: fmt.Sprintf("%s uses unsupported DSORG %s; sequential, large-format sequential, PDS, and PDSE data sets are readable", selected.Name, organization)}
+			ws.status = status{Level: statusWarn, Text: fmt.Sprintf("%s uses unsupported DSORG %s; sequential, large-format sequential, PDS, and PDSE data sets are readable", selected.Name, organization)}
 		}
 	case ScreenMembers:
-		index := m.memberPage.selectedIndex()
-		if index < 0 || index >= len(m.members) {
+		index := ws.memberPage.selectedIndex()
+		if index < 0 || index >= len(ws.members) {
 			return nil
 		}
-		selected := m.members[index]
-		m.cancelBrowse()
-		m.cancelDecode()
-		m.member = &selected
-		m.screen = ScreenRecords
-		m.resetRecordState()
-		return m.startRecords(m.recordPage.initialPlan(0))
+		selected := ws.members[index]
+		ws.cancelBrowse()
+		ws.cancelDecode()
+		ws.member = &selected
+		ws.screen = ScreenRecords
+		ws.resetRecordState()
+		return m.startRecords(ws, ws.recordPage.initialPlan(0))
 	}
 	return nil
 }
 
 func (m *Model) navigateBack() tea.Cmd {
+	ws := m.ws()
 	m.cancelSearch()
-	switch m.screen {
+	switch ws.screen {
 	case ScreenRecords:
-		m.cancelBrowse()
-		m.cancelDecode()
-		fromMember := m.member != nil
-		m.resetRecordState()
+		ws.cancelBrowse()
+		ws.cancelDecode()
+		fromMember := ws.member != nil
+		ws.resetRecordState()
 		if fromMember {
-			m.member = nil
-			m.screen = ScreenMembers
-			m.status = status{Level: statusReady, Text: "returned to cached member list"}
+			ws.member = nil
+			ws.screen = ScreenMembers
+			ws.status = status{Level: statusReady, Text: "returned to cached member list"}
 			return m.ensureActivePage()
 		}
-		m.screen = ScreenDataSets
-		m.status = status{Level: statusReady, Text: "returned to cached data set list"}
+		ws.screen = ScreenDataSets
+		ws.status = status{Level: statusReady, Text: "returned to cached data set list"}
 		return m.ensureActivePage()
 	case ScreenMembers:
-		m.cancelBrowse()
-		m.cancelDecode()
-		m.resetMemberState()
-		m.screen = ScreenDataSets
-		m.dataSet = zosmf.DataSet{}
-		m.status = status{Level: statusReady, Text: "returned to cached data set list"}
+		ws.cancelBrowse()
+		ws.cancelDecode()
+		ws.resetMemberState()
+		ws.screen = ScreenDataSets
+		ws.dataSet = zosmf.DataSet{}
+		ws.status = status{Level: statusReady, Text: "returned to cached data set list"}
 		return m.ensureActivePage()
 	}
 	return nil
 }
 
 func (m *Model) refresh() tea.Cmd {
-	if !m.sessionReady || m.budget <= 0 {
+	ws := m.ws()
+	if !ws.sessionReady || m.budget <= 0 {
 		return nil
 	}
-	m.cancelBrowse()
-	switch m.screen {
+	ws.cancelBrowse()
+	switch ws.screen {
 	case ScreenDataSets:
-		plan := m.datasetPage.refreshPlan()
-		m.datasets = nil
-		m.datasetTotal = nil
-		m.datasetPage.reset(m.visible, m.budget)
-		return m.startDataSets(plan)
+		plan := ws.datasetPage.refreshPlan()
+		ws.datasets = nil
+		ws.datasetTotal = nil
+		ws.datasetPage.reset(m.visible, m.budget)
+		return m.startDataSets(ws, plan)
 	case ScreenMembers:
-		plan := m.memberPage.refreshPlan()
-		m.members = nil
-		m.memberTotal = nil
-		m.memberPage.reset(m.visible, m.budget)
-		return m.startMembers(plan)
+		plan := ws.memberPage.refreshPlan()
+		ws.members = nil
+		ws.memberTotal = nil
+		ws.memberPage.reset(m.visible, m.budget)
+		return m.startMembers(ws, plan)
 	case ScreenRecords:
-		plan := m.recordPage.refreshPlan()
-		m.cancelDecode()
-		m.records = nil
-		m.recordPage.reset(m.visible, m.budget)
-		return m.startRecords(plan)
+		plan := ws.recordPage.refreshPlan()
+		ws.cancelDecode()
+		ws.records = nil
+		ws.recordPage.reset(m.visible, m.budget)
+		return m.startRecords(ws, plan)
 	}
 	return nil
 }
 
 func (m *Model) ensureActivePage() tea.Cmd {
-	if !m.sessionReady || m.budget <= 0 {
+	ws := m.ws()
+	if !ws.sessionReady || m.budget <= 0 {
 		return nil
 	}
-	switch m.screen {
+	switch ws.screen {
 	case ScreenDataSets:
-		if len(m.datasets) == 0 && m.prefix != "" {
-			return m.startDataSets(m.datasetPage.initialPlan(""))
+		if len(ws.datasets) == 0 && ws.prefix != "" {
+			return m.startDataSets(ws, ws.datasetPage.initialPlan(""))
 		}
 	case ScreenMembers:
-		if len(m.members) == 0 && m.dataSet.Name != "" {
-			return m.startMembers(m.memberPage.initialPlan(""))
+		if len(ws.members) == 0 && ws.dataSet.Name != "" {
+			return m.startMembers(ws, ws.memberPage.initialPlan(""))
 		}
 	case ScreenRecords:
-		if len(m.records) == 0 && m.dataSet.Name != "" {
-			return m.startRecords(m.recordPage.initialPlan(0))
+		if len(ws.records) == 0 && ws.dataSet.Name != "" {
+			return m.startRecords(ws, ws.recordPage.initialPlan(0))
 		}
 	}
-	return m.maybePrefetch()
+	return m.maybePrefetch(ws)
 }
 
 func (m *Model) handleResize(width, height int) tea.Cmd {
+	ws := m.ws()
 	oldBudget := m.budget
 	m.width, m.height = width, height
-	m.visible = VisibleRows(width, height)
+	m.visible = VisibleRows(width, height, m.hasTabs())
 	m.budget = RowBudget(m.visible)
 	m.help.SetWidth(max(1, width))
 	m.prefixInput.SetWidth(max(8, width-10))
@@ -930,210 +1041,218 @@ func (m *Model) handleResize(width, height int) tea.Cmd {
 		m.dialog.setWidth(width)
 	}
 
-	m.datasetPage.resize(m.visible, m.budget)
-	m.memberPage.resize(m.visible, m.budget)
-	m.recordPage.resize(m.visible, m.budget)
-	m.jsonVertical = min(m.jsonVertical, m.maxJSONVertical())
+	ws.datasetPage.resize(m.visible, m.budget)
+	ws.memberPage.resize(m.visible, m.budget)
+	ws.recordPage.resize(m.visible, m.budget)
+	ws.jsonVertical = min(ws.jsonVertical, m.maxJSONVertical())
 
 	if m.budget <= 0 {
-		m.cancelBrowse()
+		ws.cancelBrowse()
 		return nil
 	}
-	if !m.sessionReady {
+	if !ws.sessionReady {
 		return nil
 	}
-	if m.browsePending != nil && m.browsePending.Budget != m.budget {
-		m.cancelBrowse()
+	if ws.browsePending != nil && ws.browsePending.Budget != m.budget {
+		ws.cancelBrowse()
 	}
 	if oldBudget == 0 {
 		return m.ensureActivePage()
 	}
-	return m.maybePrefetch()
+	return m.maybePrefetch(ws)
 }
 
-func (m *Model) maybePrefetch() tea.Cmd {
-	if !m.canFetch() || m.browsePending != nil {
+func (m *Model) maybePrefetch(ws *workspace) tea.Cmd {
+	if ws != &m.workspace {
 		return nil
 	}
-	switch m.screen {
+	if !ws.canFetch(m.budget) || ws.browsePending != nil {
+		return nil
+	}
+	switch ws.screen {
 	case ScreenDataSets:
-		if plan, ok := forwardNamePlan(&m.datasetPage); ok {
-			return m.startDataSets(plan)
+		if plan, ok := forwardNamePlan(&ws.datasetPage); ok {
+			return m.startDataSets(ws, plan)
 		}
 	case ScreenMembers:
-		if plan, ok := forwardNamePlan(&m.memberPage); ok {
-			return m.startMembers(plan)
+		if plan, ok := forwardNamePlan(&ws.memberPage); ok {
+			return m.startMembers(ws, plan)
 		}
 	case ScreenRecords:
-		numbers := make([]int64, len(m.records))
-		for i, row := range m.records {
+		numbers := make([]int64, len(ws.records))
+		for i, row := range ws.records {
 			numbers[i] = row.Record.Number
 		}
-		if plan, ok := forwardRecordPlan(&m.recordPage, numbers); ok {
-			return m.startRecords(plan)
+		if plan, ok := forwardRecordPlan(&ws.recordPage, numbers); ok {
+			return m.startRecords(ws, plan)
 		}
 	}
 	return nil
 }
 
-func (m *Model) startDataSets(plan pagePlan[string]) tea.Cmd {
-	if !m.canFetch() || m.prefix == "" {
+func (m *Model) startDataSets(ws *workspace, plan pagePlan[string]) tea.Cmd {
+	if !ws.canFetch(m.budget) || ws.prefix == "" {
 		return nil
 	}
-	m.cancelBrowse()
-	m.browseGeneration++
+	ws.cancelBrowse()
+	ws.browseGeneration++
 	meta := requestMeta{
-		Kind: requestDataSets, Generation: m.browseGeneration, Screen: ScreenDataSets,
-		Identity: m.prefix, Budget: m.budget, NamePlan: plan,
+		Kind: requestDataSets, Generation: ws.browseGeneration, Screen: ScreenDataSets,
+		Identity: ws.prefix, Profile: ws.profile, Budget: m.budget, NamePlan: plan,
 	}
-	m.browsePending = &meta
+	ws.browsePending = &meta
 	ctx, cancel := context.WithTimeout(context.Background(), m.deps.Timeout)
-	m.browseCancel = cancel
-	m.status = status{Level: statusLoading, Text: fmt.Sprintf("listing data sets for %s", m.prefix)}
-	browser := m.browser
-	request := zosmf.ListDataSetsRequest{Prefix: m.prefix, Start: plan.Anchor, MaxItems: m.budget}
+	ws.browseCancel = cancel
+	ws.status = status{Level: statusLoading, Text: fmt.Sprintf("listing data sets for %s", ws.prefix)}
+	browser := ws.browser
+	request := zosmf.ListDataSetsRequest{Prefix: ws.prefix, Start: plan.Anchor, MaxItems: m.budget}
 	return m.loadingCommand(func() tea.Msg {
 		page, err := browser.ListDataSets(ctx, request)
 		return dataSetsResultMsg{Meta: meta, Page: page, Err: err}
 	})
 }
 
-func (m *Model) startMembers(plan pagePlan[string]) tea.Cmd {
-	if !m.canFetch() || m.dataSet.Name == "" {
+func (m *Model) startMembers(ws *workspace, plan pagePlan[string]) tea.Cmd {
+	if !ws.canFetch(m.budget) || ws.dataSet.Name == "" {
 		return nil
 	}
-	m.cancelBrowse()
-	m.browseGeneration++
-	identity := m.dataSet.Name + "|" + m.memberPattern
+	ws.cancelBrowse()
+	ws.browseGeneration++
+	identity := ws.dataSet.Name + "|" + ws.memberPattern
 	meta := requestMeta{
-		Kind: requestMembers, Generation: m.browseGeneration, Screen: ScreenMembers,
-		Identity: identity, Budget: m.budget, NamePlan: plan,
+		Kind: requestMembers, Generation: ws.browseGeneration, Screen: ScreenMembers,
+		Identity: identity, Profile: ws.profile, Budget: m.budget, NamePlan: plan,
 	}
-	m.browsePending = &meta
+	ws.browsePending = &meta
 	ctx, cancel := context.WithTimeout(context.Background(), m.deps.Timeout)
-	m.browseCancel = cancel
-	m.status = status{Level: statusLoading, Text: fmt.Sprintf("listing members of %s with filter %s", m.dataSet.Name, displayOr(m.memberPattern, "*"))}
-	browser := m.browser
-	request := zosmf.ListMembersRequest{DataSet: m.dataSet.Name, Start: plan.Anchor, Pattern: m.memberPattern, MaxItems: m.budget}
+	ws.browseCancel = cancel
+	ws.status = status{Level: statusLoading, Text: fmt.Sprintf("listing members of %s with filter %s", ws.dataSet.Name, displayOr(ws.memberPattern, "*"))}
+	browser := ws.browser
+	request := zosmf.ListMembersRequest{DataSet: ws.dataSet.Name, Start: plan.Anchor, Pattern: ws.memberPattern, MaxItems: m.budget}
 	return m.loadingCommand(func() tea.Msg {
 		page, err := browser.ListMembers(ctx, request)
 		return membersResultMsg{Meta: meta, Page: page, Err: err}
 	})
 }
 
-func (m *Model) startRecords(plan pagePlan[int64]) tea.Cmd {
-	if !m.canFetch() || m.dataSet.Name == "" {
+func (m *Model) startRecords(ws *workspace, plan pagePlan[int64]) tea.Cmd {
+	if !ws.canFetch(m.budget) || ws.dataSet.Name == "" {
 		return nil
 	}
-	m.cancelBrowse()
-	m.browseGeneration++
+	ws.cancelBrowse()
+	ws.browseGeneration++
 	member := ""
-	if m.member != nil {
-		member = m.member.Name
+	if ws.member != nil {
+		member = ws.member.Name
 	}
-	identity := m.dataSet.Name + "(" + member + ")"
+	identity := ws.dataSet.Name + "(" + member + ")"
 	meta := requestMeta{
-		Kind: requestRecords, Generation: m.browseGeneration, Screen: ScreenRecords,
-		Identity: identity, Budget: m.budget, RecordPlan: plan,
+		Kind: requestRecords, Generation: ws.browseGeneration, Screen: ScreenRecords,
+		Identity: identity, Profile: ws.profile, Budget: m.budget, RecordPlan: plan,
 	}
-	m.browsePending = &meta
+	ws.browsePending = &meta
 	ctx, cancel := context.WithTimeout(context.Background(), m.deps.Timeout)
-	m.browseCancel = cancel
-	m.status = status{Level: statusLoading, Text: fmt.Sprintf("reading records from %s", identity)}
-	browser := m.browser
-	request := zosmf.ReadRecordsRequest{DataSet: m.dataSet.Name, Member: member, Start: plan.Anchor, MaxItems: m.budget}
+	ws.browseCancel = cancel
+	ws.status = status{Level: statusLoading, Text: fmt.Sprintf("reading records from %s", identity)}
+	browser := ws.browser
+	request := zosmf.ReadRecordsRequest{DataSet: ws.dataSet.Name, Member: member, Start: plan.Anchor, MaxItems: m.budget}
 	return m.loadingCommand(func() tea.Msg {
 		page, err := browser.ReadRecords(ctx, request)
 		return recordsResultMsg{Meta: meta, Page: page, Err: err}
 	})
 }
 
-func (m *Model) canFetch() bool {
-	return m.sessionReady && m.browser != nil && m.budget > 0
-}
-
-func (m *Model) handleDataSetsResult(msg dataSetsResultMsg) tea.Cmd {
-	if !m.acceptBrowse(msg.Meta) {
+func (m *Model) handleDataSetsResult(ws *workspace, msg dataSetsResultMsg) tea.Cmd {
+	if !ws.acceptBrowse(msg.Meta, m.budget, ws.screen) {
 		return nil
 	}
-	m.finishBrowse()
+	ws.finishBrowse()
 	if msg.Err != nil {
-		m.status = status{Level: statusError, Text: msg.Err.Error()}
+		ws.status = status{Level: statusError, Text: msg.Err.Error()}
 		return nil
 	}
 	var ended bool
-	m.datasets, m.datasetTotal, ended = applyBrowsePage(
-		m.datasets, msg.Page.Items, &m.datasetPage, m.datasetTotal, msg.Page.TotalRows,
+	ws.datasets, ws.datasetTotal, ended = applyBrowsePage(
+		ws.datasets, msg.Page.Items, &ws.datasetPage, ws.datasetTotal, msg.Page.TotalRows,
 		msg.Page.MoreRows, msg.Meta.Budget, msg.Meta.NamePlan,
 		func(item zosmf.DataSet) string { return strings.ToUpper(strings.TrimSpace(item.Name)) },
 	)
 	if ended {
-		m.status = status{Level: statusReady, Text: "end of data set results"}
+		ws.status = status{Level: statusReady, Text: "end of data set results"}
 		return nil
 	}
-	m.statusForCount(len(m.datasets), "cached data sets")
-	return m.maybePrefetch()
+	ws.statusForCount(len(ws.datasets), "cached data sets")
+	if ws != &m.workspace {
+		return nil
+	}
+	return m.maybePrefetch(ws)
 }
 
-func (m *Model) handleMembersResult(msg membersResultMsg) tea.Cmd {
-	if !m.acceptBrowse(msg.Meta) {
+func (m *Model) handleMembersResult(ws *workspace, msg membersResultMsg) tea.Cmd {
+	if !ws.acceptBrowse(msg.Meta, m.budget, ws.screen) {
 		return nil
 	}
-	m.finishBrowse()
+	ws.finishBrowse()
 	if msg.Err != nil {
-		m.status = status{Level: statusError, Text: msg.Err.Error()}
+		ws.status = status{Level: statusError, Text: msg.Err.Error()}
 		return nil
 	}
 	var ended bool
-	m.members, m.memberTotal, ended = applyBrowsePage(
-		m.members, msg.Page.Items, &m.memberPage, m.memberTotal, msg.Page.TotalRows,
+	ws.members, ws.memberTotal, ended = applyBrowsePage(
+		ws.members, msg.Page.Items, &ws.memberPage, ws.memberTotal, msg.Page.TotalRows,
 		msg.Page.MoreRows, msg.Meta.Budget, msg.Meta.NamePlan,
 		func(item zosmf.Member) string { return strings.ToUpper(strings.TrimSpace(item.Name)) },
 	)
 	if ended {
-		m.status = status{Level: statusReady, Text: "end of member results"}
+		ws.status = status{Level: statusReady, Text: "end of member results"}
 		return nil
 	}
-	m.statusForCount(len(m.members), "cached members")
-	return m.maybePrefetch()
+	ws.statusForCount(len(ws.members), "cached members")
+	if ws != &m.workspace {
+		return nil
+	}
+	return m.maybePrefetch(ws)
 }
 
-func (m *Model) handleRecordsResult(msg recordsResultMsg) tea.Cmd {
-	if !m.acceptBrowse(msg.Meta) {
+func (m *Model) handleRecordsResult(ws *workspace, msg recordsResultMsg) tea.Cmd {
+	if !ws.acceptBrowse(msg.Meta, m.budget, ws.screen) {
 		return nil
 	}
-	m.finishBrowse()
+	ws.finishBrowse()
 	if msg.Err != nil {
-		m.status = status{Level: statusError, Text: msg.Err.Error()}
+		ws.status = status{Level: statusError, Text: msg.Err.Error()}
 		return nil
 	}
-	selected := m.recordPage.selectedKey()
+	selected := ws.recordPage.selectedKey()
 	incoming := make([]recordRow, len(msg.Page.Records))
 	for i, item := range msg.Page.Records {
 		incoming[i] = recordRow{Record: zosmf.Record{Number: item.Number, Data: append([]byte(nil), item.Data...)}}
 	}
 	var ended bool
-	m.records, _, ended = applyBrowsePage(
-		m.records, incoming, &m.recordPage, nil, nil,
+	ws.records, _, ended = applyBrowsePage(
+		ws.records, incoming, &ws.recordPage, nil, nil,
 		msg.Page.MoreRows, msg.Meta.Budget, msg.Meta.RecordPlan,
 		func(row recordRow) string { return strconv.FormatInt(row.Record.Number, 10) },
 	)
 	if ended {
-		m.status = status{Level: statusReady, Text: "end of records"}
+		ws.status = status{Level: statusReady, Text: "end of records"}
 		return nil
 	}
-	if m.recordPage.selectedKey() != selected {
-		m.jsonVertical = 0
+	if ws.recordPage.selectedKey() != selected {
+		ws.jsonVertical = 0
 	}
-	if len(m.records) == 0 {
-		m.status = status{Level: statusEmpty, Text: "no records returned"}
+	if len(ws.records) == 0 {
+		ws.status = status{Level: statusEmpty, Text: "no records returned"}
 		return nil
 	}
-	m.status = status{Level: statusReady, Text: fmt.Sprintf("%d records cached", len(m.records))}
-	if m.overlay != nil {
-		return tea.Batch(m.startDecode(), m.maybePrefetch())
+	ws.status = status{Level: statusReady, Text: fmt.Sprintf("%d records cached", len(ws.records))}
+	if ws != &m.workspace {
+		return nil
 	}
-	return m.maybePrefetch()
+	if ws.overlay != nil {
+		return tea.Batch(m.startDecode(ws), m.maybePrefetch(ws))
+	}
+	return m.maybePrefetch(ws)
 }
 
 func applyBrowsePage[T any, A comparable](
@@ -1206,111 +1325,71 @@ func cloneInt(value *int) *int {
 	return &cloned
 }
 
-func (m *Model) statusForCount(count int, noun string) {
-	if count == 0 {
-		m.status = status{Level: statusEmpty, Text: "no " + noun + " returned"}
-		return
-	}
-	m.status = status{Level: statusReady, Text: fmt.Sprintf("%d %s", count, noun)}
-}
-
-func (m *Model) acceptBrowse(meta requestMeta) bool {
-	if m.browsePending == nil {
-		return false
-	}
-	pending := m.browsePending
-	if pending.Generation != meta.Generation || pending.Kind != meta.Kind || pending.Screen != meta.Screen || pending.Identity != meta.Identity || pending.Budget != meta.Budget {
-		return false
-	}
-	if meta.Budget != m.budget || meta.Screen != m.screen {
-		return false
-	}
-	switch meta.Screen {
-	case ScreenDataSets:
-		return meta.Identity == m.prefix
-	case ScreenMembers:
-		return meta.Identity == m.dataSet.Name+"|"+m.memberPattern
-	case ScreenRecords:
-		member := ""
-		if m.member != nil {
-			member = m.member.Name
-		}
-		return meta.Identity == m.dataSet.Name+"("+member+")"
-	default:
-		return false
-	}
-}
-
-func (m *Model) finishBrowse() {
-	if m.browseCancel != nil {
-		m.browseCancel()
-	}
-	m.browseCancel = nil
-	m.browsePending = nil
-}
-
-func (m *Model) startOverlay(source CopybookSource) tea.Cmd {
-	m.cancelOverlay()
-	m.overlayError = ""
-	m.overlayGeneration++
-	generation := m.overlayGeneration
-	m.overlayPending = true
+func (m *Model) startOverlay(ws *workspace, source CopybookSource) tea.Cmd {
+	ws.cancelOverlay()
+	ws.overlayError = ""
+	ws.overlayGeneration++
+	generation := ws.overlayGeneration
+	ws.overlayPending = true
 	ctx, cancel := context.WithTimeout(context.Background(), m.deps.Timeout)
-	m.overlayCancel = cancel
-	browser := m.browser
-	codepage := m.codepageName
+	ws.overlayCancel = cancel
+	browser := ws.browser
+	codepage := ws.codepageName
 	loadFile := m.deps.LoadFile
 	searchPaths := append([]string(nil), m.deps.DSNSearchPath...)
-	m.status = status{Level: statusLoading, Text: "loading copybook overlay " + source.label()}
+	ws.status = status{Level: statusLoading, Text: "loading copybook overlay " + source.label()}
 	return m.loadingCommand(func() tea.Msg {
 		built, err := buildOverlay(ctx, source, codepage, browser, loadFile, searchPaths)
-		return overlayResultMsg{Generation: generation, Source: source, Overlay: built, Err: err}
+		return overlayResultMsg{Profile: ws.profile, Generation: generation, Source: source, Overlay: built, Err: err}
 	})
 }
 
-func (m *Model) handleOverlayResult(msg overlayResultMsg) tea.Cmd {
-	if msg.Generation != m.overlayGeneration || !m.overlayPending {
+func (m *Model) handleOverlayResult(ws *workspace, msg overlayResultMsg) tea.Cmd {
+	if msg.Generation != ws.overlayGeneration || !ws.overlayPending {
 		return nil
 	}
-	m.cancelOverlay()
+	ws.cancelOverlay()
 	if msg.Err != nil {
-		m.overlayError = msg.Err.Error()
-		if m.overlay != nil {
-			m.overlayError += "; previous overlay retained"
+		ws.overlayError = msg.Err.Error()
+		if ws.overlay != nil {
+			ws.overlayError += "; previous overlay retained"
 		}
-		if m.browsePending == nil {
-			m.status = status{Level: statusError, Text: m.overlayError}
+		if ws.browsePending == nil {
+			ws.status = status{Level: statusError, Text: ws.overlayError}
 		}
 		return nil
 	}
-	m.overlayError = ""
-	m.cancelDecode()
-	m.overlay = msg.Overlay
-	m.overlaySource = msg.Overlay.Source
-	for i := range m.records {
-		m.records[i].Decoded = nil
-		m.records[i].Err = nil
+	ws.overlayError = ""
+	ws.cancelDecode()
+	ws.overlay = msg.Overlay
+	ws.overlaySource = msg.Overlay.Source
+	for i := range ws.records {
+		ws.records[i].Decoded = nil
+		ws.records[i].Err = nil
 	}
-	m.recordMode = ModeTable
-	m.decodedMode = ModeTable
-	m.horizontal = 0
-	m.jsonVertical = 0
-	if m.browsePending != nil {
+	ws.recordMode = ModeTable
+	ws.decodedMode = ModeTable
+	ws.horizontal = 0
+	ws.jsonVertical = 0
+	if ws.browsePending != nil {
 		return nil
 	}
-	m.status = status{Level: statusReady, Text: fmt.Sprintf("overlay %s record %s", msg.Overlay.Source.label(), msg.Overlay.Record.Name)}
-	if len(m.records) > 0 && m.screen == ScreenRecords {
-		return m.startDecode()
+	ws.status = status{Level: statusReady, Text: fmt.Sprintf("overlay %s record %s", msg.Overlay.Source.label(), msg.Overlay.Record.Name)}
+	if ws != &m.workspace {
+		return nil
+	}
+	if len(ws.records) > 0 && ws.screen == ScreenRecords {
+		return m.startDecode(ws)
 	}
 	return nil
 }
 
-func (m *Model) startDecode() tea.Cmd {
-	if m.overlay == nil || len(m.records) == 0 || m.decodePending {
+func (m *Model) startDecode(ws *workspace) tea.Cmd {
+	if ws.overlay == nil || len(ws.records) == 0 || ws.decodePending {
 		return nil
 	}
-	records := make([]zosmf.Record, 0, len(m.records))
-	for _, row := range m.records {
+	records := make([]zosmf.Record, 0, len(ws.records))
+	for _, row := range ws.records {
 		if row.Decoded != nil || row.Err != nil {
 			continue
 		}
@@ -1320,35 +1399,35 @@ func (m *Model) startDecode() tea.Cmd {
 		return nil
 	}
 
-	m.decodeGeneration++
-	generation := m.decodeGeneration
-	m.decodePending = true
+	ws.decodeGeneration++
+	generation := ws.decodeGeneration
+	ws.decodePending = true
 	ctx, cancel := context.WithCancel(context.Background())
-	m.decodeCancel = cancel
-	overlay := m.overlay
-	identity := m.recordIdentity()
-	m.status = status{Level: statusLoading, Text: fmt.Sprintf("decoding %d cached records with %s", len(records), overlay.Record.Name)}
+	ws.decodeCancel = cancel
+	overlay := ws.overlay
+	identity := ws.recordIdentity()
+	ws.status = status{Level: statusLoading, Text: fmt.Sprintf("decoding %d cached records with %s", len(records), overlay.Record.Name)}
 	return m.loadingCommand(func() tea.Msg {
 		rows := make([]decodedRow, 0, len(records))
 		for _, raw := range records {
 			if err := ctx.Err(); err != nil {
-				return decodeResultMsg{Generation: generation, Identity: identity, Overlay: overlay, Err: err}
+				return decodeResultMsg{Profile: ws.profile, Generation: generation, Identity: identity, Overlay: overlay, Err: err}
 			}
 			decoded, err := overlay.Decoder.DecodeDisplay(raw.Data)
 			rows = append(rows, decodedRow{Number: raw.Number, Decoded: decoded, Err: err})
 		}
-		return decodeResultMsg{Generation: generation, Identity: identity, Overlay: overlay, Rows: rows}
+		return decodeResultMsg{Profile: ws.profile, Generation: generation, Identity: identity, Overlay: overlay, Rows: rows}
 	})
 }
 
-func (m *Model) handleDecodeResult(msg decodeResultMsg) tea.Cmd {
-	if msg.Generation != m.decodeGeneration || !m.decodePending || msg.Overlay != m.overlay || msg.Identity != m.recordIdentity() || m.screen != ScreenRecords {
+func (m *Model) handleDecodeResult(ws *workspace, msg decodeResultMsg) tea.Cmd {
+	if msg.Generation != ws.decodeGeneration || !ws.decodePending || msg.Overlay != ws.overlay || msg.Identity != ws.recordIdentity() || ws.screen != ScreenRecords {
 		return nil
 	}
-	m.cancelDecode()
+	ws.cancelDecode()
 	if msg.Err != nil {
 		if !errors.Is(msg.Err, context.Canceled) {
-			m.status = status{Level: statusError, Text: msg.Err.Error()}
+			ws.status = status{Level: statusError, Text: msg.Err.Error()}
 		}
 		return nil
 	}
@@ -1356,28 +1435,31 @@ func (m *Model) handleDecodeResult(msg decodeResultMsg) tea.Cmd {
 	for _, row := range msg.Rows {
 		byNumber[row.Number] = row
 	}
-	for i := range m.records {
-		result, ok := byNumber[m.records[i].Record.Number]
+	for i := range ws.records {
+		result, ok := byNumber[ws.records[i].Record.Number]
 		if !ok {
 			continue
 		}
-		m.records[i].Err = result.Err
+		ws.records[i].Err = result.Err
 		if result.Err != nil {
-			m.records[i].Decoded = nil
+			ws.records[i].Decoded = nil
 			continue
 		}
 		decoded := result.Decoded
-		m.records[i].Decoded = &decoded
+		ws.records[i].Decoded = &decoded
 	}
 
-	var nextDecode tea.Cmd
-	if m.browsePending == nil {
-		nextDecode = m.startDecode()
+	if ws != &m.workspace {
+		return nil
 	}
-	if nextDecode == nil && m.browsePending == nil {
+	var nextDecode tea.Cmd
+	if ws.browsePending == nil {
+		nextDecode = m.startDecode(ws)
+	}
+	if nextDecode == nil && ws.browsePending == nil {
 		diagnostics := 0
 		structural := 0
-		for _, row := range m.records {
+		for _, row := range ws.records {
 			if row.Err != nil {
 				structural++
 				continue
@@ -1387,58 +1469,34 @@ func (m *Model) handleDecodeResult(msg decodeResultMsg) tea.Cmd {
 			}
 		}
 		if diagnostics > 0 || structural > 0 {
-			m.status = status{Level: statusWarn, Text: fmt.Sprintf("decoded %d cached records; %d field diagnostics, %d row errors", len(m.records), diagnostics, structural)}
+			ws.status = status{Level: statusWarn, Text: fmt.Sprintf("decoded %d cached records; %d field diagnostics, %d row errors", len(ws.records), diagnostics, structural)}
 		} else {
-			m.status = status{Level: statusReady, Text: fmt.Sprintf("decoded %d cached records with %s", len(m.records), m.overlay.Record.Name)}
+			ws.status = status{Level: statusReady, Text: fmt.Sprintf("decoded %d cached records with %s", len(ws.records), ws.overlay.Record.Name)}
 		}
 	}
-	return tea.Batch(nextDecode, m.maybePrefetch())
-}
-
-func (m *Model) recordIdentity() string {
-	member := ""
-	if m.member != nil {
-		member = m.member.Name
-	}
-	return fmt.Sprintf("%s(%s)", m.dataSet.Name, member)
+	return tea.Batch(nextDecode, m.maybePrefetch(ws))
 }
 
 func (m *Model) cancelSession() {
-	if m.sessionCancel != nil {
-		m.sessionCancel()
-	}
-	m.sessionCancel = nil
+	m.ws().cancelSession()
 }
 
 func (m *Model) cancelBrowse() {
-	if m.browseCancel != nil {
-		m.browseCancel()
-	}
-	m.browseCancel = nil
-	m.browsePending = nil
-	m.browseGeneration++
+	m.ws().cancelBrowse()
 }
 
 func (m *Model) cancelOverlay() {
-	if m.overlayCancel != nil {
-		m.overlayCancel()
-	}
-	m.overlayCancel = nil
-	m.overlayPending = false
+	m.ws().cancelOverlay()
 }
 
 func (m *Model) cancelDecode() {
-	if m.decodeCancel != nil {
-		m.decodeCancel()
-	}
-	m.decodeCancel = nil
-	m.decodePending = false
-	m.decodeGeneration++
+	m.ws().cancelDecode()
 }
 
 func (m *Model) cancelAll() {
-	m.cancelSession()
-	m.cancelBrowse()
-	m.cancelOverlay()
-	m.cancelDecode()
+	// Cancel requests for every workspace so profile switches and shutdown do
+	// not leak in-flight goroutines tied to inactive profiles.
+	for _, ws := range m.workspaces {
+		ws.cancelAll()
+	}
 }

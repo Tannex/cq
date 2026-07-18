@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -96,6 +97,134 @@ func LoadDefault() (Session, error) {
 // global and project team/user configs, nested profiles, the default base and
 // zosmf profiles, secure properties, and ZOWE_OPT_* overrides.
 func Load(opts LoadOptions) (Session, error) {
+	opts = normalizeLoadOptions(opts)
+	layers, globalConfig, allConfig, err := readAndMergeZoweConfig(opts, true)
+	if err != nil {
+		return Session{}, err
+	}
+
+	profileName := strings.TrimSpace(opts.Getenv("ZOWE_OPT_ZOSMF_PROFILE"))
+	fromEnv := profileName != ""
+	if !fromEnv {
+		profileName = allConfig.Defaults["zosmf"]
+	}
+	if profileName == "" {
+		return Session{}, errors.New("no default zosmf profile found in the Zowe configuration; run 'zowe config init' or set ZOWE_OPT_ZOSMF_PROFILE")
+	}
+
+	session, err := resolveZoweProfile(opts, layers, globalConfig, allConfig, profileName)
+	if err == nil {
+		return session, nil
+	}
+	if errors.Is(err, errZoweProfileNotFound) {
+		if fromEnv {
+			return Session{}, fmt.Errorf("ZOWE_OPT_ZOSMF_PROFILE names zosmf profile %q, but the Zowe configuration has no such profile", profileName)
+		}
+		return Session{}, fmt.Errorf("default zosmf profile %q does not exist", profileName)
+	}
+	return Session{}, err
+}
+
+// LoadNamed resolves a specific named zosmf profile from the Zowe team
+// configuration, applying base-profile merging, secure properties, and
+// ZOWE_OPT_* property overrides.
+func LoadNamed(opts LoadOptions, profile string) (Session, error) {
+	opts = normalizeLoadOptions(opts)
+	profileName := strings.TrimSpace(profile)
+	if profileName == "" {
+		return Session{}, errors.New("no zosmf profile name provided")
+	}
+	layers, globalConfig, allConfig, err := readAndMergeZoweConfig(opts, true)
+	if err != nil {
+		return Session{}, err
+	}
+	session, err := resolveZoweProfile(opts, layers, globalConfig, allConfig, profileName)
+	if err == nil {
+		return session, nil
+	}
+	if errors.Is(err, errZoweProfileNotFound) {
+		return Session{}, fmt.Errorf("zosmf profile %q does not exist", profileName)
+	}
+	return Session{}, err
+}
+
+// ListProfiles returns the names of all zosmf-type profiles across the merged
+// Zowe configuration layers. The names are sorted alphabetically, with the
+// effective default profile (from ZOWE_OPT_ZOSMF_PROFILE or configuration
+// defaults) placed first when it is a zosmf profile. Listing does not require
+// the secure credential store.
+func ListProfiles(opts LoadOptions) ([]string, error) {
+	opts = normalizeLoadOptions(opts)
+	layers, err := readZoweConfigLayers(opts)
+	if err != nil {
+		return nil, err
+	}
+	if len(layers) == 0 {
+		return nil, errors.New("no Zowe team configuration found; run 'zowe config init --global-config' or create zowe.config.json in this project")
+	}
+
+	allConfig := mergeZoweLayers(layers)
+	profiles := flattenZoweProfiles(allConfig.Profiles)
+
+	var names []string
+	for name, profile := range profiles {
+		if profile.typeName == "zosmf" {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+
+	defaultName := strings.TrimSpace(opts.Getenv("ZOWE_OPT_ZOSMF_PROFILE"))
+	if defaultName == "" {
+		defaultName = allConfig.Defaults["zosmf"]
+	}
+	if defaultName != "" {
+		for i, name := range names {
+			if name == defaultName {
+				copy(names[1:], names[:i])
+				names[0] = defaultName
+				break
+			}
+		}
+	}
+	return names, nil
+}
+
+// ListDefault lists zosmf profile names for the current user and working
+// directory. It is a convenience wrapper around ListProfiles.
+func ListDefault() ([]string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("locate home directory: %w", err)
+	}
+	work, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("locate working directory: %w", err)
+	}
+	return ListProfiles(LoadOptions{
+		HomeDir: home, WorkingDir: work, GOOS: runtime.GOOS,
+		Getenv: os.Getenv, Keyring: systemKeyring{},
+	})
+}
+
+// LoadNamedDefault resolves a specific named Zowe session for the current user
+// and working directory. It is a convenience wrapper around LoadNamed.
+func LoadNamedDefault(profile string) (Session, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return Session{}, fmt.Errorf("locate home directory: %w", err)
+	}
+	work, err := os.Getwd()
+	if err != nil {
+		return Session{}, fmt.Errorf("locate working directory: %w", err)
+	}
+	return LoadNamed(LoadOptions{
+		HomeDir: home, WorkingDir: work, GOOS: runtime.GOOS,
+		Getenv: os.Getenv, Keyring: systemKeyring{},
+	}, profile)
+}
+
+func normalizeLoadOptions(opts LoadOptions) LoadOptions {
 	if opts.Getenv == nil {
 		opts.Getenv = func(string) string { return "" }
 	}
@@ -105,19 +234,24 @@ func Load(opts LoadOptions) (Session, error) {
 	if opts.Keyring == nil {
 		opts.Keyring = systemKeyring{}
 	}
+	return opts
+}
 
-	layers, err := readZoweConfigLayers(opts)
+var errZoweProfileNotFound = errors.New("zosmf profile not found")
+
+func readAndMergeZoweConfig(opts LoadOptions, applySecure bool) (layers []zoweConfigLayer, globalConfig, allConfig zoweClientConfig, err error) {
+	layers, err = readZoweConfigLayers(opts)
 	if err != nil {
-		return Session{}, err
+		return nil, zoweClientConfig{}, zoweClientConfig{}, err
 	}
 	if len(layers) == 0 {
-		return Session{}, errors.New("no Zowe team configuration found; run 'zowe config init --global-config' or create zowe.config.json in this project")
+		return nil, zoweClientConfig{}, zoweClientConfig{}, errors.New("no Zowe team configuration found; run 'zowe config init --global-config' or create zowe.config.json in this project")
 	}
 
-	if zoweLayersHaveSecureFields(layers) {
-		vault, err := loadZoweVault(opts.Keyring, opts.GOOS)
-		if err != nil {
-			return Session{}, fmt.Errorf("cannot open the secure credential store used by the Zowe configuration: %w", err)
+	if applySecure && zoweLayersHaveSecureFields(layers) {
+		vault, vaultErr := loadZoweVault(opts.Keyring, opts.GOOS)
+		if vaultErr != nil {
+			return nil, zoweClientConfig{}, zoweClientConfig{}, fmt.Errorf("cannot open the secure credential store used by the Zowe configuration: %w", vaultErr)
 		}
 		for i := range layers {
 			applyZoweSecureValues(&layers[i], vault)
@@ -130,17 +264,12 @@ func Load(opts LoadOptions) (Session, error) {
 			globalLayers = append(globalLayers, layer)
 		}
 	}
-	globalConfig := mergeZoweLayers(globalLayers)
-	allConfig := mergeZoweLayers(layers)
+	globalConfig = mergeZoweLayers(globalLayers)
+	allConfig = mergeZoweLayers(layers)
+	return layers, globalConfig, allConfig, nil
+}
 
-	profileName := strings.TrimSpace(opts.Getenv("ZOWE_OPT_ZOSMF_PROFILE"))
-	if profileName == "" {
-		profileName = allConfig.Defaults["zosmf"]
-	}
-	if profileName == "" {
-		return Session{}, errors.New("no default zosmf profile found in the Zowe configuration; run 'zowe config init' or set ZOWE_OPT_ZOSMF_PROFILE")
-	}
-
+func resolveZoweProfile(opts LoadOptions, layers []zoweConfigLayer, globalConfig, allConfig zoweClientConfig, profileName string) (Session, error) {
 	// A profile which only exists globally must use the global default base,
 	// even when an unrelated project config is present. This matches Zowe's
 	// layer-aware ProfileInfo behavior.
@@ -151,10 +280,7 @@ func Load(opts LoadOptions) (Session, error) {
 	profiles := flattenZoweProfiles(scope.Profiles)
 	profile, ok := profiles[profileName]
 	if !ok || profile.typeName != "zosmf" {
-		if wanted := strings.TrimSpace(opts.Getenv("ZOWE_OPT_ZOSMF_PROFILE")); wanted != "" {
-			return Session{}, fmt.Errorf("ZOWE_OPT_ZOSMF_PROFILE names zosmf profile %q, but the Zowe configuration has no such profile", wanted)
-		}
-		return Session{}, fmt.Errorf("default zosmf profile %q does not exist", profileName)
+		return Session{}, fmt.Errorf("%w: %s", errZoweProfileNotFound, profileName)
 	}
 
 	props := map[string]any{}

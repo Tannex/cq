@@ -72,7 +72,7 @@ func (f *fakeBrowser) Encoding() (string, error) { return f.encoding, nil }
 func newTestModel(t *testing.T, options Options, browser zosmf.Browser, user, encoding string) *Model {
 	t.Helper()
 	model, err := NewModel(options, Dependencies{
-		LoadSession: func(context.Context) (Session, error) {
+		LoadSession: func(context.Context, string) (Session, error) {
 			return Session{Browser: browser, User: user, Encoding: encoding}, nil
 		},
 	})
@@ -368,7 +368,7 @@ func TestModelPrefetchesNamesOneVisiblePageBeforeCacheEnd(t *testing.T) {
 		}
 		return zosmf.DataSetPage{Items: []zosmf.DataSet{{Name: "G"}, {Name: "H"}, {Name: "I"}, {Name: "J"}, {Name: "K"}, {Name: "L"}}, MoreRows: true}, nil
 	}}
-	model := readyModel(t, Options{Prefix: "A*"}, browser, "A", "", 90, MinTerminalHeight)
+	model := readyModel(t, Options{Prefix: "A*"}, browser, "A", "", 90, MinTerminalHeight(false))
 	if model.visible != 3 || model.budget != 6 {
 		t.Fatalf("visible/budget = %d/%d", model.visible, model.budget)
 	}
@@ -395,7 +395,7 @@ func TestCachedBackwardNavigationDoesNotRefetch(t *testing.T) {
 		}
 		return zosmf.DataSetPage{Items: []zosmf.DataSet{{Name: "G"}, {Name: "H"}, {Name: "I"}, {Name: "J"}, {Name: "K"}, {Name: "L"}}}, nil
 	}}
-	model := readyModel(t, Options{Prefix: "A*"}, browser, "A", "", 90, MinTerminalHeight)
+	model := readyModel(t, Options{Prefix: "A*"}, browser, "A", "", 90, MinTerminalHeight(false))
 	executeCommand(t, model, model.moveSelection(3))
 	requests := len(browser.dataSetRequests)
 	if requests != 2 || len(model.datasets) != 12 {
@@ -413,7 +413,7 @@ func TestRepeatedMovementDoesNotRestartPendingPrefetch(t *testing.T) {
 	browser := &fakeBrowser{listDataSets: func(_ context.Context, request zosmf.ListDataSetsRequest) (zosmf.DataSetPage, error) {
 		return zosmf.DataSetPage{Items: []zosmf.DataSet{{Name: "A"}, {Name: "B"}, {Name: "C"}, {Name: "D"}, {Name: "E"}, {Name: "F"}}, MoreRows: true}, nil
 	}}
-	model := readyModel(t, Options{Prefix: "A*"}, browser, "A", "", 90, MinTerminalHeight)
+	model := readyModel(t, Options{Prefix: "A*"}, browser, "A", "", 90, MinTerminalHeight(false))
 	pending := model.moveSelection(3)
 	if pending == nil || model.browsePending == nil {
 		t.Fatal("test requires pending prefetch")
@@ -806,7 +806,7 @@ func TestRecordPrefetchUsesLastCachedNumberAndExactBudget(t *testing.T) {
 			return zosmf.RecordPage{Records: records, MoreRows: request.Start == 0}, nil
 		},
 	}
-	model := readyModel(t, Options{Prefix: "A*", Codepage: "latin1"}, browser, "A", "", 90, MinTerminalHeight)
+	model := readyModel(t, Options{Prefix: "A*", Codepage: "latin1"}, browser, "A", "", 90, MinTerminalHeight(false))
 	executeCommand(t, model, model.openSelection())
 	if len(model.records) != 6 {
 		t.Fatalf("initial record cache=%d", len(model.records))
@@ -842,7 +842,7 @@ func TestDecodeInFlightSurvivesRecordCacheGrowth(t *testing.T) {
 	model.recordPage.reset(model.visible, model.budget)
 	model.recordPage.apply([]string{"1", "2"}, true, model.recordPage.initialPlan(0))
 
-	firstDecode := model.startDecode()
+	firstDecode := model.startDecode(model.ws())
 	if firstDecode == nil {
 		t.Fatal("initial decode did not start")
 	}
@@ -987,7 +987,7 @@ func TestOverlayCompletionPreservesPendingBrowseStatus(t *testing.T) {
 	model.status = status{Level: statusLoading, Text: "reading records from HQ.DATA()"}
 	built := &overlay{Source: CopybookSource{Local: "layout.cpy"}, Record: &layout.Record{Field: &layout.Field{Name: "ROW"}}}
 
-	if command := model.handleOverlayResult(overlayResultMsg{Generation: 3, Overlay: built}); command != nil {
+	if command := model.handleOverlayResult(model.ws(), overlayResultMsg{Generation: 3, Overlay: built}); command != nil {
 		t.Fatal("overlay completion started decode while browse was pending")
 	}
 	if model.status.Level != statusLoading || model.status.Text != "reading records from HQ.DATA()" {
@@ -1105,7 +1105,7 @@ func TestMouseWheelRoutesToListJSONAndHelp(t *testing.T) {
 }
 
 func TestSessionErrorAndEmptyResultStates(t *testing.T) {
-	model, err := NewModel(Options{}, Dependencies{LoadSession: func(context.Context) (Session, error) {
+	model, err := NewModel(Options{}, Dependencies{LoadSession: func(context.Context, string) (Session, error) {
 		return Session{}, errors.New("profile missing")
 	}})
 	if err != nil {

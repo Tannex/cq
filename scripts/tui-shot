@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# tui-shot — capture a TUI state as a PNG screenshot and/or ANSI text dump.
+#
+# usage: tui-shot [options] -- <command> [args...]
+#   -o FILE     PNG output path (default artifacts/tui.png; "-" to skip PNG)
+#   -t FILE     also write a plain-text capture of the pane (tmux capture-pane)
+#   -a FILE     also write an ANSI (styled) text capture of the pane
+#   -x COLS     terminal width  (default 120)
+#   -y ROWS     terminal height (default 40)
+#   -k KEYS     tmux send-keys arguments, may repeat; each -k is one send-keys
+#               call, e.g. -k "Down Down Enter" -k "/" -k "PAY Enter"
+#   -d SECS     settle delay after launch and after each -k (default 0.4)
+#
+# Examples:
+#   scripts/tui-shot -o artifacts/main.png -- ./cqt --demo
+#   scripts/tui-shot -t artifacts/help.txt -k "?" -- ./cqt --demo
+
+set -euo pipefail
+
+shot="artifacts/tui.png"
+text_out=""
+ansi_out=""
+cols=120
+rows=40
+delay=0.4
+declare -a key_batches=()
+
+while getopts "o:t:a:x:y:k:d:" opt; do
+  case "$opt" in
+    o) shot="$OPTARG" ;;
+    t) text_out="$OPTARG" ;;
+    a) ansi_out="$OPTARG" ;;
+    x) cols="$OPTARG" ;;
+    y) rows="$OPTARG" ;;
+    k) key_batches+=("$OPTARG") ;;
+    d) delay="$OPTARG" ;;
+    *) exit 2 ;;
+  esac
+done
+shift $((OPTIND - 1))
+if [ $# -eq 0 ]; then
+  echo "tui-shot: missing command; usage: tui-shot [options] -- <command> [args...]" >&2
+  exit 2
+fi
+
+session="tui-shot-$$"
+trap 'tmux kill-session -t "$session" 2>/dev/null || true' EXIT
+
+tmux new-session -d -s "$session" -x "$cols" -y "$rows" "exec $(printf '%q ' "$@")"
+tmux set-option -t "$session" status off
+sleep "$delay"
+
+for keys in "${key_batches[@]+"${key_batches[@]}"}"; do
+  # shellcheck disable=SC2086 — word splitting is intentional: each -k batch
+  # is a space-separated tmux key list.
+  tmux send-keys -t "$session" $keys
+  sleep "$delay"
+done
+
+if [ -n "$text_out" ]; then
+  mkdir -p "$(dirname "$text_out")"
+  tmux capture-pane -t "$session" -p > "$text_out"
+fi
+if [ -n "$ansi_out" ]; then
+  mkdir -p "$(dirname "$ansi_out")"
+  tmux capture-pane -t "$session" -e -p > "$ansi_out"
+fi
+
+if [ "$shot" != "-" ]; then
+  mkdir -p "$(dirname "$shot")"
+  shot="$(realpath "$shot")"
+  xvfb-run -a -s '-screen 0 1600x1000x24' \
+    sh -c '
+      xterm -geometry "${3}x${4}" -fa monospace -fs 12 \
+        -e tmux attach-session -t "$1" &
+      terminal_pid=$!
+      sleep 1.2
+      magick import -window root "$2"
+      kill "$terminal_pid" 2>/dev/null || true
+    ' sh "$session" "$shot" "$cols" "$rows"
+  echo "wrote $shot"
+fi

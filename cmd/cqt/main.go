@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -18,7 +19,11 @@ import (
 	"github.com/Tannex/cq/internal/zowe"
 )
 
-var loadDefaultSession = zowe.LoadDefault
+var (
+	loadDefaultSession = zowe.LoadDefault
+	loadNamedSession   = zowe.LoadNamedDefault
+	listZoweProfiles   = zowe.ListDefault
+)
 
 type sessionLoadResult struct {
 	session zowe.Session
@@ -37,21 +42,28 @@ func main() {
 	}
 }
 
-func loadSession(ctx context.Context) (cqt.Session, error) {
+func loadSession(ctx context.Context, profile string) (cqt.Session, error) {
 	if err := ctx.Err(); err != nil {
 		return cqt.Session{}, err
 	}
 
 	results := make(chan sessionLoadResult, 1)
 	go func() {
-		session, err := loadDefaultSession()
+		var session zowe.Session
+		var err error
+		if profile == "" {
+			session, err = loadDefaultSession()
+		} else {
+			session, err = loadNamedSession(profile)
+		}
 		results <- sessionLoadResult{session: session, err: err}
 	}()
 
 	select {
 	case <-ctx.Done():
-		// LoadDefault is synchronous and cannot be interrupted. Its goroutine may
-		// remain blocked indefinitely, but cancellation must still release the UI.
+		// Session loading is synchronous and cannot be interrupted. Its goroutine
+		// may remain blocked indefinitely, but cancellation must still release
+		// the UI.
 		return cqt.Session{}, ctx.Err()
 	case result := <-results:
 		if err := ctx.Err(); err != nil {
@@ -66,11 +78,19 @@ func loadSession(ctx context.Context) (cqt.Session, error) {
 	}
 }
 
+func listProfiles(ctx context.Context) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return listZoweProfiles()
+}
+
 func run(args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("cqt", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var options cqt.Options
 	var showVersion bool
+	var demoMode bool
 	fs.StringVar(&options.Prefix, "prefix", "", "initial data set prefix or pattern")
 	fs.StringVar(&options.Copybook, "c", "", "local copybook file")
 	fs.StringVar(&options.Copybook, "copybook", "", "local copybook file")
@@ -79,6 +99,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	fs.StringVar(&options.Record, "record", "", "01-level record when the copybook has several")
 	fs.StringVar(&options.Codepage, "codepage", "", "EBCDIC codepage (default: Zowe profile encoding, then cp037)")
 	fs.BoolVar(&showVersion, "version", false, "print version and exit")
+	fs.BoolVar(&demoMode, "demo", false, "run with offline fake data")
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), "cqt — read-only z/OSMF data set browser")
 		fmt.Fprintln(fs.Output(), "")
@@ -97,15 +118,24 @@ func run(args []string, stdout, stderr io.Writer) error {
 		_, err := fmt.Fprintf(stdout, "cqt %s\n", buildinfo.Reported())
 		return err
 	}
+	if demoMode && strings.TrimSpace(options.Prefix) == "" {
+		options.Prefix = "DEMO.*"
+	}
 
 	config, err := appconfig.DefaultLoader(nil).Load()
 	if err != nil {
 		return err
 	}
-	model, err := cqt.NewModel(options, cqt.Dependencies{
+	deps := cqt.Dependencies{
 		DSNSearchPath: config.DSNSearchPath,
 		LoadSession:   loadSession,
-	})
+		ListProfiles:  listProfiles,
+	}
+	if demoMode {
+		deps.LoadSession = loadDemoSession
+		deps.ListProfiles = listDemoProfiles
+	}
+	model, err := cqt.NewModel(options, deps)
 	if err != nil {
 		return err
 	}

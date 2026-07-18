@@ -98,13 +98,15 @@ func TestOverlayColumnsFlattenGroupsButKeepOccursAsCompactCells(t *testing.T) {
 
 func TestInvalidOverlayResultRetainsPreviousValidOverlay(t *testing.T) {
 	model := &Model{
-		overlay:           &overlay{Source: CopybookSource{Local: "valid.cpy"}},
-		overlayGeneration: 4,
-		overlayPending:    true,
-		status:            status{Level: statusReady},
+		workspace: workspace{
+			overlay:           &overlay{Source: CopybookSource{Local: "valid.cpy"}},
+			overlayGeneration: 4,
+			overlayPending:    true,
+			status:            status{Level: statusReady},
+		},
 	}
 	previous := model.overlay
-	model.handleOverlayResult(overlayResultMsg{Generation: 4, Source: CopybookSource{Local: "bad.cpy"}, Err: errors.New("parse failed")})
+	model.handleOverlayResult(model.ws(), overlayResultMsg{Generation: 4, Source: CopybookSource{Local: "bad.cpy"}, Err: errors.New("parse failed")})
 	if model.overlay != previous || model.status.Level != statusError || !strings.Contains(model.status.Text, "previous overlay retained") {
 		t.Fatalf("replacement failure overlay=%p previous=%p status=%#v", model.overlay, previous, model.status)
 	}
@@ -112,11 +114,13 @@ func TestInvalidOverlayResultRetainsPreviousValidOverlay(t *testing.T) {
 
 func TestOverlayFailureRemainsVisibleAcrossConcurrentBrowseCompletion(t *testing.T) {
 	model := &Model{
-		overlayGeneration: 2,
-		overlayPending:    true,
-		status:            status{Level: statusLoading},
+		workspace: workspace{
+			overlayGeneration: 2,
+			overlayPending:    true,
+			status:            status{Level: statusLoading},
+		},
 	}
-	model.handleOverlayResult(overlayResultMsg{Generation: 2, Err: errors.New("parse failed")})
+	model.handleOverlayResult(model.ws(), overlayResultMsg{Generation: 2, Err: errors.New("parse failed")})
 	if strings.Contains(model.overlayError, "previous overlay retained") {
 		t.Fatalf("first overlay failure incorrectly claimed a previous overlay: %q", model.overlayError)
 	}
@@ -132,17 +136,19 @@ func TestOverlayFailureRemainsVisibleAcrossConcurrentBrowseCompletion(t *testing
 
 func TestClearOverlayCancelsPendingReplacementAndRejectsItsResult(t *testing.T) {
 	model := &Model{
-		overlay:           &overlay{Source: CopybookSource{Local: "valid.cpy"}},
-		overlaySource:     CopybookSource{Local: "valid.cpy"},
-		overlayGeneration: 8,
-		overlayPending:    true,
-		recordMode:        ModeTable,
+		workspace: workspace{
+			overlay:           &overlay{Source: CopybookSource{Local: "valid.cpy"}},
+			overlaySource:     CopybookSource{Local: "valid.cpy"},
+			overlayGeneration: 8,
+			overlayPending:    true,
+			recordMode:        ModeTable,
+		},
 	}
 	model.handleAction(actionClearOverlay)
 	if model.overlay != nil || model.overlayPending || model.recordMode != ModeRaw {
 		t.Fatalf("clear state overlay=%#v pending=%v mode=%d", model.overlay, model.overlayPending, model.recordMode)
 	}
-	model.handleOverlayResult(overlayResultMsg{Generation: 8, Overlay: &overlay{Source: CopybookSource{Local: "late.cpy"}}})
+	model.handleOverlayResult(model.ws(), overlayResultMsg{Generation: 8, Overlay: &overlay{Source: CopybookSource{Local: "late.cpy"}}})
 	if model.overlay != nil {
 		t.Fatal("stale replacement reapplied after clear")
 	}
