@@ -699,7 +699,8 @@ func (m *Model) recordJSONView() string {
 	model.SetHorizontalStep(hScrollStep)
 	model.SetContent(content)
 	model.SetXOffset(m.horizontal * hScrollStep)
-	model.SetYOffset(min(m.jsonVertical, m.maxJSONVertical()))
+	maxVertical := max(0, len(strings.Split(content, "\n"))-m.visible)
+	model.SetYOffset(min(m.jsonVertical, maxVertical))
 	model.LeftGutterFunc = func(context viewport.GutterContext) string {
 		if context.Index == 0 {
 			return fmt.Sprintf("> %0*d │ ", numberWidth, row.Record.Number)
@@ -922,9 +923,7 @@ func (m *Model) maxHorizontal() int {
 			}
 		}
 	} else {
-		for _, row := range m.records {
-			longest = max(longest, lipgloss.Width(decode.DisplayBytes(row.Record.Data, m.charmap)))
-		}
+		longest = m.rawLongest
 	}
 	if longest <= available {
 		return 0
@@ -932,10 +931,21 @@ func (m *Model) maxHorizontal() int {
 	return (longest - available + hScrollStep - 1) / hScrollStep
 }
 
+func longestRawDisplayWidth(records []recordRow, charmap *decode.Charmap) int {
+	longest := 0
+	for _, row := range records {
+		longest = max(longest, lipgloss.Width(decode.DisplayBytes(row.Record.Data, charmap)))
+	}
+	return longest
+}
+
 func (m *Model) recordNumberWidth() int {
+	// Records are cached in ascending number order (forward pages append past
+	// the last cached record; anchored fetches replace the cache), so the last
+	// row always carries the widest number.
 	width := 8
-	for _, row := range m.records {
-		if digits := len(strconv.FormatInt(row.Record.Number, 10)); digits > width {
+	if len(m.records) > 0 {
+		if digits := len(strconv.FormatInt(m.records[len(m.records)-1].Record.Number, 10)); digits > width {
 			width = digits
 		}
 	}

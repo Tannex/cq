@@ -44,11 +44,7 @@ func (z *Client) ListDataSets(ctx context.Context, request ListDataSetsRequest) 
 	if err != nil {
 		return DataSetPage{}, err
 	}
-	requestMaxItems, err := listRequestMaxItems(maxItems, start)
-	if err != nil {
-		return DataSetPage{}, err
-	}
-	req.Header.Set("X-IBM-Max-Items", strconv.Itoa(requestMaxItems))
+	req.Header.Set("X-IBM-Max-Items", strconv.Itoa(maxItems))
 	req.Header.Set("X-IBM-Attributes", "base")
 
 	res, err := z.doRequest(req, prefix, http.StatusOK, http.StatusPartialContent, http.StatusNoContent)
@@ -68,7 +64,7 @@ func (z *Client) ListDataSets(ctx context.Context, request ListDataSetsRequest) 
 	if err != nil {
 		return DataSetPage{}, err
 	}
-	items, moreRows, err := boundedNamePage(items, start, maxItems, requestMaxItems, metadata, res.StatusCode, "data set list", func(item DataSet) string {
+	items, moreRows, err := boundedNamePage(items, start, maxItems, metadata, res.StatusCode, "data set list", func(item DataSet) string {
 		return item.Name
 	})
 	if err != nil {
@@ -114,11 +110,7 @@ func (z *Client) ListMembers(ctx context.Context, request ListMembersRequest) (M
 	if err != nil {
 		return MemberPage{}, err
 	}
-	requestMaxItems, err := listRequestMaxItems(maxItems, start)
-	if err != nil {
-		return MemberPage{}, err
-	}
-	req.Header.Set("X-IBM-Max-Items", strconv.Itoa(requestMaxItems))
+	req.Header.Set("X-IBM-Max-Items", strconv.Itoa(maxItems))
 	req.Header.Set("X-IBM-Attributes", "base")
 
 	res, err := z.doRequest(req, dataSet, http.StatusOK, http.StatusPartialContent, http.StatusNoContent)
@@ -138,7 +130,7 @@ func (z *Client) ListMembers(ctx context.Context, request ListMembersRequest) (M
 	if err != nil {
 		return MemberPage{}, err
 	}
-	items, moreRows, err := boundedNamePage(items, start, maxItems, requestMaxItems, metadata, res.StatusCode, dataSet, func(item Member) string {
+	items, moreRows, err := boundedNamePage(items, start, maxItems, metadata, res.StatusCode, dataSet, func(item Member) string {
 		return item.Name
 	})
 	if err != nil {
@@ -304,12 +296,12 @@ func decodeListEnvelope[T any](body []byte, operation string) ([]T, listMetadata
 	return items, metadata, nil
 }
 
-func boundedNamePage[T any](items []T, start string, maxItems, requestMaxItems int, metadata listMetadata, statusCode int, resource string, name func(T) string) ([]T, bool, error) {
+func boundedNamePage[T any](items []T, start string, maxItems int, metadata listMetadata, statusCode int, resource string, name func(T) string) ([]T, bool, error) {
 	moreRows := metadata.moreRows || statusCode == http.StatusPartialContent
 	if !metadata.moreRowsSet {
-		moreRows = moreRows || metadata.returnedRows >= requestMaxItems || len(items) >= requestMaxItems
+		moreRows = moreRows || metadata.returnedRows >= maxItems || len(items) >= maxItems
 	}
-	if metadata.returnedRows > len(items) || len(items) > requestMaxItems {
+	if metadata.returnedRows > len(items) || len(items) > maxItems {
 		moreRows = true
 	}
 
@@ -395,13 +387,6 @@ func validateMaxItems(value int) (int, error) {
 		return 0, &RequestError{Field: "max items", Message: "must be positive; zero would request an unbounded response"}
 	}
 	return value, nil
-}
-
-func listRequestMaxItems(maxItems int, start string) (int, error) {
-	if maxItems <= 0 {
-		return 0, &RequestError{Field: "max items", Message: "must be positive"}
-	}
-	return maxItems, nil
 }
 
 func invalidBrowseName(value string) bool {

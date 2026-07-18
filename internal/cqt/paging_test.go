@@ -84,7 +84,7 @@ func TestRecordPagerPrefetchStartsAfterLastCachedRecord(t *testing.T) {
 	p.reset(2, 4)
 	p.apply([]string{"1", "2", "3", "4"}, true, p.initialPlan(0))
 	p.move(2)
-	plan, ok := forwardRecordPlan(&p, []int64{1, 2, 3, 4})
+	plan, ok := forwardRecordPlan(&p)
 	if !ok || plan.Anchor != 4 || plan.Direction != pageForward {
 		t.Fatalf("record forward plan = %#v ok=%v", plan, ok)
 	}

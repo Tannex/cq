@@ -45,7 +45,7 @@ func (d *demoBrowser) ListDataSets(ctx context.Context, request zosmf.ListDataSe
 		return zosmf.DataSetPage{}, err
 	}
 	matched := filterDataSets(demoDataSets(), request.Prefix)
-	items, more := paginateDataSets(matched, strings.ToUpper(strings.TrimSpace(request.Start)), request.MaxItems)
+	items, more := paginate(matched, strings.ToUpper(strings.TrimSpace(request.Start)), request.MaxItems, func(item zosmf.DataSet) string { return item.Name })
 	return zosmf.DataSetPage{
 		Items:        items,
 		ReturnedRows: len(items),
@@ -60,7 +60,7 @@ func (d *demoBrowser) ListMembers(ctx context.Context, request zosmf.ListMembers
 	members := demoMembers(request.DataSet)
 	pattern := strings.ToUpper(strings.TrimSpace(request.Pattern))
 	matched := filterMembers(members, pattern)
-	items, more := paginateMembers(matched, strings.ToUpper(strings.TrimSpace(request.Start)), request.MaxItems)
+	items, more := paginate(matched, strings.ToUpper(strings.TrimSpace(request.Start)), request.MaxItems, func(member zosmf.Member) string { return member.Name })
 	return zosmf.MemberPage{
 		Items:        items,
 		ReturnedRows: len(items),
@@ -284,16 +284,16 @@ func filterMembers(members []zosmf.Member, pattern string) []zosmf.Member {
 	return matched
 }
 
-func paginateDataSets(items []zosmf.DataSet, start string, maxItems int) ([]zosmf.DataSet, bool) {
+func paginate[T any](items []T, start string, maxItems int, name func(T) string) ([]T, bool) {
 	idx := 0
 	if start != "" {
 		for i, item := range items {
-			name := item.Name
-			if name == start {
+			itemName := name(item)
+			if itemName == start {
 				idx = i + 1
 				break
 			}
-			if name > start {
+			if itemName > start {
 				idx = i
 				break
 			}
@@ -307,31 +307,6 @@ func paginateDataSets(items []zosmf.DataSet, start string, maxItems int) ([]zosm
 		end = len(items)
 	}
 	return items[idx:end], end < len(items)
-}
-
-func paginateMembers(members []zosmf.Member, start string, maxItems int) ([]zosmf.Member, bool) {
-	idx := 0
-	if start != "" {
-		for i, member := range members {
-			name := member.Name
-			if name == start {
-				idx = i + 1
-				break
-			}
-			if name > start {
-				idx = i
-				break
-			}
-		}
-	}
-	if idx >= len(members) {
-		return nil, false
-	}
-	end := idx + maxItems
-	if end > len(members) {
-		end = len(members)
-	}
-	return members[idx:end], end < len(members)
 }
 
 func matchNamePrefix(name, prefix string) bool {

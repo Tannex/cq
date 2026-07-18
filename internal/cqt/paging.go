@@ -1,5 +1,7 @@
 package cqt
 
+import "strconv"
+
 const (
 	// The row budget is computed after the fixed title, search/breadcrumb,
 	// table header, status/detail, and help lines.
@@ -346,9 +348,15 @@ func forwardNamePlan(p *pager[string]) (pagePlan[string], bool) {
 	return pagePlan[string]{Anchor: anchor, Direction: pageForward}, true
 }
 
-func forwardRecordPlan(p *pager[int64], numbers []int64) (pagePlan[int64], bool) {
-	if !p.shouldPrefetch(false) || len(numbers) != len(p.keys) || len(numbers) == 0 {
+func forwardRecordPlan(p *pager[int64]) (pagePlan[int64], bool) {
+	if !p.shouldPrefetch(false) {
 		return pagePlan[int64]{}, false
 	}
-	return pagePlan[int64]{Anchor: numbers[len(numbers)-1], Direction: pageForward}, true
+	// Record keys are the decimal encoding of the record number, so the last
+	// key recovers the anchor without a parallel numbers slice.
+	anchor, err := strconv.ParseInt(p.keys[len(p.keys)-1], 10, 64)
+	if err != nil {
+		return pagePlan[int64]{}, false
+	}
+	return pagePlan[int64]{Anchor: anchor, Direction: pageForward}, true
 }

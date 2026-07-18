@@ -339,11 +339,14 @@ func (m *Model) Init() tea.Cmd {
 
 func (m *Model) loadProfileList() tea.Cmd {
 	loader := m.deps.ListProfiles
+	timeout := m.deps.Timeout
 	return func() tea.Msg {
 		if loader == nil {
 			return profileListMsg{Profiles: []string{""}}
 		}
-		profiles, err := loader(context.Background())
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		profiles, err := loader(ctx)
 		return profileListMsg{Profiles: profiles, Err: err}
 	}
 }
@@ -1005,6 +1008,7 @@ func (m *Model) refresh() tea.Cmd {
 		plan := ws.recordPage.refreshPlan()
 		ws.cancelDecode()
 		ws.records = nil
+		ws.rawLongest = 0
 		ws.recordPage.reset(m.visible, m.budget)
 		return m.startRecords(ws, plan)
 	}
@@ -1085,11 +1089,7 @@ func (m *Model) maybePrefetch(ws *workspace) tea.Cmd {
 			return m.startMembers(ws, plan)
 		}
 	case ScreenRecords:
-		numbers := make([]int64, len(ws.records))
-		for i, row := range ws.records {
-			numbers[i] = row.Record.Number
-		}
-		if plan, ok := forwardRecordPlan(&ws.recordPage, numbers); ok {
+		if plan, ok := forwardRecordPlan(&ws.recordPage); ok {
 			return m.startRecords(ws, plan)
 		}
 	}
@@ -1240,6 +1240,7 @@ func (m *Model) handleRecordsResult(ws *workspace, msg recordsResultMsg) tea.Cmd
 		msg.Page.MoreRows, msg.Meta.Budget, msg.Meta.RecordPlan,
 		func(row recordRow) string { return strconv.FormatInt(row.Record.Number, 10) },
 	)
+	ws.rawLongest = longestRawDisplayWidth(ws.records, ws.charmap)
 	if ended {
 		ws.status = status{Level: statusReady, Text: "end of records"}
 		return nil
@@ -1483,25 +1484,12 @@ func (m *Model) handleDecodeResult(ws *workspace, msg decodeResultMsg) tea.Cmd {
 	return tea.Batch(nextDecode, m.maybePrefetch(ws))
 }
 
-func (m *Model) cancelSession() {
-	m.ws().cancelSession()
-}
-
-func (m *Model) cancelBrowse() {
-	m.ws().cancelBrowse()
-}
-
-func (m *Model) cancelOverlay() {
-	m.ws().cancelOverlay()
-}
-
-func (m *Model) cancelDecode() {
-	m.ws().cancelDecode()
-}
-
 func (m *Model) cancelAll() {
 	// Cancel requests for every workspace so profile switches and shutdown do
-	// not leak in-flight goroutines tied to inactive profiles.
+	// not leak in-flight goroutines tied to inactive profiles. The active
+	// profile's live cancel funcs sit on the embedded m.workspace, which is
+	// only copied into m.workspaces on a profile switch, so cancel it too.
+	m.workspace.cancelAll()
 	for _, ws := range m.workspaces {
 		ws.cancelAll()
 	}

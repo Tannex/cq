@@ -3,7 +3,6 @@ package cqt
 import (
 	"context"
 	"fmt"
-	"strconv"
 
 	"github.com/Tannex/cq/internal/decode"
 	"github.com/Tannex/cq/internal/zosmf"
@@ -34,7 +33,10 @@ type workspace struct {
 	memberTotal  *int
 	member       *zosmf.Member
 
-	records    []recordRow
+	records []recordRow
+	// rawLongest caches the widest rendered raw line across the cached
+	// records, so horizontal panning does not rescan the whole cache.
+	rawLongest int
 	recordPage pager[int64]
 
 	overlay         *overlay
@@ -127,6 +129,7 @@ func (ws *workspace) recordIdentity() string {
 
 func (ws *workspace) resetRecordState() {
 	ws.records = nil
+	ws.rawLongest = 0
 	ws.recordPage.reset(ws.recordPage.visible, ws.recordPage.budget)
 	ws.horizontal = 0
 	ws.jsonVertical = 0
@@ -199,16 +202,6 @@ func (ws *workspace) statusForCount(count int, noun string) {
 		return
 	}
 	ws.status = status{Level: statusReady, Text: fmt.Sprintf("%d %s", count, noun)}
-}
-
-func (ws *workspace) recordNumberWidth() int {
-	width := 8
-	for _, row := range ws.records {
-		if digits := len(strconv.FormatInt(row.Record.Number, 10)); digits > width {
-			width = digits
-		}
-	}
-	return width
 }
 
 func (ws *workspace) recordRange() (int64, int64) {
