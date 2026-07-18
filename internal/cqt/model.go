@@ -964,11 +964,11 @@ func (m *Model) navigateBack() tea.Cmd {
 		if fromMember {
 			ws.member = nil
 			ws.screen = ScreenMembers
-			ws.status = status{Level: statusReady, Text: "returned to cached member list"}
+			ws.statusForCount(len(ws.members), "members")
 			return m.ensureActivePage()
 		}
 		ws.screen = ScreenDataSets
-		ws.status = status{Level: statusReady, Text: "returned to cached data set list"}
+		ws.statusForCount(len(ws.datasets), "data sets")
 		return m.ensureActivePage()
 	case ScreenMembers:
 		ws.cancelBrowse()
@@ -976,7 +976,7 @@ func (m *Model) navigateBack() tea.Cmd {
 		ws.resetMemberState()
 		ws.screen = ScreenDataSets
 		ws.dataSet = zosmf.DataSet{}
-		ws.status = status{Level: statusReady, Text: "returned to cached data set list"}
+		ws.statusForCount(len(ws.datasets), "data sets")
 		return m.ensureActivePage()
 	}
 	return nil
@@ -1187,7 +1187,7 @@ func (m *Model) handleDataSetsResult(ws *workspace, msg dataSetsResultMsg) tea.C
 		ws.status = status{Level: statusReady, Text: "end of data set results"}
 		return nil
 	}
-	ws.statusForCount(len(ws.datasets), "cached data sets")
+	ws.statusForCount(len(ws.datasets), "data sets")
 	if ws != &m.workspace {
 		return nil
 	}
@@ -1213,7 +1213,7 @@ func (m *Model) handleMembersResult(ws *workspace, msg membersResultMsg) tea.Cmd
 		ws.status = status{Level: statusReady, Text: "end of member results"}
 		return nil
 	}
-	ws.statusForCount(len(ws.members), "cached members")
+	ws.statusForCount(len(ws.members), "members")
 	if ws != &m.workspace {
 		return nil
 	}
@@ -1251,7 +1251,7 @@ func (m *Model) handleRecordsResult(ws *workspace, msg recordsResultMsg) tea.Cmd
 		ws.status = status{Level: statusEmpty, Text: "no records returned"}
 		return nil
 	}
-	ws.status = status{Level: statusReady, Text: fmt.Sprintf("%d records cached", len(ws.records))}
+	ws.status = status{Level: statusReady, Text: fmt.Sprintf("%d records", len(ws.records))}
 	if ws != &m.workspace {
 		return nil
 	}
@@ -1412,7 +1412,7 @@ func (m *Model) startDecode(ws *workspace) tea.Cmd {
 	ws.decodeCancel = cancel
 	overlay := ws.overlay
 	identity := ws.recordIdentity()
-	ws.status = status{Level: statusLoading, Text: fmt.Sprintf("decoding %d cached records with %s", len(records), overlay.Record.Name)}
+	ws.status = status{Level: statusLoading, Text: fmt.Sprintf("decoding %d records with %s", len(records), overlay.Record.Name)}
 	return m.loadingCommand(func() tea.Msg {
 		rows := make([]decodedRow, 0, len(records))
 		for _, raw := range records {
@@ -1475,9 +1475,9 @@ func (m *Model) handleDecodeResult(ws *workspace, msg decodeResultMsg) tea.Cmd {
 			}
 		}
 		if diagnostics > 0 || structural > 0 {
-			ws.status = status{Level: statusWarn, Text: fmt.Sprintf("decoded %d cached records; %d field diagnostics, %d row errors", len(ws.records), diagnostics, structural)}
+			ws.status = status{Level: statusWarn, Text: fmt.Sprintf("decoded %d records; %d field diagnostics, %d row errors", len(ws.records), diagnostics, structural)}
 		} else {
-			ws.status = status{Level: statusReady, Text: fmt.Sprintf("decoded %d cached records with %s", len(ws.records), ws.overlay.Record.Name)}
+			ws.status = status{Level: statusReady, Text: fmt.Sprintf("decoded %d records with %s", len(ws.records), ws.overlay.Record.Name)}
 		}
 	}
 	return tea.Batch(nextDecode, m.maybePrefetch(ws))

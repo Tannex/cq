@@ -316,19 +316,16 @@ func (m *Model) titleLine() string {
 	switch m.screen {
 	case ScreenDataSets:
 		screenName = "DATASETS"
-		rangeText := nameRange(m.datasets, func(index int) string { return m.datasets[index].Name })
-		body = fmt.Sprintf("prefix %-24s  range %s", displayOr(m.prefix, "—"), rangeText)
+		body = fmt.Sprintf("prefix %s", displayOr(m.prefix, "—"))
 	case ScreenMembers:
-		screenName = "MEMBERS"
-		rangeText := nameRange(m.members, func(index int) string { return m.members[index].Name })
-		body = fmt.Sprintf("%s  pattern %-8s  range %s", m.dataSet.Name, displayOr(m.memberPattern, "*"), rangeText)
+		screenName = m.dataSet.Name
+		body = fmt.Sprintf("members  filter %s", displayOr(m.memberPattern, "*"))
 	case ScreenRecords:
 		screenName = m.dataSet.Name
 		if m.member != nil {
 			screenName += "(" + m.member.Name + ")"
 		}
-		first, last := m.recordRange()
-		body = fmt.Sprintf("records %s / cached %d  %s", formatRange(first, last), len(m.records), m.modeName())
+		body = m.modeName()
 	}
 	if profile := m.activeProfile(); profile != "" {
 		chip = profile
@@ -742,9 +739,35 @@ func (m *Model) statusLine() string {
 	if level == statusLoading && len(m.spinner.Spinner.Frames) > 0 {
 		indicator = consolePalette.amber.Render(m.spinner.View())
 	}
-	window := m.windowStatus()
-	line := fmt.Sprintf(" %s %s  %s%s", indicator, m.renderStatusLabel(level), text, window)
-	return truncateStyled(line, m.width)
+	label := m.renderStatusLabel(level)
+	position := m.windowStatus()
+
+	const minWidthForPosition = 40
+	if m.width < minWidthForPosition || position == "" {
+		line := fmt.Sprintf(" %s %s  %s", indicator, label, text)
+		return truncateStyled(line, m.width)
+	}
+
+	prefix := fmt.Sprintf(" %s %s  ", indicator, label)
+	prefixWidth := lipgloss.Width(prefix)
+	posWidth := lipgloss.Width(position)
+	maxTextWidth := m.width - prefixWidth - posWidth
+	if maxTextWidth < 10 {
+		line := fmt.Sprintf(" %s %s  %s", indicator, label, text)
+		return truncateStyled(line, m.width)
+	}
+
+	truncatedText := truncateStyled(text, maxTextWidth)
+	used := prefixWidth + lipgloss.Width(truncatedText) + posWidth
+	padding := m.width - used
+	if padding < 1 {
+		padding = 1
+		truncatedText = truncateStyled(text, maxTextWidth-1)
+		used = prefixWidth + lipgloss.Width(truncatedText) + posWidth
+		padding = m.width - used
+	}
+
+	return prefix + truncatedText + strings.Repeat(" ", padding) + position
 }
 
 func (m *Model) effectiveStatus() (statusLevel, string) {
@@ -755,7 +778,7 @@ func (m *Model) effectiveStatus() (statusLevel, string) {
 		return statusLoading, m.status.Text
 	}
 	if m.decodePending {
-		return statusLoading, "decoding cached records"
+		return statusLoading, "decoding records"
 	}
 	if m.status.Level == statusError {
 		return m.status.Level, m.status.Text
@@ -815,23 +838,52 @@ func selectedDiagnostic(diagnostics []record.Diagnostic, overlay *overlay, horiz
 func (m *Model) windowStatus() string {
 	switch m.screen {
 	case ScreenDataSets:
-		total := ""
+		if len(m.datasets) == 0 {
+			return ""
+		}
+		count := len(m.datasets)
 		if m.datasetTotal != nil {
-			total = fmt.Sprintf(" / total %d", *m.datasetTotal)
+			count = *m.datasetTotal
 		}
-		return fmt.Sprintf("    cached %s%s / fetch %d", windowRowRange(len(m.datasets)), total, m.budget)
+		return positionStatus("row", m.datasetPage.selectedIndex()+1, count, m.datasetPage.more)
 	case ScreenMembers:
-		total := ""
-		if m.memberTotal != nil {
-			total = fmt.Sprintf(" / total %d", *m.memberTotal)
+		if len(m.members) == 0 {
+			return ""
 		}
-		return fmt.Sprintf("    cached %s%s / fetch %d", windowRowRange(len(m.members)), total, m.budget)
+		count := len(m.members)
+		if m.memberTotal != nil {
+			count = *m.memberTotal
+		}
+		return positionStatus("row", m.memberPage.selectedIndex()+1, count, m.memberPage.more)
 	case ScreenRecords:
-		first, last := m.recordRange()
-		return fmt.Sprintf("    cached %d (%s) / fetch %d", len(m.records), formatRange(first, last), m.budget)
+		if len(m.records) == 0 {
+			return ""
+		}
+		selected := m.recordPage.selectedIndex()
+		var number int64
+		if selected >= 0 && selected < len(m.records) {
+			number = m.records[selected].Record.Number
+		}
+		return recordPositionStatus(number, len(m.records), m.recordPage.more, m.recordNumberWidth())
 	default:
 		return ""
 	}
+}
+
+func positionStatus(label string, selected, count int, more bool) string {
+	suffix := ""
+	if more {
+		suffix = "+"
+	}
+	return fmt.Sprintf("%s %d of %d%s", label, selected, count, suffix)
+}
+
+func recordPositionStatus(number int64, count int, more bool, numberWidth int) string {
+	suffix := ""
+	if more {
+		suffix = "+"
+	}
+	return fmt.Sprintf("record %0*d of %d%s", numberWidth, number, count, suffix)
 }
 
 func (m *Model) helpLine() string {
@@ -887,34 +939,6 @@ func (m *Model) recordNumberWidth() int {
 		}
 	}
 	return width
-}
-
-func (m *Model) recordRange() (int64, int64) {
-	if len(m.records) == 0 {
-		return 0, 0
-	}
-	return m.records[0].Record.Number, m.records[len(m.records)-1].Record.Number
-}
-
-func nameRange[T any](items []T, name func(int) string) string {
-	if len(items) == 0 {
-		return "—"
-	}
-	return name(0) + "–" + name(len(items)-1)
-}
-
-func windowRowRange(count int) string {
-	if count == 0 {
-		return "0"
-	}
-	return fmt.Sprintf("1–%d", count)
-}
-
-func formatRange(first, last int64) string {
-	if first == 0 && last == 0 {
-		return "—"
-	}
-	return fmt.Sprintf("%d–%d", first, last)
 }
 
 func displayOr(value, fallback string) string {

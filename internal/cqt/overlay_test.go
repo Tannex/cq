@@ -127,7 +127,7 @@ func TestOverlayFailureRemainsVisibleAcrossConcurrentBrowseCompletion(t *testing
 
 	// A concurrently dispatched browse command may complete after the overlay.
 	// Its READY status must not erase the actionable copybook failure.
-	model.status = status{Level: statusReady, Text: "10 cached data sets"}
+	model.status = status{Level: statusReady, Text: "10 data sets"}
 	level, text := model.effectiveStatus()
 	if level != statusError || !strings.Contains(text, "parse failed") {
 		t.Fatalf("effective status = %s %q, want persistent overlay failure", level, text)

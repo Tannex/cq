@@ -479,3 +479,74 @@ func TestTinyLoadingEmptyErrorAndDialogViewsAreExplicit(t *testing.T) {
 		}
 	}
 }
+
+func TestStatusLineShowsPositionFlushRightWithMoreIndicator(t *testing.T) {
+	model := recordViewModel(t)
+	model.screen = ScreenDataSets
+	model.datasets = []zosmf.DataSet{
+		{Name: "A"}, {Name: "B"}, {Name: "C"}, {Name: "D"}, {Name: "E"},
+	}
+	model.datasetPage.reset(model.visible, model.budget)
+	model.datasetPage.apply([]string{"A", "B", "C", "D", "E"}, true, model.datasetPage.initialPlan(""))
+	model.datasetPage.move(2)
+	model.status = status{Level: statusReady, Text: "5 data sets"}
+
+	line := ansi.Strip(model.statusLine())
+	if !strings.Contains(line, "row 3 of 5+") {
+		t.Fatalf("status line missing position indicator: %q", line)
+	}
+	trimmed := strings.TrimRight(line, " ")
+	if !strings.HasSuffix(trimmed, "5+") {
+		t.Fatalf("position not flush right: %q", line)
+	}
+}
+
+func TestStatusLineRecordPositionUsesActualRecordNumber(t *testing.T) {
+	model := recordWindowModel(t, 5, 10)
+	model.recordPage.move(3)
+	model.status = status{Level: statusReady, Text: "10 records"}
+
+	line := ansi.Strip(model.statusLine())
+	if !strings.Contains(line, "record 00000104 of 10") {
+		t.Fatalf("status line missing record position: %q", line)
+	}
+}
+
+func TestTitleLinesOmitCacheAndRangeDetails(t *testing.T) {
+	model := recordViewModel(t)
+	model.prefix = "DEMO.*"
+	model.screen = ScreenDataSets
+	model.datasets = []zosmf.DataSet{{Name: "DEMO.A"}, {Name: "DEMO.B"}}
+
+	title := ansi.Strip(model.titleLine())
+	if !strings.Contains(title, "DATASETS") || !strings.Contains(title, "prefix DEMO.*") {
+		t.Fatalf("data set title missing expected body: %q", title)
+	}
+	if strings.Contains(title, "range") || strings.Contains(title, "cached") {
+		t.Fatalf("data set title still contains old internals: %q", title)
+	}
+
+	model.screen = ScreenMembers
+	model.dataSet = zosmf.DataSet{Name: "DEMO.PDS"}
+	model.memberPattern = "MEM*"
+	model.members = []zosmf.Member{{Name: "MEM1"}}
+	title = ansi.Strip(model.titleLine())
+	if !strings.Contains(title, "DEMO.PDS") || !strings.Contains(title, "members") || !strings.Contains(title, "filter MEM*") {
+		t.Fatalf("member title missing expected body: %q", title)
+	}
+	if strings.Contains(title, "range") || strings.Contains(title, "cached") {
+		t.Fatalf("member title still contains old internals: %q", title)
+	}
+
+	model.screen = ScreenRecords
+	model.dataSet = zosmf.DataSet{Name: "HQ.DATA"}
+	model.recordMode = ModeTable
+	model.overlay = &overlay{Source: CopybookSource{Local: "book.cpy"}, Columns: []fieldColumn{{Path: "F", Parts: []string{"F"}}}}
+	title = ansi.Strip(model.titleLine())
+	if !strings.Contains(title, "HQ.DATA") || !strings.Contains(title, "COPYBOOK TABLE") {
+		t.Fatalf("record title missing expected body: %q", title)
+	}
+	if strings.Contains(title, "records ") || strings.Contains(title, "cached") || strings.Contains(title, "1–") {
+		t.Fatalf("record title still contains old internals: %q", title)
+	}
+}
