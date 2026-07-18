@@ -179,11 +179,11 @@ filter; short literal member filters are expanded as prefix patterns.
 | --- | --- |
 | `↑`/`k`, `↓`/`j` | move the selected row |
 | `PgUp`, `PgDn` | move by one visible page |
-| `g`/`Home`, `G`/`End` | first or last row in the current bounded window |
+| `g`/`Home`, `G`/`End` | first or last row currently cached on this screen |
 | `Enter` | open the selected data set/member, or accept focused input/dialog fields |
 | `Esc` | return to the previous screen, or cancel focused input/dialog fields |
 | `/` | edit the data set prefix or member filter |
-| `r` | refresh the current bounded window |
+| `r` | clear and refresh the current screen cache |
 | `c` | open the copybook overlay dialog on the record screen |
 | `x` | clear the active copybook overlay |
 | `o` | toggle raw records and the active copybook overlay |
@@ -199,25 +199,36 @@ not reused in any mode. Global shortcuts are suppressed while a search input
 or copybook dialog is focused; use `Tab`/`Shift-Tab` to move between dialog
 fields.
 
-### Bounded 2× browsing guarantee
+### Bounded 2× requests and screen cache
 
 For each terminal size, `cqt` calculates the data rows visible after the fixed
-title, search/breadcrumb, table header, status/detail, and help lines. Its row
-budget is **exactly `2 × visible rows`**:
+title, search/breadcrumb, table header, status/detail, and help lines. The
+maximum size of **each individual z/OSMF request** is exactly
+`2 × visible rows`:
 
 - every data set list, member list, and record read is sent with that exact
   maximum item/count value;
-- every in-memory data set, member, and record window is trimmed to at most that
-  budget;
-- movement inside the current window does not fetch; crossing a boundary uses a
-  sliding refetch with overlap rather than accumulating pages; and
+- fetched rows are retained in memory for the lifetime of the current browse
+  screen, so moving backward through previously visited data does not refetch;
+- when the selection enters the final visible page of cached rows, `cqt`
+  prefetches the next bounded request instead of waiting for the last row;
+- opening a child screen retains its parent cache; `Esc` releases the child
+  cache when returning to the parent. Prefix/member-filter changes and `r`
+  clear and restart the active cache; and
 - when the terminal is too small to have a positive row count, `cqt` cancels
-  pending row work, displays a resize instruction, and dispatches no row fetch.
+  pending row work, retains already cached rows, displays a resize instruction,
+  and dispatches no row fetch. Restoring the terminal shows the cache
+  immediately.
+
+A screen cache can therefore grow beyond `2 × visible rows`; the cap applies to
+network transfers, not accumulated session memory. The status line reports both
+the cached range and the current per-request fetch budget. Its spinner occupies
+a permanently reserved cell, so loading transitions do not shift status text.
 
 Record browsing uses only z/OSMF record ranges. Unlike the `cq --data-dsn`
 streaming optimization, `cqt` never falls back to a whole-data-set download,
-because doing so would violate the browsing cap. Copybook source files are
-metadata for the display overlay and are not record-window rows.
+because doing so would violate the request cap. Copybook source files are
+metadata for the display overlay and are not record-cache rows.
 
 ### Copybook and display modes
 

@@ -147,7 +147,7 @@ func (m *Model) titleLine() string {
 			target += "(" + m.member.Name + ")"
 		}
 		first, last := m.recordRange()
-		title = fmt.Sprintf(" %s  records %s / fetched %d  %s", target, formatRange(first, last), len(m.records), m.modeName())
+		title = fmt.Sprintf(" %s  records %s / cached %d  %s", target, formatRange(first, last), len(m.records), m.modeName())
 	}
 	return consolePalette.navy.Bold(true).Width(m.width).Render(truncatePlain(title, m.width))
 }
@@ -328,8 +328,10 @@ func renderTable(width, visible int, columns []table.Column, rows []table.Row, s
 		table.WithHeight(visible+1),
 		table.WithStyles(denseTableStyles()),
 	)
-	if selected >= 0 {
-		model.SetCursor(selected)
+	if selected > 0 {
+		// MoveDown updates both the cursor and viewport offset. SetCursor alone can
+		// leave a deep selection one row below the visible table viewport.
+		model.MoveDown(selected)
 	}
 	return model.View()
 }
@@ -497,8 +499,12 @@ func (m *Model) statusLine() string {
 			text = detail
 		}
 	}
+	indicator := " "
+	if level == statusLoading && len(m.spinner.Spinner.Frames) > 0 {
+		indicator = consolePalette.amber.Render(m.spinner.View())
+	}
 	window := m.windowStatus()
-	line := fmt.Sprintf(" %s  %s%s", m.renderStatusLabel(level), text, window)
+	line := fmt.Sprintf(" %s %s  %s%s", indicator, m.renderStatusLabel(level), text, window)
 	return truncateStyled(line, m.width)
 }
 
@@ -506,11 +512,11 @@ func (m *Model) effectiveStatus() (statusLevel, string) {
 	if m.overlayPending {
 		return statusLoading, "loading copybook overlay"
 	}
-	if m.decodePending {
-		return statusLoading, "decoding bounded record window"
-	}
 	if m.browsePending != nil {
 		return statusLoading, m.status.Text
+	}
+	if m.decodePending {
+		return statusLoading, "decoding cached records"
 	}
 	if m.status.Level == statusError {
 		return m.status.Level, m.status.Text
@@ -573,16 +579,16 @@ func (m *Model) windowStatus() string {
 		if m.datasetTotal != nil {
 			total = fmt.Sprintf(" / total %d", *m.datasetTotal)
 		}
-		return fmt.Sprintf("    rows %s%s / window %d", windowRowRange(len(m.datasets)), total, m.budget)
+		return fmt.Sprintf("    cached %s%s / fetch %d", windowRowRange(len(m.datasets)), total, m.budget)
 	case ScreenMembers:
 		total := ""
 		if m.memberTotal != nil {
 			total = fmt.Sprintf(" / total %d", *m.memberTotal)
 		}
-		return fmt.Sprintf("    rows %s%s / window %d", windowRowRange(len(m.members)), total, m.budget)
+		return fmt.Sprintf("    cached %s%s / fetch %d", windowRowRange(len(m.members)), total, m.budget)
 	case ScreenRecords:
 		first, last := m.recordRange()
-		return fmt.Sprintf("    range %s / window %d", formatRange(first, last), m.budget)
+		return fmt.Sprintf("    cached %d (%s) / fetch %d", len(m.records), formatRange(first, last), m.budget)
 	default:
 		return ""
 	}
@@ -714,9 +720,18 @@ func fitHeight(content string, width, height int) string {
 		lines = append(lines, "")
 	}
 	for i, line := range lines {
-		if lipgloss.Width(line) > width && width > 0 {
-			lines[i] = ansi.Truncate(line, width, "…")
+		if width <= 0 {
+			continue
 		}
+		lineWidth := lipgloss.Width(line)
+		if lineWidth > width {
+			line = ansi.Truncate(line, width, "…")
+			lineWidth = lipgloss.Width(line)
+		}
+		if lineWidth < width {
+			line += strings.Repeat(" ", width-lineWidth)
+		}
+		lines[i] = line
 	}
 	return strings.Join(lines, "\n")
 }

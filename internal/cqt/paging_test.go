@@ -1,9 +1,6 @@
 package cqt
 
-import (
-	"fmt"
-	"testing"
-)
+import "testing"
 
 func TestVisibleRowsAndExactBudget(t *testing.T) {
 	tests := []struct {
@@ -30,112 +27,94 @@ func TestVisibleRowsAndExactBudget(t *testing.T) {
 	}
 }
 
-func TestNamePagerMovesWithinWindowThenUsesOnePageOverlap(t *testing.T) {
+func TestNamePagerPrefetchesWithOneVisiblePageRemaining(t *testing.T) {
 	var p pager[string]
 	p.reset("", 3, 6)
-	keys := []string{"A", "B", "C", "D", "E", "F"}
-	p.apply(keys, true, p.initialPlan(""))
+	p.apply([]string{"A", "B", "C", "D", "E", "F"}, true, p.initialPlan(""))
 
-	for range 5 {
-		before, after := p.move(1)
-		if before || after {
-			t.Fatal("movement inside the active window requested another page")
-		}
+	p.move(2)
+	if p.shouldPrefetch(false) {
+		t.Fatal("prefetch started before selection entered the final visible page")
 	}
-	_, after := p.move(1)
-	if !after {
-		t.Fatal("crossing the final row did not request forward paging")
+	p.move(1)
+	if !p.shouldPrefetch(false) {
+		t.Fatal("prefetch did not start with one visible page remaining")
 	}
 	plan, ok := forwardNamePlan(&p)
-	if !ok {
-		t.Fatal("forward plan was not produced")
-	}
-	// The inclusive z/OSMF start cursor is the first row of the next visible
-	// page, so anchoring at D keeps D/E/F as the one-visible-page overlap and
-	// lets the server return D plus budget-1 new items without a duplicate in
-	// the response.
-	if plan.Anchor != "D" || plan.Preserve != "F" || plan.Direction != pageForward {
-		t.Fatalf("forward plan = %#v", plan)
+	if !ok || plan.Anchor != "F" || plan.Preserve != "D" || plan.Direction != pageForward {
+		t.Fatalf("forward plan = %#v ok=%v", plan, ok)
 	}
 
-	p.apply([]string{"D", "E", "F", "G", "H", "I"}, true, plan)
-	if p.selectedKey() != "F" || len(p.previous) != 1 || p.previous[0] != "" {
-		t.Fatalf("selection/history after forward apply: selected=%q history=%#v", p.selectedKey(), p.previous)
+	p.apply([]string{"G", "H", "I", "J", "K", "L"}, true, plan)
+	if len(p.keys) != 12 || p.selectedKey() != "D" {
+		t.Fatalf("merged cache=%#v selected=%q", p.keys, p.selectedKey())
 	}
-	p.top()
-	back, ok := p.backwardPlan()
-	if !ok || back.Anchor != "" || back.Direction != pageBackward {
-		t.Fatalf("backward plan = %#v ok=%v", back, ok)
-	}
-	p.apply(keys, true, back)
-	if p.selectedKey() != "D" || len(p.previous) != 0 {
-		t.Fatalf("backward apply did not preserve boundary selection: selected=%q history=%#v", p.selectedKey(), p.previous)
+	if p.shouldPrefetch(false) {
+		t.Fatal("freshly extended cache immediately prefetched again")
 	}
 }
 
-func TestRecordPagerUsesExactOnePageOverlap(t *testing.T) {
-	var p pager[int64]
-	p.reset(100, 2, 4)
-	keys := []string{"101", "102", "103", "104"}
-	p.apply(keys, true, p.initialPlan(100))
-	p.bottom()
-	_, after := p.move(1)
-	if !after {
-		t.Fatal("record boundary was not crossed")
+func TestPagerForwardMergeDeduplicatesAndPreservesSelection(t *testing.T) {
+	var p pager[string]
+	p.reset("", 2, 4)
+	p.apply([]string{"A", "B", "C", "D"}, true, p.initialPlan(""))
+	p.move(2)
+	p.apply([]string{"D", "E", "F", "G"}, false, pagePlan[string]{Anchor: "D", Preserve: "C", Direction: pageForward})
+
+	want := []string{"A", "B", "C", "D", "E", "F", "G"}
+	if len(p.keys) != len(want) {
+		t.Fatalf("merged keys=%#v", p.keys)
 	}
-	plan, ok := forwardRecordPlan(&p, []int64{101, 102, 103, 104})
-	if !ok || plan.Anchor != 102 || plan.Preserve != "104" {
+	for i := range want {
+		if p.keys[i] != want[i] {
+			t.Fatalf("merged keys=%#v want=%#v", p.keys, want)
+		}
+	}
+	if p.selectedKey() != "C" || p.more {
+		t.Fatalf("selected=%q more=%v", p.selectedKey(), p.more)
+	}
+}
+
+func TestRecordPagerPrefetchStartsAfterLastCachedRecord(t *testing.T) {
+	var p pager[int64]
+	p.reset(0, 2, 4)
+	p.apply([]string{"1", "2", "3", "4"}, true, p.initialPlan(0))
+	p.move(2)
+	plan, ok := forwardRecordPlan(&p, []int64{1, 2, 3, 4})
+	if !ok || plan.Anchor != 4 || plan.Preserve != "3" {
 		t.Fatalf("record forward plan = %#v ok=%v", plan, ok)
 	}
 }
 
-func TestPagerResizeShrinksAroundSelectionAndRestoresWithSameAnchor(t *testing.T) {
+func TestPagerResizeRetainsSessionCacheAndSelection(t *testing.T) {
 	var p pager[string]
-	p.reset("ANCHOR", 5, 10)
-	keys := make([]string, 10)
-	for i := range keys {
-		keys[i] = fmt.Sprintf("ROW%02d", i+1)
-	}
-	p.apply(keys, true, pagePlan[string]{Anchor: "ANCHOR", Preserve: "ROW09", Direction: pageInitial})
+	p.reset("", 5, 10)
+	p.apply([]string{"A", "B", "C", "D", "E", "F"}, true, p.initialPlan(""))
+	p.move(4)
 
-	trim := p.resize(2, 4)
-	if trim.Start != 6 || trim.End != 10 || len(p.keys) != 4 || p.selectedKey() != "ROW09" {
-		t.Fatalf("shrink trim=%#v keys=%#v selected=%q", trim, p.keys, p.selectedKey())
+	p.resize(2, 4)
+	if len(p.keys) != 6 || p.selectedKey() != "E" {
+		t.Fatalf("shrink keys=%#v selected=%q", p.keys, p.selectedKey())
 	}
-	if !p.trimBefore || !p.needsReload || len(p.keys) > p.budget {
-		t.Fatalf("shrink state = %#v", p)
+	p.resize(0, 0)
+	if len(p.keys) != 6 || p.selectedKey() != "E" {
+		t.Fatalf("tiny resize keys=%#v selected=%q", p.keys, p.selectedKey())
 	}
-
 	p.resize(5, 10)
-	plan, ok := p.growPlan()
-	if !ok || plan.Anchor != "ANCHOR" || plan.Preserve != "ROW09" || plan.Direction != pageGrow {
-		t.Fatalf("grow plan = %#v ok=%v", plan, ok)
-	}
-	p.apply(keys, true, plan)
-	if p.selectedKey() != "ROW09" || len(p.keys) != 10 {
-		t.Fatalf("grown pager selected=%q keys=%d", p.selectedKey(), len(p.keys))
+	if len(p.keys) != 6 || p.selectedKey() != "E" {
+		t.Fatalf("restored cache=%#v selected=%q", p.keys, p.selectedKey())
 	}
 }
 
-func TestPagerTinyTerminalClearsRowsButKeepsLightweightSelection(t *testing.T) {
+func TestPagerSuppressesPrefetchWhileRequestPending(t *testing.T) {
 	var p pager[string]
-	p.reset("A", 2, 4)
-	p.apply([]string{"B", "C", "D", "E"}, true, pagePlan[string]{Anchor: "A", Preserve: "D", Direction: pageInitial})
-	trim := p.resize(0, 0)
-	if trim.End != 4 || len(p.keys) != 0 || p.preserve != "D" || !p.needsReload {
-		t.Fatalf("tiny resize state=%#v trim=%#v", p, trim)
+	p.reset("", 2, 4)
+	p.apply([]string{"A", "B", "C", "D"}, true, p.initialPlan(""))
+	p.bottom()
+	if !p.shouldPrefetch(false) {
+		t.Fatal("test requires prefetch-ready pager")
 	}
-	if len(p.previous) != 0 {
-		t.Fatalf("tiny resize retained row data instead of lightweight anchors: %#v", p.previous)
-	}
-}
-
-func TestPagerAnchorHistoryIsBounded(t *testing.T) {
-	var anchors []string
-	for i := 0; i < maxAnchorHistory+10; i++ {
-		anchors = appendBoundedAnchor(anchors, fmt.Sprintf("A%03d", i))
-	}
-	if len(anchors) != maxAnchorHistory || anchors[0] != "A010" {
-		t.Fatalf("bounded history length=%d first=%q", len(anchors), anchors[0])
+	if p.shouldPrefetch(true) {
+		t.Fatal("pending request did not suppress duplicate prefetch")
 	}
 }

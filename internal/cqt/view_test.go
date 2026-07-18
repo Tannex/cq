@@ -3,6 +3,7 @@ package cqt
 import (
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -32,6 +33,7 @@ func recordViewModel(t *testing.T) *Model {
 		charmap:      cm,
 		keys:         DefaultKeyMap(),
 		help:         helpModelForTest(),
+		spinner:      newStatusSpinner(),
 		status:       status{Level: statusReady, Text: "records ready"},
 	}
 	model.records = []recordRow{
@@ -113,6 +115,65 @@ func TestRecordTableAndJSONShareTypedValueAndShowDiagnostics(t *testing.T) {
 	}
 }
 
+func TestStatusSpinnerSlotKeepsStatusLabelAligned(t *testing.T) {
+	model := recordViewModel(t)
+	model.status = status{Level: statusReady, Text: "records ready"}
+	ready := ansi.Strip(model.statusLine())
+	readyIndex := strings.Index(ready, "READY")
+
+	model.status = status{Level: statusLoading, Text: "reading records"}
+	loading := ansi.Strip(model.statusLine())
+	loadingIndex := strings.Index(loading, "LOADING")
+	if readyIndex < 0 || loadingIndex < 0 {
+		t.Fatalf("status labels missing: ready=%q loading=%q", ready, loading)
+	}
+	readyColumn := lipgloss.Width(ready[:readyIndex])
+	loadingColumn := lipgloss.Width(loading[:loadingIndex])
+	if readyColumn != loadingColumn {
+		t.Fatalf("status label columns moved: ready=%d %q loading=%d %q", readyColumn, ready, loadingColumn, loading)
+	}
+	if frame := model.spinner.View(); frame == "" || !strings.Contains(loading, frame) {
+		t.Fatalf("loading status missing spinner frame %q: %q", frame, loading)
+	}
+}
+
+func TestSpinnerTicksOnlyWhileLoading(t *testing.T) {
+	model := recordViewModel(t)
+	model.status = status{Level: statusLoading, Text: "reading records"}
+	_, command := model.Update(model.spinner.Tick())
+	if command == nil {
+		t.Fatal("loading spinner tick did not schedule the next frame")
+	}
+	model.status = status{Level: statusReady, Text: "records ready"}
+	_, command = model.Update(model.spinner.Tick())
+	if command != nil {
+		t.Fatal("ready status kept the spinner tick chain alive")
+	}
+}
+
+func TestSelectedTableRowRemainsAboveStatusLine(t *testing.T) {
+	model := recordViewModel(t)
+	model.recordMode = ModeTable
+	model.overlay = &overlay{Columns: []fieldColumn{{Path: "FIELD", Parts: []string{"FIELD"}, Width: 20}}}
+	model.records = make([]recordRow, 12)
+	keys := make([]string, len(model.records))
+	for i := range model.records {
+		number := int64(i + 1)
+		keys[i] = strconv.FormatInt(number, 10)
+		model.records[i] = recordRow{Record: zosmf.Record{Number: number, Data: []byte("VALUE")}}
+	}
+	model.recordPage.reset(0, model.visible, model.budget)
+	model.recordPage.apply(keys, false, model.recordPage.initialPlan(0))
+	model.recordPage.bottom()
+
+	content := ansi.Strip(model.View().Content)
+	selected := strings.Index(content, "> 00000012 │")
+	status := strings.Index(content, "READY")
+	if selected < 0 || status < 0 || selected >= status {
+		t.Fatalf("selected row disappeared behind status: selected=%d status=%d\n%s", selected, status, content)
+	}
+}
+
 func TestDiagnosticsDoNotHideLoadingOrErrorStatus(t *testing.T) {
 	model := recordViewModel(t)
 	model.showDiagnostics = true
@@ -138,10 +199,12 @@ func TestStructuralJSONHorizontalExtentIncludesRenderedError(t *testing.T) {
 	}
 }
 
-func TestFitHeightTruncatesOverwideLines(t *testing.T) {
-	got := fitHeight("123456789", 5, 1)
-	if width := lipgloss.Width(got); width > 5 {
-		t.Fatalf("fitHeight width = %d, want <= 5: %q", width, got)
+func TestFitHeightTruncatesAndPadsLinesToTerminalWidth(t *testing.T) {
+	for _, input := range []string{"123456789", "123"} {
+		got := fitHeight(input, 5, 1)
+		if width := lipgloss.Width(got); width != 5 {
+			t.Fatalf("fitHeight(%q) width = %d, want 5: %q", input, width, got)
+		}
 	}
 }
 

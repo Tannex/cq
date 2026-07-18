@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/help"
+	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 
@@ -140,6 +141,7 @@ type Model struct {
 	deps    Dependencies
 	keys    KeyMap
 	help    help.Model
+	spinner spinner.Model
 
 	width   int
 	height  int
@@ -259,6 +261,7 @@ func NewModel(options Options, deps Dependencies) (*Model, error) {
 		deps:        deps,
 		keys:        DefaultKeyMap(),
 		help:        help.New(),
+		spinner:     newStatusSpinner(),
 		screen:      ScreenDataSets,
 		recordMode:  ModeRaw,
 		decodedMode: ModeTable,
@@ -276,6 +279,17 @@ func firstNonEmpty(value, fallback string) string {
 	return fallback
 }
 
+func newStatusSpinner() spinner.Model {
+	return spinner.New(spinner.WithSpinner(spinner.MiniDot))
+}
+
+func (m *Model) loadingCommand(command tea.Cmd) tea.Cmd {
+	if command == nil {
+		return nil
+	}
+	return tea.Batch(command, m.spinner.Tick)
+}
+
 // Init loads the Zowe session in a typed command. Window-size handling remains
 // independent, so a session can resolve in a tiny terminal without dispatching
 // a row request.
@@ -286,13 +300,13 @@ func (m *Model) Init() tea.Cmd {
 	ctx, cancel := context.WithTimeout(context.Background(), m.deps.Timeout)
 	m.sessionCancel = cancel
 	loader := m.deps.LoadSession
-	return func() tea.Msg {
+	return m.loadingCommand(func() tea.Msg {
 		if loader == nil {
 			return sessionResultMsg{Generation: generation, Err: errors.New("Zowe session loader is unavailable")}
 		}
 		session, err := loader(ctx)
 		return sessionResultMsg{Generation: generation, Session: session, Err: err}
-	}
+	})
 }
 
 // Update implements tea.Model.
@@ -312,6 +326,14 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handleOverlayResult(msg)
 	case decodeResultMsg:
 		return m, m.handleDecodeResult(msg)
+	case spinner.TickMsg:
+		level, _ := m.effectiveStatus()
+		if level != statusLoading {
+			return m, nil
+		}
+		updated, command := m.spinner.Update(msg)
+		m.spinner = updated
+		return m, command
 	case tea.KeyPressMsg:
 		return m, m.handleKey(msg)
 	default:
@@ -469,8 +491,7 @@ func (m *Model) handleAction(selected action) tea.Cmd {
 		m.activePagerTop()
 		return nil
 	case actionBottom:
-		m.activePagerBottom()
-		return nil
+		return m.activePagerBottom()
 	case actionOpen:
 		return m.openSelection()
 	case actionBack:
@@ -574,10 +595,19 @@ func (m *Model) acceptSearch() tea.Cmd {
 			return nil
 		}
 		m.prefixInput.Blur()
+		m.cancelBrowse()
+		m.cancelDecode()
 		m.prefix = prefix
 		m.datasetPage.reset("", m.visible, m.budget)
 		m.datasets = nil
 		m.datasetTotal = nil
+		m.dataSet = zosmf.DataSet{}
+		m.members = nil
+		m.memberTotal = nil
+		m.memberPage.reset("", m.visible, m.budget)
+		m.member = nil
+		m.records = nil
+		m.recordPage.reset(0, m.visible, m.budget)
 		if m.budget <= 0 {
 			return nil
 		}
@@ -588,10 +618,15 @@ func (m *Model) acceptSearch() tea.Cmd {
 		pattern += "*"
 	}
 	m.memberInput.Blur()
+	m.cancelBrowse()
+	m.cancelDecode()
 	m.memberPattern = pattern
 	m.memberPage.reset("", m.visible, m.budget)
 	m.members = nil
 	m.memberTotal = nil
+	m.member = nil
+	m.records = nil
+	m.recordPage.reset(0, m.visible, m.budget)
 	if m.budget <= 0 {
 		return nil
 	}
@@ -612,51 +647,17 @@ func (m *Model) cancelSearch() {
 func (m *Model) moveSelection(delta int) tea.Cmd {
 	switch m.screen {
 	case ScreenDataSets:
-		before, after := m.datasetPage.move(delta)
-		if before {
-			if plan, ok := m.datasetPage.backwardPlan(); ok {
-				return m.startDataSets(plan)
-			}
-		}
-		if after {
-			if plan, ok := forwardNamePlan(&m.datasetPage); ok {
-				return m.startDataSets(plan)
-			}
-		}
+		m.datasetPage.move(delta)
 	case ScreenMembers:
-		before, after := m.memberPage.move(delta)
-		if before {
-			if plan, ok := m.memberPage.backwardPlan(); ok {
-				return m.startMembers(plan)
-			}
-		}
-		if after {
-			if plan, ok := forwardNamePlan(&m.memberPage); ok {
-				return m.startMembers(plan)
-			}
-		}
+		m.memberPage.move(delta)
 	case ScreenRecords:
 		selected := m.recordPage.selectedKey()
-		before, after := m.recordPage.move(delta)
+		m.recordPage.move(delta)
 		if m.recordPage.selectedKey() != selected {
 			m.jsonVertical = 0
 		}
-		if before {
-			if plan, ok := m.recordPage.backwardPlan(); ok {
-				return m.startRecords(plan)
-			}
-		}
-		if after {
-			numbers := make([]int64, len(m.records))
-			for i, row := range m.records {
-				numbers[i] = row.Record.Number
-			}
-			if plan, ok := forwardRecordPlan(&m.recordPage, numbers); ok {
-				return m.startRecords(plan)
-			}
-		}
 	}
-	return nil
+	return m.maybePrefetch()
 }
 
 func (m *Model) activePagerTop() {
@@ -674,7 +675,7 @@ func (m *Model) activePagerTop() {
 	}
 }
 
-func (m *Model) activePagerBottom() {
+func (m *Model) activePagerBottom() tea.Cmd {
 	switch m.screen {
 	case ScreenDataSets:
 		m.datasetPage.bottom()
@@ -687,6 +688,7 @@ func (m *Model) activePagerBottom() {
 			m.jsonVertical = 0
 		}
 	}
+	return m.maybePrefetch()
 }
 
 func (m *Model) openSelection() tea.Cmd {
@@ -704,8 +706,12 @@ func (m *Model) openSelection() tea.Cmd {
 		switch organization {
 		case "PS", "SEQ":
 			m.cancelBrowse()
+			m.cancelDecode()
 			m.dataSet = selected
 			m.member = nil
+			m.members = nil
+			m.memberTotal = nil
+			m.memberPage.reset("", m.visible, m.budget)
 			m.screen = ScreenRecords
 			m.records = nil
 			m.recordPage.reset(0, m.visible, m.budget)
@@ -714,8 +720,11 @@ func (m *Model) openSelection() tea.Cmd {
 			return m.startRecords(m.recordPage.initialPlan(0))
 		case "PO", "PO-E", "POE", "PDS", "PDSE":
 			m.cancelBrowse()
+			m.cancelDecode()
 			m.dataSet = selected
 			m.member = nil
+			m.records = nil
+			m.recordPage.reset(0, m.visible, m.budget)
 			m.screen = ScreenMembers
 			m.members = nil
 			m.memberPattern = ""
@@ -735,6 +744,7 @@ func (m *Model) openSelection() tea.Cmd {
 		}
 		selected := m.members[index]
 		m.cancelBrowse()
+		m.cancelDecode()
 		m.member = &selected
 		m.screen = ScreenRecords
 		m.records = nil
@@ -752,21 +762,32 @@ func (m *Model) navigateBack() tea.Cmd {
 	case ScreenRecords:
 		m.cancelBrowse()
 		m.cancelDecode()
+		fromMember := m.member != nil
+		m.records = nil
+		m.recordPage.reset(0, m.visible, m.budget)
 		m.horizontal = 0
 		m.jsonVertical = 0
-		if m.member != nil {
+		if fromMember {
+			m.member = nil
 			m.screen = ScreenMembers
-			m.status = status{Level: statusReady, Text: "returned to member list"}
+			m.status = status{Level: statusReady, Text: "returned to cached member list"}
 			return m.ensureActivePage()
 		}
 		m.screen = ScreenDataSets
-		m.status = status{Level: statusReady, Text: "returned to data set list"}
+		m.status = status{Level: statusReady, Text: "returned to cached data set list"}
 		return m.ensureActivePage()
 	case ScreenMembers:
 		m.cancelBrowse()
+		m.cancelDecode()
+		m.members = nil
+		m.memberTotal = nil
+		m.memberPage.reset("", m.visible, m.budget)
+		m.records = nil
+		m.recordPage.reset(0, m.visible, m.budget)
 		m.screen = ScreenDataSets
+		m.dataSet = zosmf.DataSet{}
 		m.member = nil
-		m.status = status{Level: statusReady, Text: "returned to data set list"}
+		m.status = status{Level: statusReady, Text: "returned to cached data set list"}
 		return m.ensureActivePage()
 	}
 	return nil
@@ -776,13 +797,26 @@ func (m *Model) refresh() tea.Cmd {
 	if !m.sessionReady || m.budget <= 0 {
 		return nil
 	}
+	m.cancelBrowse()
 	switch m.screen {
 	case ScreenDataSets:
-		return m.startDataSets(m.datasetPage.refreshPlan())
+		preserve := m.datasetPage.selectedKey()
+		m.datasets = nil
+		m.datasetTotal = nil
+		m.datasetPage.reset("", m.visible, m.budget)
+		return m.startDataSets(pagePlan[string]{Preserve: preserve, Direction: pageRefresh})
 	case ScreenMembers:
-		return m.startMembers(m.memberPage.refreshPlan())
+		preserve := m.memberPage.selectedKey()
+		m.members = nil
+		m.memberTotal = nil
+		m.memberPage.reset("", m.visible, m.budget)
+		return m.startMembers(pagePlan[string]{Preserve: preserve, Direction: pageRefresh})
 	case ScreenRecords:
-		return m.startRecords(m.recordPage.refreshPlan())
+		preserve := m.recordPage.selectedKey()
+		m.cancelDecode()
+		m.records = nil
+		m.recordPage.reset(0, m.visible, m.budget)
+		return m.startRecords(pagePlan[int64]{Preserve: preserve, Direction: pageRefresh})
 	}
 	return nil
 }
@@ -793,34 +827,19 @@ func (m *Model) ensureActivePage() tea.Cmd {
 	}
 	switch m.screen {
 	case ScreenDataSets:
-		if m.prefix != "" && m.datasetPage.needsReload {
-			return m.reloadActiveAnchor(pageGrow)
-		}
 		if len(m.datasets) == 0 && m.prefix != "" {
-			if plan, ok := m.datasetPage.growPlan(); ok {
-				return m.startDataSets(plan)
-			}
+			return m.startDataSets(m.datasetPage.initialPlan(""))
 		}
 	case ScreenMembers:
-		if m.dataSet.Name != "" && m.memberPage.needsReload {
-			return m.reloadActiveAnchor(pageGrow)
-		}
 		if len(m.members) == 0 && m.dataSet.Name != "" {
-			if plan, ok := m.memberPage.growPlan(); ok {
-				return m.startMembers(plan)
-			}
+			return m.startMembers(m.memberPage.initialPlan(""))
 		}
 	case ScreenRecords:
-		if m.dataSet.Name != "" && m.recordPage.needsReload {
-			return m.reloadActiveAnchor(pageGrow)
-		}
 		if len(m.records) == 0 && m.dataSet.Name != "" {
-			if plan, ok := m.recordPage.growPlan(); ok {
-				return m.startRecords(plan)
-			}
+			return m.startRecords(m.recordPage.initialPlan(0))
 		}
 	}
-	return nil
+	return m.maybePrefetch()
 }
 
 func (m *Model) handleResize(width, height int) tea.Cmd {
@@ -835,17 +854,13 @@ func (m *Model) handleResize(width, height int) tea.Cmd {
 		m.dialog.setWidth(width)
 	}
 
-	datasetTrim := m.datasetPage.resize(m.visible, m.budget)
-	m.datasets = trimSlice(m.datasets, datasetTrim)
-	memberTrim := m.memberPage.resize(m.visible, m.budget)
-	m.members = trimSlice(m.members, memberTrim)
-	recordTrim := m.recordPage.resize(m.visible, m.budget)
-	m.records = trimSlice(m.records, recordTrim)
+	m.datasetPage.resize(m.visible, m.budget)
+	m.memberPage.resize(m.visible, m.budget)
+	m.recordPage.resize(m.visible, m.budget)
 	m.jsonVertical = min(m.jsonVertical, m.maxJSONVertical())
 
 	if m.budget <= 0 {
 		m.cancelBrowse()
-		m.cancelDecode()
 		return nil
 	}
 	if !m.sessionReady {
@@ -853,73 +868,46 @@ func (m *Model) handleResize(width, height int) tea.Cmd {
 	}
 	if m.browsePending != nil && m.browsePending.Budget != m.budget {
 		m.cancelBrowse()
-		if m.budget < oldBudget {
-			m.statusForRetainedWindow()
-			return nil
-		}
 	}
-	if oldBudget == 0 {
-		return m.reloadActiveAnchor(pageGrow)
-	}
-	if m.budget > oldBudget {
-		return m.reloadActiveAnchor(pageGrow)
-	}
-	// Shrinking invalidates an old request and trims locally, but never fetches
-	// solely because of the shrink.
-	if m.budget < oldBudget {
+	if oldBudget != m.budget {
 		m.statusForRetainedWindow()
 	}
-	return nil
+	if oldBudget == 0 {
+		return m.ensureActivePage()
+	}
+	return m.maybePrefetch()
 }
 
 func (m *Model) statusForRetainedWindow() {
 	count := m.activeRowCount()
 	if count == 0 {
-		m.status = status{Level: statusEmpty, Text: "window resized; no rows retained"}
+		m.status = status{Level: statusEmpty, Text: "window resized; no cached rows"}
 		return
 	}
-	m.status = status{Level: statusReady, Text: fmt.Sprintf("window resized; %d rows retained", count)}
+	m.status = status{Level: statusReady, Text: fmt.Sprintf("window resized; %d cached rows retained", count)}
 }
 
-func trimSlice[T any](items []T, trim trimResult) []T {
-	if trim.Start < 0 {
-		trim.Start = 0
-	}
-	if trim.End > len(items) {
-		trim.End = len(items)
-	}
-	if trim.Start > trim.End {
-		trim.Start = trim.End
-	}
-	if trim.Start == 0 && trim.End == len(items) {
-		return items
-	}
-	return append([]T(nil), items[trim.Start:trim.End]...)
-}
-
-func (m *Model) reloadActiveAnchor(direction pageDirection) tea.Cmd {
-	if m.budget <= 0 || !m.sessionReady {
+func (m *Model) maybePrefetch() tea.Cmd {
+	if !m.canFetch() || m.browsePending != nil {
 		return nil
 	}
 	switch m.screen {
 	case ScreenDataSets:
-		if m.prefix == "" {
-			return nil
+		if plan, ok := forwardNamePlan(&m.datasetPage); ok {
+			return m.startDataSets(plan)
 		}
-		plan := pagePlan[string]{Anchor: m.datasetPage.anchor, Preserve: m.datasetPage.selectedKey(), Direction: direction}
-		return m.startDataSets(plan)
 	case ScreenMembers:
-		if m.dataSet.Name == "" {
-			return nil
+		if plan, ok := forwardNamePlan(&m.memberPage); ok {
+			return m.startMembers(plan)
 		}
-		plan := pagePlan[string]{Anchor: m.memberPage.anchor, Preserve: m.memberPage.selectedKey(), Direction: direction}
-		return m.startMembers(plan)
 	case ScreenRecords:
-		if m.dataSet.Name == "" {
-			return nil
+		numbers := make([]int64, len(m.records))
+		for i, row := range m.records {
+			numbers[i] = row.Record.Number
 		}
-		plan := pagePlan[int64]{Anchor: m.recordPage.anchor, Preserve: m.recordPage.selectedKey(), Direction: direction}
-		return m.startRecords(plan)
+		if plan, ok := forwardRecordPlan(&m.recordPage, numbers); ok {
+			return m.startRecords(plan)
+		}
 	}
 	return nil
 }
@@ -940,10 +928,10 @@ func (m *Model) startDataSets(plan pagePlan[string]) tea.Cmd {
 	m.status = status{Level: statusLoading, Text: fmt.Sprintf("listing data sets for %s", m.prefix)}
 	browser := m.browser
 	request := zosmf.ListDataSetsRequest{Prefix: m.prefix, Start: plan.Anchor, MaxItems: m.budget}
-	return func() tea.Msg {
+	return m.loadingCommand(func() tea.Msg {
 		page, err := browser.ListDataSets(ctx, request)
 		return dataSetsResultMsg{Meta: meta, Page: page, Err: err}
-	}
+	})
 }
 
 func (m *Model) startMembers(plan pagePlan[string]) tea.Cmd {
@@ -963,10 +951,10 @@ func (m *Model) startMembers(plan pagePlan[string]) tea.Cmd {
 	m.status = status{Level: statusLoading, Text: fmt.Sprintf("listing members of %s", m.dataSet.Name)}
 	browser := m.browser
 	request := zosmf.ListMembersRequest{DataSet: m.dataSet.Name, Start: plan.Anchor, Pattern: m.memberPattern, MaxItems: m.budget}
-	return func() tea.Msg {
+	return m.loadingCommand(func() tea.Msg {
 		page, err := browser.ListMembers(ctx, request)
 		return membersResultMsg{Meta: meta, Page: page, Err: err}
-	}
+	})
 }
 
 func (m *Model) startRecords(plan pagePlan[int64]) tea.Cmd {
@@ -974,7 +962,6 @@ func (m *Model) startRecords(plan pagePlan[int64]) tea.Cmd {
 		return nil
 	}
 	m.cancelBrowse()
-	m.cancelDecode()
 	m.browseGeneration++
 	member := ""
 	if m.member != nil {
@@ -991,10 +978,10 @@ func (m *Model) startRecords(plan pagePlan[int64]) tea.Cmd {
 	m.status = status{Level: statusLoading, Text: fmt.Sprintf("reading records from %s", identity)}
 	browser := m.browser
 	request := zosmf.ReadRecordsRequest{DataSet: m.dataSet.Name, Member: member, Start: plan.Anchor, MaxItems: m.budget}
-	return func() tea.Msg {
+	return m.loadingCommand(func() tea.Msg {
 		page, err := browser.ReadRecords(ctx, request)
 		return recordsResultMsg{Meta: meta, Page: page, Err: err}
-	}
+	})
 }
 
 func (m *Model) canFetch() bool {
@@ -1020,11 +1007,22 @@ func (m *Model) handleDataSetsResult(msg dataSetsResultMsg) tea.Cmd {
 	for i, item := range items {
 		keys[i] = strings.ToUpper(strings.TrimSpace(item.Name))
 	}
-	m.datasets = append([]zosmf.DataSet(nil), items...)
-	m.datasetPage.apply(keys, msg.Page.MoreRows || overReturned, msg.Meta.NamePlan)
-	m.datasetTotal = cloneInt(msg.Page.TotalRows)
-	m.statusForCount(len(m.datasets), "data sets")
-	return nil
+	more := msg.Page.MoreRows || overReturned
+	before := len(m.datasets)
+	if msg.Meta.NamePlan.Direction == pageForward {
+		m.datasets = mergeCached(m.datasets, items, func(item zosmf.DataSet) string { return strings.ToUpper(strings.TrimSpace(item.Name)) })
+		if len(m.datasets) == before {
+			more = false
+		}
+	} else {
+		m.datasets = append([]zosmf.DataSet(nil), items...)
+	}
+	m.datasetPage.apply(keys, more, msg.Meta.NamePlan)
+	if msg.Page.TotalRows != nil || msg.Meta.NamePlan.Direction != pageForward {
+		m.datasetTotal = cloneInt(msg.Page.TotalRows)
+	}
+	m.statusForCount(len(m.datasets), "cached data sets")
+	return m.maybePrefetch()
 }
 
 func (m *Model) handleMembersResult(msg membersResultMsg) tea.Cmd {
@@ -1046,11 +1044,22 @@ func (m *Model) handleMembersResult(msg membersResultMsg) tea.Cmd {
 	for i, item := range items {
 		keys[i] = strings.ToUpper(strings.TrimSpace(item.Name))
 	}
-	m.members = append([]zosmf.Member(nil), items...)
-	m.memberPage.apply(keys, msg.Page.MoreRows || overReturned, msg.Meta.NamePlan)
-	m.memberTotal = cloneInt(msg.Page.TotalRows)
-	m.statusForCount(len(m.members), "members")
-	return nil
+	more := msg.Page.MoreRows || overReturned
+	before := len(m.members)
+	if msg.Meta.NamePlan.Direction == pageForward {
+		m.members = mergeCached(m.members, items, func(item zosmf.Member) string { return strings.ToUpper(strings.TrimSpace(item.Name)) })
+		if len(m.members) == before {
+			more = false
+		}
+	} else {
+		m.members = append([]zosmf.Member(nil), items...)
+	}
+	m.memberPage.apply(keys, more, msg.Meta.NamePlan)
+	if msg.Page.TotalRows != nil || msg.Meta.NamePlan.Direction != pageForward {
+		m.memberTotal = cloneInt(msg.Page.TotalRows)
+	}
+	m.statusForCount(len(m.members), "cached members")
+	return m.maybePrefetch()
 }
 
 func (m *Model) handleRecordsResult(msg recordsResultMsg) tea.Cmd {
@@ -1070,12 +1079,22 @@ func (m *Model) handleRecordsResult(msg recordsResultMsg) tea.Cmd {
 	selected := m.recordPage.selectedKey()
 	items, overReturned := boundedWindow(msg.Page.Records, msg.Meta.Budget)
 	keys := make([]string, len(items))
-	m.records = make([]recordRow, len(items))
+	incoming := make([]recordRow, len(items))
 	for i, item := range items {
 		keys[i] = strconv.FormatInt(item.Number, 10)
-		m.records[i] = recordRow{Record: zosmf.Record{Number: item.Number, Data: append([]byte(nil), item.Data...)}}
+		incoming[i] = recordRow{Record: zosmf.Record{Number: item.Number, Data: append([]byte(nil), item.Data...)}}
 	}
-	m.recordPage.apply(keys, msg.Page.MoreRows || overReturned, msg.Meta.RecordPlan)
+	more := msg.Page.MoreRows || overReturned
+	before := len(m.records)
+	if msg.Meta.RecordPlan.Direction == pageForward {
+		m.records = mergeCached(m.records, incoming, func(row recordRow) string { return strconv.FormatInt(row.Record.Number, 10) })
+		if len(m.records) == before {
+			more = false
+		}
+	} else {
+		m.records = incoming
+	}
+	m.recordPage.apply(keys, more, msg.Meta.RecordPlan)
 	if m.recordPage.selectedKey() != selected {
 		m.jsonVertical = 0
 	}
@@ -1083,11 +1102,11 @@ func (m *Model) handleRecordsResult(msg recordsResultMsg) tea.Cmd {
 		m.status = status{Level: statusEmpty, Text: "no records returned"}
 		return nil
 	}
+	m.status = status{Level: statusReady, Text: fmt.Sprintf("%d records cached", len(m.records))}
 	if m.overlay != nil {
-		return m.startDecode()
+		return tea.Batch(m.startDecode(), m.maybePrefetch())
 	}
-	m.status = status{Level: statusReady, Text: fmt.Sprintf("%d records fetched", len(m.records))}
-	return nil
+	return m.maybePrefetch()
 }
 
 func boundedWindow[T any](items []T, budget int) ([]T, bool) {
@@ -1095,6 +1114,25 @@ func boundedWindow[T any](items []T, budget int) ([]T, bool) {
 		return items[:budget], true
 	}
 	return items, false
+}
+
+func mergeCached[T any](existing, incoming []T, key func(T) string) []T {
+	seen := make(map[string]struct{}, len(existing)+len(incoming))
+	merged := make([]T, 0, len(existing)+len(incoming))
+	for _, item := range existing {
+		itemKey := key(item)
+		seen[itemKey] = struct{}{}
+		merged = append(merged, item)
+	}
+	for _, item := range incoming {
+		itemKey := key(item)
+		if _, ok := seen[itemKey]; ok {
+			continue
+		}
+		seen[itemKey] = struct{}{}
+		merged = append(merged, item)
+	}
+	return merged
 }
 
 func cloneInt(value *int) *int {
@@ -1110,7 +1148,7 @@ func (m *Model) statusForCount(count int, noun string) {
 		m.status = status{Level: statusEmpty, Text: "no " + noun + " returned"}
 		return
 	}
-	m.status = status{Level: statusReady, Text: fmt.Sprintf("%d %s in bounded window", count, noun)}
+	m.status = status{Level: statusReady, Text: fmt.Sprintf("%d %s", count, noun)}
 }
 
 func (m *Model) acceptBrowse(meta requestMeta) bool {
@@ -1161,10 +1199,10 @@ func (m *Model) startOverlay(source CopybookSource) tea.Cmd {
 	loadFile := m.deps.LoadFile
 	searchPaths := append([]string(nil), m.deps.DSNSearchPath...)
 	m.status = status{Level: statusLoading, Text: "loading copybook overlay " + source.label()}
-	return func() tea.Msg {
+	return m.loadingCommand(func() tea.Msg {
 		built, err := buildOverlay(ctx, source, codepage, browser, loadFile, searchPaths)
 		return overlayResultMsg{Generation: generation, Source: source, Overlay: built, Err: err}
-	}
+	})
 }
 
 func (m *Model) handleOverlayResult(msg overlayResultMsg) tea.Cmd {
@@ -1183,8 +1221,13 @@ func (m *Model) handleOverlayResult(msg overlayResultMsg) tea.Cmd {
 		return nil
 	}
 	m.overlayError = ""
+	m.cancelDecode()
 	m.overlay = msg.Overlay
 	m.overlaySource = msg.Overlay.Source
+	for i := range m.records {
+		m.records[i].Decoded = nil
+		m.records[i].Err = nil
+	}
 	m.recordMode = ModeTable
 	m.decodedMode = ModeTable
 	m.horizontal = 0
@@ -1200,10 +1243,20 @@ func (m *Model) handleOverlayResult(msg overlayResultMsg) tea.Cmd {
 }
 
 func (m *Model) startDecode() tea.Cmd {
-	if m.overlay == nil || len(m.records) == 0 {
+	if m.overlay == nil || len(m.records) == 0 || m.decodePending {
 		return nil
 	}
-	m.cancelDecode()
+	records := make([]zosmf.Record, 0, len(m.records))
+	for _, row := range m.records {
+		if row.Decoded != nil || row.Err != nil {
+			continue
+		}
+		records = append(records, zosmf.Record{Number: row.Record.Number, Data: append([]byte(nil), row.Record.Data...)})
+	}
+	if len(records) == 0 {
+		return nil
+	}
+
 	m.decodeGeneration++
 	generation := m.decodeGeneration
 	m.decodePending = true
@@ -1211,12 +1264,8 @@ func (m *Model) startDecode() tea.Cmd {
 	m.decodeCancel = cancel
 	overlay := m.overlay
 	identity := m.recordIdentity()
-	records := make([]zosmf.Record, len(m.records))
-	for i, row := range m.records {
-		records[i] = zosmf.Record{Number: row.Record.Number, Data: append([]byte(nil), row.Record.Data...)}
-	}
-	m.status = status{Level: statusLoading, Text: fmt.Sprintf("decoding %d records with %s", len(records), overlay.Record.Name)}
-	return func() tea.Msg {
+	m.status = status{Level: statusLoading, Text: fmt.Sprintf("decoding %d cached records with %s", len(records), overlay.Record.Name)}
+	return m.loadingCommand(func() tea.Msg {
 		rows := make([]decodedRow, 0, len(records))
 		for _, raw := range records {
 			if err := ctx.Err(); err != nil {
@@ -1226,7 +1275,7 @@ func (m *Model) startDecode() tea.Cmd {
 			rows = append(rows, decodedRow{Number: raw.Number, Decoded: decoded, Err: err})
 		}
 		return decodeResultMsg{Generation: generation, Identity: identity, Overlay: overlay, Rows: rows}
-	}
+	})
 }
 
 func (m *Model) handleDecodeResult(msg decodeResultMsg) tea.Cmd {
@@ -1244,8 +1293,6 @@ func (m *Model) handleDecodeResult(msg decodeResultMsg) tea.Cmd {
 	for _, row := range msg.Rows {
 		byNumber[row.Number] = row
 	}
-	diagnostics := 0
-	structural := 0
 	for i := range m.records {
 		result, ok := byNumber[m.records[i].Record.Number]
 		if !ok {
@@ -1253,20 +1300,36 @@ func (m *Model) handleDecodeResult(msg decodeResultMsg) tea.Cmd {
 		}
 		m.records[i].Err = result.Err
 		if result.Err != nil {
-			structural++
 			m.records[i].Decoded = nil
 			continue
 		}
 		decoded := result.Decoded
 		m.records[i].Decoded = &decoded
-		diagnostics += len(decoded.Diagnostics)
 	}
-	if diagnostics > 0 || structural > 0 {
-		m.status = status{Level: statusWarn, Text: fmt.Sprintf("decoded %d records; %d field diagnostics, %d row errors", len(m.records), diagnostics, structural)}
-	} else {
-		m.status = status{Level: statusReady, Text: fmt.Sprintf("decoded %d records with %s", len(m.records), m.overlay.Record.Name)}
+
+	var nextDecode tea.Cmd
+	if m.browsePending == nil {
+		nextDecode = m.startDecode()
 	}
-	return nil
+	if nextDecode == nil && m.browsePending == nil {
+		diagnostics := 0
+		structural := 0
+		for _, row := range m.records {
+			if row.Err != nil {
+				structural++
+				continue
+			}
+			if row.Decoded != nil {
+				diagnostics += len(row.Decoded.Diagnostics)
+			}
+		}
+		if diagnostics > 0 || structural > 0 {
+			m.status = status{Level: statusWarn, Text: fmt.Sprintf("decoded %d cached records; %d field diagnostics, %d row errors", len(m.records), diagnostics, structural)}
+		} else {
+			m.status = status{Level: statusReady, Text: fmt.Sprintf("decoded %d cached records with %s", len(m.records), m.overlay.Record.Name)}
+		}
+	}
+	return tea.Batch(nextDecode, m.maybePrefetch())
 }
 
 func (m *Model) recordIdentity() string {
@@ -1274,12 +1337,7 @@ func (m *Model) recordIdentity() string {
 	if m.member != nil {
 		member = m.member.Name
 	}
-	var first, last int64
-	if len(m.records) > 0 {
-		first = m.records[0].Record.Number
-		last = m.records[len(m.records)-1].Record.Number
-	}
-	return fmt.Sprintf("%s(%s):%d-%d", m.dataSet.Name, member, first, last)
+	return fmt.Sprintf("%s(%s)", m.dataSet.Name, member)
 }
 
 func (m *Model) cancelSession() {

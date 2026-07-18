@@ -111,6 +111,51 @@ func executeCommand(t *testing.T, model *Model, command tea.Cmd) {
 	}
 }
 
+func browseResultMessage(t *testing.T, command tea.Cmd) tea.Msg {
+	t.Helper()
+	queue := []tea.Cmd{command}
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		if current == nil {
+			continue
+		}
+		message := current()
+		if batch, ok := message.(tea.BatchMsg); ok {
+			queue = append(queue, batch...)
+			continue
+		}
+		switch message.(type) {
+		case dataSetsResultMsg, membersResultMsg, recordsResultMsg:
+			return message
+		}
+	}
+	t.Fatal("command produced no browse result")
+	return nil
+}
+
+func decodeResultMessage(t *testing.T, command tea.Cmd) decodeResultMsg {
+	t.Helper()
+	queue := []tea.Cmd{command}
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		if current == nil {
+			continue
+		}
+		message := current()
+		if batch, ok := message.(tea.BatchMsg); ok {
+			queue = append(queue, batch...)
+			continue
+		}
+		if result, ok := message.(decodeResultMsg); ok {
+			return result
+		}
+	}
+	t.Fatal("command produced no decode result")
+	return decodeResultMsg{}
+}
+
 func readyModel(t *testing.T, options Options, browser zosmf.Browser, user, encoding string, width, height int) *Model {
 	t.Helper()
 	model := newTestModel(t, options, browser, user, encoding)
@@ -301,33 +346,106 @@ func TestDatasetRoutingMembersAndUnsupportedOrganizations(t *testing.T) {
 	}
 }
 
-func TestModelCrossesNameWindowWithExactBudgetAndOnePageOverlap(t *testing.T) {
+func TestModelPrefetchesNamesOneVisiblePageBeforeCacheEnd(t *testing.T) {
 	browser := &fakeBrowser{listDataSets: func(_ context.Context, request zosmf.ListDataSetsRequest) (zosmf.DataSetPage, error) {
 		if request.Start == "" {
 			return zosmf.DataSetPage{Items: []zosmf.DataSet{{Name: "A"}, {Name: "B"}, {Name: "C"}, {Name: "D"}, {Name: "E"}, {Name: "F"}}, MoreRows: true}, nil
 		}
-		if request.Start != "D" {
-			t.Fatalf("forward anchor = %q, want one-page-overlap cursor D", request.Start)
+		if request.Start != "F" {
+			t.Fatalf("forward anchor = %q, want last cached name F", request.Start)
 		}
-		return zosmf.DataSetPage{Items: []zosmf.DataSet{{Name: "D"}, {Name: "E"}, {Name: "F"}, {Name: "G"}, {Name: "H"}, {Name: "I"}}, MoreRows: true}, nil
+		return zosmf.DataSetPage{Items: []zosmf.DataSet{{Name: "G"}, {Name: "H"}, {Name: "I"}, {Name: "J"}, {Name: "K"}, {Name: "L"}}, MoreRows: true}, nil
 	}}
 	model := readyModel(t, Options{Prefix: "A*"}, browser, "A", "", 90, MinTerminalHeight)
 	if model.visible != 3 || model.budget != 6 {
 		t.Fatalf("visible/budget = %d/%d", model.visible, model.budget)
 	}
-	for range 5 {
+	for range 2 {
 		if command := model.moveSelection(1); command != nil {
-			t.Fatal("movement inside the 2x window dispatched a request")
+			t.Fatal("prefetch started before the final visible page")
 		}
 	}
 	command := model.moveSelection(1)
 	if command == nil {
-		t.Fatal("crossing the forward boundary did not dispatch")
+		t.Fatal("entering the final visible page did not prefetch")
 	}
 	executeCommand(t, model, command)
 	last := browser.dataSetRequests[len(browser.dataSetRequests)-1]
-	if last.Start != "D" || last.MaxItems != 6 || len(model.datasets) != 6 || model.datasetPage.selectedKey() != "F" {
+	if last.Start != "F" || last.MaxItems != 6 || len(model.datasets) != 12 || model.datasetPage.selectedKey() != "D" {
 		t.Fatalf("forward request=%#v rows=%#v selected=%q", last, model.datasets, model.datasetPage.selectedKey())
+	}
+}
+
+func TestCachedBackwardNavigationDoesNotRefetch(t *testing.T) {
+	browser := &fakeBrowser{listDataSets: func(_ context.Context, request zosmf.ListDataSetsRequest) (zosmf.DataSetPage, error) {
+		if request.Start == "" {
+			return zosmf.DataSetPage{Items: []zosmf.DataSet{{Name: "A"}, {Name: "B"}, {Name: "C"}, {Name: "D"}, {Name: "E"}, {Name: "F"}}, MoreRows: true}, nil
+		}
+		return zosmf.DataSetPage{Items: []zosmf.DataSet{{Name: "G"}, {Name: "H"}, {Name: "I"}, {Name: "J"}, {Name: "K"}, {Name: "L"}}}, nil
+	}}
+	model := readyModel(t, Options{Prefix: "A*"}, browser, "A", "", 90, MinTerminalHeight)
+	executeCommand(t, model, model.moveSelection(3))
+	requests := len(browser.dataSetRequests)
+	if requests != 2 || len(model.datasets) != 12 {
+		t.Fatalf("requests=%d cache=%d", requests, len(model.datasets))
+	}
+	if command := model.moveSelection(-3); command != nil {
+		t.Fatal("backward movement through cached rows dispatched a request")
+	}
+	if len(browser.dataSetRequests) != requests || model.datasetPage.selectedKey() != "A" {
+		t.Fatalf("requests=%d selected=%q", len(browser.dataSetRequests), model.datasetPage.selectedKey())
+	}
+}
+
+func TestRepeatedMovementDoesNotRestartPendingPrefetch(t *testing.T) {
+	browser := &fakeBrowser{listDataSets: func(_ context.Context, request zosmf.ListDataSetsRequest) (zosmf.DataSetPage, error) {
+		return zosmf.DataSetPage{Items: []zosmf.DataSet{{Name: "A"}, {Name: "B"}, {Name: "C"}, {Name: "D"}, {Name: "E"}, {Name: "F"}}, MoreRows: true}, nil
+	}}
+	model := readyModel(t, Options{Prefix: "A*"}, browser, "A", "", 90, MinTerminalHeight)
+	pending := model.moveSelection(3)
+	if pending == nil || model.browsePending == nil {
+		t.Fatal("test requires pending prefetch")
+	}
+	generation := model.browsePending.Generation
+	if command := model.moveSelection(1); command != nil {
+		t.Fatal("movement restarted an in-flight prefetch")
+	}
+	if model.browsePending == nil || model.browsePending.Generation != generation {
+		t.Fatalf("pending generation changed from %d to %#v", generation, model.browsePending)
+	}
+	executeCommand(t, model, pending)
+}
+
+func TestMemberCacheSurvivesChildRecordsAndClearsOnBackToDataSets(t *testing.T) {
+	browser := &fakeBrowser{
+		listDataSets: func(context.Context, zosmf.ListDataSetsRequest) (zosmf.DataSetPage, error) {
+			return zosmf.DataSetPage{Items: []zosmf.DataSet{{Name: "A.PDS", Organization: "PO"}}}, nil
+		},
+		listMembers: func(context.Context, zosmf.ListMembersRequest) (zosmf.MemberPage, error) {
+			return zosmf.MemberPage{Items: []zosmf.Member{{Name: "MEM1"}, {Name: "MEM2"}}}, nil
+		},
+		readRecords: func(context.Context, zosmf.ReadRecordsRequest) (zosmf.RecordPage, error) {
+			return zosmf.RecordPage{Records: []zosmf.Record{{Number: 1, Data: []byte("X")}}}, nil
+		},
+	}
+	model := readyModel(t, Options{Prefix: "A*", Codepage: "latin1"}, browser, "A", "", 90, 15)
+	executeCommand(t, model, model.openSelection())
+	memberRequests := len(browser.memberRequests)
+	executeCommand(t, model, model.openSelection())
+	if len(model.records) != 1 {
+		t.Fatalf("record cache=%#v", model.records)
+	}
+	if command := model.navigateBack(); command != nil {
+		t.Fatal("return to cached members refetched")
+	}
+	if len(model.members) != 2 || len(model.records) != 0 || len(browser.memberRequests) != memberRequests {
+		t.Fatalf("members=%#v records=%#v requests=%d", model.members, model.records, len(browser.memberRequests))
+	}
+	if command := model.navigateBack(); command != nil {
+		t.Fatal("return to cached data sets refetched")
+	}
+	if len(model.members) != 0 || len(model.datasets) != 1 {
+		t.Fatalf("member cache=%#v data set cache=%#v", model.members, model.datasets)
 	}
 }
 
@@ -386,7 +504,7 @@ func TestStaleBrowseResultIsRejectedAfterPrefixGenerationChanges(t *testing.T) {
 	model.prefixInput.Focus()
 	model.prefixInput.SetValue("B*")
 	freshCommand := model.acceptSearch()
-	staleMessage := staleCommand()
+	staleMessage := browseResultMessage(t, staleCommand)
 	applyMessage(t, model, staleMessage)
 	if !canceledOldContext {
 		t.Fatal("superseded browse command did not receive cancellation")
@@ -400,11 +518,16 @@ func TestStaleBrowseResultIsRejectedAfterPrefixGenerationChanges(t *testing.T) {
 	}
 }
 
-func TestResizeGrowReissuesExactBudgetAndShrinkDoesNotFetch(t *testing.T) {
+func TestResizeUsesNewExactBudgetAndRejectsOldPendingResult(t *testing.T) {
 	browser := &fakeBrowser{listDataSets: func(_ context.Context, request zosmf.ListDataSetsRequest) (zosmf.DataSetPage, error) {
-		items := make([]zosmf.DataSet, min(request.MaxItems, 5))
+		start := 0
+		if request.Start != "" {
+			_, _ = fmt.Sscanf(request.Start, "A.%02d", &start)
+			start++
+		}
+		items := make([]zosmf.DataSet, request.MaxItems)
 		for i := range items {
-			items[i].Name = fmt.Sprintf("A.%02d", i)
+			items[i].Name = fmt.Sprintf("A.%02d", start+i)
 		}
 		return zosmf.DataSetPage{Items: items, MoreRows: true}, nil
 	}}
@@ -418,29 +541,39 @@ func TestResizeGrowReissuesExactBudgetAndShrinkDoesNotFetch(t *testing.T) {
 		t.Fatalf("grow command=%v budget=%d", growCommand, model.budget)
 	}
 	executeCommand(t, model, growCommand)
-	if got := browser.dataSetRequests[len(browser.dataSetRequests)-1]; got.MaxItems != 20 || got.Start != model.datasetPage.anchor {
-		t.Fatalf("grow request = %#v anchor=%q", got, model.datasetPage.anchor)
+	if got := browser.dataSetRequests[len(browser.dataSetRequests)-1]; got.MaxItems != 20 || got.Start != "A.09" {
+		t.Fatalf("grow request = %#v", got)
+	}
+	if len(model.datasets) != 30 {
+		t.Fatalf("grown cache has %d rows, want 30", len(model.datasets))
 	}
 
-	pendingGrow := applyMessage(t, model, tea.WindowSizeMsg{Width: 90, Height: 20})
-	if pendingGrow == nil {
-		t.Fatal("second grow did not produce a request")
+	pending := model.activePagerBottom()
+	if pending == nil || mBrowseBudget(model) != 20 {
+		t.Fatalf("bottom prefetch command=%v pending budget=%d", pending, mBrowseBudget(model))
 	}
-	if shrinkCommand := applyMessage(t, model, tea.WindowSizeMsg{Width: 90, Height: 9}); shrinkCommand != nil {
-		t.Fatal("shrink dispatched a replacement request")
+	shrinkCommand := applyMessage(t, model, tea.WindowSizeMsg{Width: 90, Height: 9})
+	if shrinkCommand == nil || model.budget != 8 || mBrowseBudget(model) != 8 {
+		t.Fatalf("shrink replacement=%v budget=%d pending=%d", shrinkCommand, model.budget, mBrowseBudget(model))
 	}
-	before := len(browser.dataSetRequests)
-	stale := pendingGrow()
+
+	before := len(model.datasets)
+	stale := browseResultMessage(t, pending)
 	applyMessage(t, model, stale)
-	if len(browser.dataSetRequests) != before+1 {
-		t.Fatal("test did not execute the canceled command")
+	if len(model.datasets) != before {
+		t.Fatalf("stale old-budget result changed cache from %d to %d", before, len(model.datasets))
 	}
-	if len(model.datasets) > model.budget {
-		t.Fatalf("shrunken window has %d rows for budget %d", len(model.datasets), model.budget)
+	executeCommand(t, model, shrinkCommand)
+	if got := browser.dataSetRequests[len(browser.dataSetRequests)-1]; got.MaxItems != 8 || got.Start != "A.29" {
+		t.Fatalf("shrink replacement request = %#v", got)
 	}
-	if model.status.Level == statusLoading {
-		t.Fatalf("canceled resize request left permanent loading status: %#v", model.status)
+}
+
+func mBrowseBudget(model *Model) int {
+	if model.browsePending == nil {
+		return 0
 	}
+	return model.browsePending.Budget
 }
 
 func TestResizeShrinkUpdatesStatusForRetainedRowsWithoutFetching(t *testing.T) {
@@ -456,10 +589,10 @@ func TestResizeShrinkUpdatesStatusForRetainedRowsWithoutFetching(t *testing.T) {
 	if command := applyMessage(t, model, tea.WindowSizeMsg{Width: 90, Height: 10}); command != nil {
 		t.Fatal("shrink dispatched a request")
 	}
-	if len(browser.dataSetRequests) != before || len(model.datasets) != 10 {
-		t.Fatalf("requests=%d before=%d retained=%d", len(browser.dataSetRequests), before, len(model.datasets))
+	if len(browser.dataSetRequests) != before || len(model.datasets) != 20 {
+		t.Fatalf("requests=%d before=%d cached=%d", len(browser.dataSetRequests), before, len(model.datasets))
 	}
-	if model.status.Level != statusReady || !strings.Contains(model.status.Text, "10 rows retained") {
+	if model.status.Level != statusReady || !strings.Contains(model.status.Text, "20 cached rows retained") {
 		t.Fatalf("shrink status = %#v", model.status)
 	}
 }
@@ -530,10 +663,8 @@ func TestModelBoundsOverReturnedRowsFromInjectedBrowser(t *testing.T) {
 	})
 }
 
-func TestEnsureActivePageReloadsTrimmedNonemptyPage(t *testing.T) {
-	browser := &fakeBrowser{listDataSets: func(_ context.Context, request zosmf.ListDataSetsRequest) (zosmf.DataSetPage, error) {
-		return zosmf.DataSetPage{Items: []zosmf.DataSet{{Name: "A"}, {Name: "B"}, {Name: "C"}, {Name: "D"}}}, nil
-	}}
+func TestNavigateBackReusesCachedParentWithoutRefetch(t *testing.T) {
+	browser := &fakeBrowser{}
 	model := newTestModel(t, Options{Prefix: "A*"}, browser, "A", "")
 	model.sessionReady = true
 	model.browser = browser
@@ -541,20 +672,91 @@ func TestEnsureActivePageReloadsTrimmedNonemptyPage(t *testing.T) {
 	model.screen = ScreenRecords
 	model.visible = 2
 	model.budget = 4
+	model.dataSet = zosmf.DataSet{Name: "A.DATA", Organization: "PS"}
 	model.datasets = []zosmf.DataSet{{Name: "A"}, {Name: "B"}, {Name: "C"}, {Name: "D"}}
-	model.datasetPage = pager[string]{keys: []string{"A", "B", "C", "D"}, selected: 2, budget: 4, anchor: "A", preserve: "C", needsReload: true}
+	model.datasetPage = pager[string]{keys: []string{"A", "B", "C", "D"}, selected: 2, visible: 2, budget: 4, preserve: "C"}
+	model.records = []recordRow{{Record: zosmf.Record{Number: 1, Data: []byte("X")}}}
+	model.recordPage = pager[int64]{keys: []string{"1"}, visible: 2, budget: 4}
 
-	command := model.navigateBack()
+	if command := model.navigateBack(); command != nil {
+		t.Fatal("returning to a cached parent unexpectedly refetched")
+	}
+	if len(browser.dataSetRequests) != 0 || len(model.datasets) != 4 || model.datasetPage.selectedKey() != "C" {
+		t.Fatalf("requests=%#v cache=%#v selected=%q", browser.dataSetRequests, model.datasets, model.datasetPage.selectedKey())
+	}
+	if len(model.records) != 0 {
+		t.Fatalf("child record cache survived Back: %#v", model.records)
+	}
+}
+
+func TestRecordPrefetchUsesLastCachedNumberAndExactBudget(t *testing.T) {
+	browser := &fakeBrowser{
+		listDataSets: func(context.Context, zosmf.ListDataSetsRequest) (zosmf.DataSetPage, error) {
+			return zosmf.DataSetPage{Items: []zosmf.DataSet{{Name: "A.DATA", Organization: "PS"}}}, nil
+		},
+		readRecords: func(_ context.Context, request zosmf.ReadRecordsRequest) (zosmf.RecordPage, error) {
+			records := make([]zosmf.Record, request.MaxItems)
+			for i := range records {
+				number := request.Start + int64(i) + 1
+				records[i] = zosmf.Record{Number: number, Data: []byte("X")}
+			}
+			return zosmf.RecordPage{Records: records, MoreRows: request.Start == 0}, nil
+		},
+	}
+	model := readyModel(t, Options{Prefix: "A*", Codepage: "latin1"}, browser, "A", "", 90, MinTerminalHeight)
+	executeCommand(t, model, model.openSelection())
+	if len(model.records) != 6 {
+		t.Fatalf("initial record cache=%d", len(model.records))
+	}
+	command := model.moveSelection(3)
 	if command == nil {
-		t.Fatal("returning to a trimmed nonempty page did not reload it")
+		t.Fatal("entering final visible page did not prefetch records")
 	}
 	executeCommand(t, model, command)
-	request := browser.dataSetRequests[len(browser.dataSetRequests)-1]
-	if request.MaxItems != 4 || request.Start != "A" {
-		t.Fatalf("reload request = %#v", request)
+	last := browser.recordRequests[len(browser.recordRequests)-1]
+	if last.Start != 6 || last.MaxItems != 6 || len(model.records) != 12 {
+		t.Fatalf("request=%#v cache=%d", last, len(model.records))
 	}
-	if selected := model.datasetPage.selectedKey(); selected != "C" {
-		t.Fatalf("selection after reload = %q, want C", selected)
+	requests := len(browser.recordRequests)
+	if command := model.moveSelection(-3); command != nil || len(browser.recordRequests) != requests {
+		t.Fatalf("cached backward movement command=%v requests=%d", command, len(browser.recordRequests))
+	}
+}
+
+func TestDecodeInFlightSurvivesRecordCacheGrowth(t *testing.T) {
+	built, err := buildOverlay(context.Background(), CopybookSource{Local: "book", Format: "free"}, "latin1", &fakeBrowser{}, func(context.Context, string) ([]byte, error) {
+		return []byte("01 R. 05 FIELD PIC X.\n"), nil
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := recordViewModel(t)
+	model.overlay = built
+	model.records = []recordRow{
+		{Record: zosmf.Record{Number: 1, Data: []byte("A")}},
+		{Record: zosmf.Record{Number: 2, Data: []byte("B")}},
+	}
+	model.recordPage.reset(0, model.visible, model.budget)
+	model.recordPage.apply([]string{"1", "2"}, true, model.recordPage.initialPlan(0))
+
+	firstDecode := model.startDecode()
+	if firstDecode == nil {
+		t.Fatal("initial decode did not start")
+	}
+	model.records = append(model.records, recordRow{Record: zosmf.Record{Number: 3, Data: []byte("C")}})
+	model.recordPage.apply([]string{"3"}, false, pagePlan[int64]{Anchor: 2, Preserve: "1", Direction: pageForward})
+
+	next := applyMessage(t, model, decodeResultMessage(t, firstDecode))
+	if model.records[0].Decoded == nil || model.records[1].Decoded == nil || model.records[2].Decoded != nil {
+		t.Fatalf("decode state after first batch = %#v", model.records)
+	}
+	firstPointer := model.records[0].Decoded
+	if next == nil {
+		t.Fatal("newly appended undecoded record did not schedule a second batch")
+	}
+	executeCommand(t, model, next)
+	if model.records[0].Decoded != firstPointer || model.records[2].Decoded == nil {
+		t.Fatalf("cached decode pointers were replaced or new row remained undecoded: %#v", model.records)
 	}
 }
 
