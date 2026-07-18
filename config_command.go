@@ -7,9 +7,11 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/Tannex/cq/internal/appconfig"
 )
 
-const initialConfig = "{\n  \"dsnSearchPath\": []\n}\n"
+const initialConfig = appconfig.InitialConfig
 
 var launchConfigEditor = func(path string) error {
 	name, args, err := configEditorInvocation(runtime.GOOS, os.Getenv, path)

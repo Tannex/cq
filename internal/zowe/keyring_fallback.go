@@ -1,6 +1,6 @@
 //go:build !linux && !freebsd && !netbsd && !openbsd && !dragonfly && !windows
 
-package main
+package zowe
 
 import (
 	"errors"
@@ -8,10 +8,10 @@ import (
 	keyring "github.com/zalando/go-keyring"
 )
 
-func (systemZoweKeyring) Get(service, account string) (string, error) {
+func (systemKeyring) Get(service, account string) (string, error) {
 	value, err := keyring.Get(service, account)
 	if errors.Is(err, keyring.ErrNotFound) {
-		return "", errZoweSecretNotFound
+		return "", ErrSecretNotFound
 	}
 	return value, err
 }

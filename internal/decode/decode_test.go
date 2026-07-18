@@ -122,6 +122,45 @@ func TestString(t *testing.T) {
 	}
 }
 
+func TestDisplayStringSuppressesControls(t *testing.T) {
+	cp037 := mustCM(t, "037")
+	latin1 := mustCM(t, "latin1")
+	tests := []struct {
+		name string
+		raw  []byte
+		cm   *Charmap
+		want string
+	}{
+		{name: "embedded and trailing low values", raw: []byte{0xC1, 0x00, 0xC2, 0x00}, cm: cp037, want: "A·B·"},
+		{name: "all low values", raw: []byte{0x00, 0x00, 0x00}, cm: cp037, want: "···"},
+		{name: "spaces after low value are trimmed", raw: []byte{0xC1, 0x00, 0x40, 0x40}, cm: cp037, want: "A·"},
+		{name: "C0 and C1 controls", raw: []byte{'A', '\n', 0x1b, 0x7f, 0x85, 'B'}, cm: latin1, want: "A····B"},
+		{name: "ordinary printable text remains unchanged", raw: []byte{'A', 0xa3, 'B', ' '}, cm: latin1, want: "A£B"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := DisplayString(tc.raw, tc.cm); got != tc.want {
+				t.Fatalf("DisplayString(% X) = %q, want %q", tc.raw, got, tc.want)
+			}
+		})
+	}
+
+	// The strict helper deliberately keeps its established trimming behavior.
+	if got := String([]byte{0xC1, 0x00, 0x00}, cp037); got != "A" {
+		t.Fatalf("strict String regression: got %q, want A", got)
+	}
+}
+
+func TestDisplayBytesPreservesWidthAndSuppressesControls(t *testing.T) {
+	latin1 := mustCM(t, "latin1")
+	if got := DisplayBytes([]byte{'A', 0x00, '\n', ' ', 'B'}, latin1); got != "A·· B" {
+		t.Fatalf("DisplayBytes = %q, want visible fixed-width output", got)
+	}
+	if got := DisplayBytes([]byte{0x00, 0x00}, nil); got != "··" {
+		t.Fatalf("DisplayBytes nil charmap = %q", got)
+	}
+}
+
 // --- EncodeString -----------------------------------------------------------
 
 func TestEncodeString(t *testing.T) {

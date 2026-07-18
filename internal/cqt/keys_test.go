@@ -1,0 +1,258 @@
+package cqt
+
+import (
+	"slices"
+	"testing"
+
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
+)
+
+func keyPress(code rune, text string) tea.KeyPressMsg {
+	return tea.KeyPressMsg(tea.Key{Code: code, Text: text})
+}
+
+func TestFunctionKeysUseActualBubbleTeaMessagesInEveryWideMode(t *testing.T) {
+	keys := DefaultKeyMap()
+	f10 := keyPress(tea.KeyF10, "")
+	f11 := keyPress(tea.KeyF11, "")
+	for _, mode := range []RecordMode{ModeRaw, ModeTable, ModeJSON} {
+		ctx := keyContext{Screen: ScreenRecords, Mode: mode}
+		if got := keys.actionFor(f10, ctx); got != actionWideLeft {
+			t.Fatalf("mode %d F10 action = %d", mode, got)
+		}
+		if got := keys.actionFor(f11, ctx); got != actionWideRight {
+			t.Fatalf("mode %d F11 action = %d", mode, got)
+		}
+	}
+}
+
+func TestHorizontalPanKeysAreScopedToRecordViews(t *testing.T) {
+	keys := DefaultKeyMap()
+	records := keyContext{Screen: ScreenRecords}
+	for _, test := range []struct {
+		message tea.KeyPressMsg
+		want    action
+	}{
+		{keyPress(tea.KeyF10, ""), actionWideLeft},
+		{tea.KeyPressMsg(tea.Key{Code: tea.KeyLeft}), actionWideLeft},
+		{keyPress('h', "h"), actionWideLeft},
+		{keyPress(tea.KeyF11, ""), actionWideRight},
+		{tea.KeyPressMsg(tea.Key{Code: tea.KeyRight}), actionWideRight},
+		{keyPress('l', "l"), actionWideRight},
+	} {
+		if got := keys.actionFor(test.message, records); got != test.want {
+			t.Fatalf("records key %q action = %d, want %d", test.message.String(), got, test.want)
+		}
+	}
+	for _, screen := range []Screen{ScreenDataSets, ScreenMembers} {
+		ctx := keyContext{Screen: screen}
+		for _, message := range []tea.KeyPressMsg{
+			keyPress(tea.KeyF10, ""), tea.KeyPressMsg(tea.Key{Code: tea.KeyLeft}), keyPress('h', "h"),
+			keyPress(tea.KeyF11, ""), tea.KeyPressMsg(tea.Key{Code: tea.KeyRight}), keyPress('l', "l"),
+		} {
+			if got := keys.actionFor(message, ctx); got != actionNone {
+				t.Fatalf("screen %d key %q dispatched action %d", screen, message.String(), got)
+			}
+		}
+	}
+}
+
+func TestSlashFiltersListsAndLocatesRecords(t *testing.T) {
+	keys := DefaultKeyMap()
+	for _, screen := range []Screen{ScreenDataSets, ScreenMembers, ScreenRecords} {
+		if got := keys.actionFor(keyPress('/', "/"), keyContext{Screen: screen}); got != actionSearch {
+			t.Fatalf("screen %d slash action = %d", screen, got)
+		}
+	}
+	if help := keys.Locate.Help(); help.Desc != "locate" {
+		t.Fatalf("locate help = %#v", help)
+	}
+}
+
+func TestFocusedInputAndDialogSuppressGlobalShortcuts(t *testing.T) {
+	keys := DefaultKeyMap()
+	messages := []tea.KeyPressMsg{
+		keyPress('q', "q"),
+		keyPress('r', "r"),
+		keyPress('c', "c"),
+		keyPress(tea.KeyF10, ""),
+		keyPress(tea.KeyF11, ""),
+	}
+	for _, context := range []keyContext{
+		{Screen: ScreenRecords, Mode: ModeTable, InputFocused: true},
+		{Screen: ScreenRecords, Mode: ModeJSON, DialogOpen: true},
+	} {
+		for _, message := range messages {
+			if got := keys.actionFor(message, context); got != actionNone {
+				t.Fatalf("focused context %#v key %q dispatched action %d", context, message.String(), got)
+			}
+		}
+	}
+	if got := keys.actionFor(keyPress(tea.KeyEnter, ""), keyContext{InputFocused: true}); got != actionAccept {
+		t.Fatalf("focused Enter action = %d", got)
+	}
+	if got := keys.actionFor(keyPress(tea.KeyEscape, ""), keyContext{DialogOpen: true}); got != actionCancel {
+		t.Fatalf("dialog Esc action = %d", got)
+	}
+}
+
+func TestShowHelpSuppressesNavigationAndEnablesScrolling(t *testing.T) {
+	keys := DefaultKeyMap()
+	ctx := keyContext{Screen: ScreenRecords, Mode: ModeTable, ShowHelp: true}
+	if got := keys.actionFor(keyPress('r', "r"), ctx); got != actionNone {
+		t.Fatalf("r dispatched action %d while help is open", got)
+	}
+	if got := keys.actionFor(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}), ctx); got != actionHelpUp {
+		t.Fatalf("up dispatched action %d while help is open", got)
+	}
+	if got := keys.actionFor(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}), ctx); got != actionHelpDown {
+		t.Fatalf("down dispatched action %d while help is open", got)
+	}
+	if got := keys.actionFor(tea.KeyPressMsg(tea.Key{Code: tea.KeyPgUp}), ctx); got != actionHelpPageUp {
+		t.Fatalf("pgup dispatched action %d while help is open", got)
+	}
+	if got := keys.actionFor(tea.KeyPressMsg(tea.Key{Code: tea.KeyPgDown}), ctx); got != actionHelpPageDown {
+		t.Fatalf("pgdn dispatched action %d while help is open", got)
+	}
+	if got := keys.actionFor(tea.KeyPressMsg(tea.Key{Code: tea.KeyHome}), ctx); got != actionHelpTop {
+		t.Fatalf("home dispatched action %d while help is open", got)
+	}
+	if got := keys.actionFor(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnd}), ctx); got != actionHelpBottom {
+		t.Fatalf("end dispatched action %d while help is open", got)
+	}
+	if got := keys.actionFor(keyPress('?', "?"), ctx); got != actionHelp {
+		t.Fatalf("? did not toggle help while help is open")
+	}
+	if got := keys.actionFor(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}), ctx); got != actionHelp {
+		t.Fatalf("esc did not close help while help is open")
+	}
+	if got := keys.actionFor(keyPress('q', "q"), ctx); got != actionQuit {
+		t.Fatalf("q did not quit while help is open")
+	}
+}
+
+func TestRecordShortHelpExposesClearOverlay(t *testing.T) {
+	keys := DefaultKeyMap()
+	withoutOverlay := keys.shortHelp(keyContext{Screen: ScreenRecords}, false)
+	withOverlay := keys.shortHelp(keyContext{Screen: ScreenRecords}, true)
+
+	containsClear := func(bindings []key.Binding) bool {
+		for _, binding := range bindings {
+			if slices.Equal(binding.Keys(), keys.ClearOverlay.Keys()) {
+				return true
+			}
+		}
+		return false
+	}
+	if containsClear(withoutOverlay) {
+		t.Fatal("clear overlay appeared in short help without an overlay")
+	}
+	if !containsClear(withOverlay) {
+		t.Fatal("clear overlay missing from short help with an active overlay")
+	}
+}
+
+func TestJSONHelpDescribesPageKeysAsViewportScrolling(t *testing.T) {
+	groups := DefaultKeyMap().fullHelp(keyContext{Screen: ScreenRecords, Mode: ModeJSON}, true)
+	var descriptions []string
+	for _, group := range groups {
+		for _, binding := range group.Bindings {
+			descriptions = append(descriptions, binding.Help().Desc)
+		}
+	}
+	if !slices.Contains(descriptions, "scroll JSON up") || !slices.Contains(descriptions, "scroll JSON down") {
+		t.Fatalf("JSON help descriptions = %#v", descriptions)
+	}
+}
+
+func TestF10AndF11DoNotCollideWithOtherBindings(t *testing.T) {
+	keys := DefaultKeyMap()
+	others := []key.Binding{
+		keys.Up, keys.Down, keys.PageUp, keys.PageDown, keys.Top, keys.Bottom,
+		keys.Open, keys.Back, keys.Search, keys.Locate, keys.Refresh, keys.Copybook,
+		keys.ClearOverlay, keys.ToggleOverlay, keys.ToggleView, keys.Diagnostics,
+		keys.Help, keys.Quit, keys.Accept, keys.Cancel, keys.NextField, keys.PreviousField,
+	}
+	for _, binding := range others {
+		for _, configured := range binding.Keys() {
+			if configured == "f10" || configured == "f11" {
+				t.Fatalf("binding %v collides with reserved function key %q", binding.Help(), configured)
+			}
+		}
+	}
+	if got := keys.WideLeft.Keys(); !slices.Equal(got, []string{"f10", "left", "h"}) {
+		t.Fatalf("left pan binding = %#v", got)
+	}
+	if got := keys.WideRight.Keys(); !slices.Equal(got, []string{"f11", "right", "l"}) {
+		t.Fatalf("right pan binding = %#v", got)
+	}
+}
+
+func TestProfileKeysSwitchOnlyWhenTabsEnabledAndUnfocused(t *testing.T) {
+	keys := DefaultKeyMap()
+	tab := tea.KeyPressMsg(tea.Key{Code: tea.KeyTab})
+	shiftTab := tea.KeyPressMsg(tea.Key{Code: tea.KeyTab, Mod: tea.ModShift})
+
+	if got := keys.actionFor(tab, keyContext{Tabs: true}); got != actionNextProfile {
+		t.Fatalf("tab without tabs action = %d", got)
+	}
+	if got := keys.actionFor(shiftTab, keyContext{Tabs: true}); got != actionPreviousProfile {
+		t.Fatalf("shift+tab without tabs action = %d", got)
+	}
+	if got := keys.actionFor(tab, keyContext{Tabs: false}); got != actionNone {
+		t.Fatalf("tab dispatched profile action without tabs: %d", got)
+	}
+	if got := keys.actionFor(tab, keyContext{Tabs: true, InputFocused: true}); got != actionNone {
+		t.Fatalf("tab switched profiles while input focused: %d", got)
+	}
+	if got := keys.actionFor(tab, keyContext{Tabs: true, DialogOpen: true}); got != actionNextField {
+		t.Fatalf("tab did not move dialog field while dialog open: %d", got)
+	}
+	if got := keys.actionFor(tab, keyContext{Tabs: true, ShowHelp: true}); got != actionNone {
+		t.Fatalf("tab switched profiles while help open: %d", got)
+	}
+}
+
+func TestProfileHelpAppearsOnlyWithTabs(t *testing.T) {
+	keys := DefaultKeyMap()
+	withoutTabs := keys.shortHelp(keyContext{Screen: ScreenDataSets, Tabs: false}, false)
+	withTabs := keys.shortHelp(keyContext{Screen: ScreenDataSets, Tabs: true}, false)
+
+	contains := func(bindings []key.Binding, want key.Binding) bool {
+		for _, binding := range bindings {
+			if slices.Equal(binding.Keys(), want.Keys()) {
+				return true
+			}
+		}
+		return false
+	}
+	if contains(withoutTabs, keys.NextProfile) {
+		t.Fatal("next profile appeared in short help without tabs")
+	}
+	if !contains(withTabs, keys.NextProfile) || !contains(withTabs, keys.PreviousProfile) {
+		t.Fatalf("profile keys missing from tab short help: %#v", withTabs)
+	}
+
+	fullWithout := keys.fullHelp(keyContext{Screen: ScreenDataSets, Tabs: false}, false)
+	fullWith := keys.fullHelp(keyContext{Screen: ScreenDataSets, Tabs: true}, false)
+	bindingInGroup := func(groups []helpGroup, groupName string, want key.Binding) bool {
+		for _, group := range groups {
+			if group.Name != groupName {
+				continue
+			}
+			for _, binding := range group.Bindings {
+				if slices.Equal(binding.Keys(), want.Keys()) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	if bindingInGroup(fullWithout, "GENERAL", keys.NextProfile) {
+		t.Fatal("next profile appeared in full help without tabs")
+	}
+	if !bindingInGroup(fullWith, "GENERAL", keys.NextProfile) || !bindingInGroup(fullWith, "GENERAL", keys.PreviousProfile) {
+		t.Fatalf("profile keys missing from full help GENERAL group with tabs")
+	}
+}

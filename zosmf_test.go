@@ -18,6 +18,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/Tannex/cq/internal/dsncopy"
+	"github.com/Tannex/cq/internal/zowe"
 )
 
 type fakeCopybookMember struct {
@@ -33,7 +36,7 @@ type fakeCopybookFetcher struct {
 	requests []string
 }
 
-func (f *fakeCopybookFetcher) fetchCopybook(ctx context.Context, dsn string) ([]byte, error) {
+func (f *fakeCopybookFetcher) FetchText(ctx context.Context, dsn string) ([]byte, error) {
 	f.mu.Lock()
 	f.requests = append(f.requests, dsn)
 	f.mu.Unlock()
@@ -57,6 +60,10 @@ func (f *fakeCopybookFetcher) requestedDSNs() []string {
 	requests := append([]string(nil), f.requests...)
 	sort.Strings(requests)
 	return requests
+}
+
+func newTestDSNCopyResolver(searchPaths []string, fetcher dsncopy.Fetcher) *dsncopy.Resolver {
+	return dsncopy.New(searchPaths, fetcher, nil)
 }
 
 type zosmfServerMember struct {
@@ -148,7 +155,7 @@ func configureTestZOSMF(t *testing.T, members map[string]zosmfServerMember, sear
 	t.Cleanup(server.Close)
 
 	originalLoader := loadDefaultZoweSession
-	loadDefaultZoweSession = func() (zoweSession, error) {
+	loadDefaultZoweSession = func() (zowe.Session, error) {
 		return zosmfSessionForServer(t, server), nil
 	}
 	t.Cleanup(func() { loadDefaultZoweSession = originalLoader })
@@ -173,7 +180,7 @@ func TestDSNCopyResolverUsesSearchOrderAndCache(t *testing.T) {
 	transport := &fakeCopybookFetcher{members: map[string]fakeCopybookMember{
 		"HQL.COB.SRC(ADDRESS)": {data: []byte("05 ADDRESS PIC X(10).\n")},
 	}}
-	resolver := newDSNCopyResolver([]string{"HQL.CPY.SRC", "HQL.COB.SRC"}, transport)
+	resolver := newTestDSNCopyResolver([]string{"HQL.CPY.SRC", "HQL.COB.SRC"}, transport)
 
 	for range 2 {
 		src, err := resolver.Resolve("ADDRESS")
@@ -195,7 +202,7 @@ func TestDSNCopyResolverPrefersEarlierLibrary(t *testing.T) {
 		"HQL.CPY.SRC(ADDRESS)": {data: []byte("05 ADDRESS PIC X(10).\n")},
 		"HQL.COB.SRC(ADDRESS)": {data: []byte("05 ADDRESS PIC X(99).\n")},
 	}}
-	resolver := newDSNCopyResolver([]string{"HQL.CPY.SRC", "HQL.COB.SRC"}, transport)
+	resolver := newTestDSNCopyResolver([]string{"HQL.CPY.SRC", "HQL.COB.SRC"}, transport)
 
 	src, err := resolver.Resolve("ADDRESS")
 	if err != nil {
@@ -220,7 +227,7 @@ func TestDSNCopyResolverDoesNotWaitForSlowerLaterLibrary(t *testing.T) {
 		"HQL.CPY.SRC(ADDRESS)": {data: []byte("05 ADDRESS PIC X(10).\n")},
 		"HQL.COB.SRC(ADDRESS)": {waitForCancel: true},
 	}}
-	resolver := newDSNCopyResolver([]string{"HQL.CPY.SRC", "HQL.COB.SRC"}, transport)
+	resolver := newTestDSNCopyResolver([]string{"HQL.CPY.SRC", "HQL.COB.SRC"}, transport)
 
 	src, err := resolver.Resolve("ADDRESS")
 	if err != nil {
@@ -236,7 +243,7 @@ func TestDSNCopyResolverCachesFailuresAndListsThemInSearchOrder(t *testing.T) {
 		"HQL.CPY.SRC(ADDRESS)": {err: errors.New("first library failure")},
 		"HQL.COB.SRC(ADDRESS)": {err: errors.New("second library failure")},
 	}}
-	resolver := newDSNCopyResolver([]string{"HQL.CPY.SRC", "HQL.COB.SRC"}, transport)
+	resolver := newTestDSNCopyResolver([]string{"HQL.CPY.SRC", "HQL.COB.SRC"}, transport)
 
 	for range 2 {
 		_, err := resolver.Resolve("ADDRESS")
@@ -255,7 +262,7 @@ func TestDSNCopyResolverCachesFailuresAndListsThemInSearchOrder(t *testing.T) {
 }
 
 func TestDSNCopyResolverRequiresSearchPath(t *testing.T) {
-	resolver := newDSNCopyResolver(nil, nil)
+	resolver := newTestDSNCopyResolver(nil, nil)
 
 	_, err := resolver.Resolve("ADDRESS")
 	if err == nil || !strings.Contains(err.Error(), "dsnSearchPath") {

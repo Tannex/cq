@@ -2,6 +2,8 @@ package record
 
 import (
 	"bytes"
+	"encoding/json"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -238,6 +240,247 @@ func zonedUnsigned(digits string) []byte {
 		b[i] = 0xF0 | (digits[i] - '0')
 	}
 	return b
+}
+
+func TestDecodeDisplayLocalizesInvalidScalars(t *testing.T) {
+	d := mustDecoder(t, `01 R.
+   05 PREFIX PIC X(3).
+   05 ZONED-VALUE PIC 9(3).
+   05 PACKED-VALUE PIC S9(3) COMP-3.
+   05 SIGNED-VALUE PIC S9(2) SIGN TRAILING SEPARATE.
+   05 AFTER PIC X(2).
+`)
+	rec := []byte{0xC1, 0x00, 0x00}
+	rec = append(rec, 0xF1, 0xFA, 0xF3)
+	rec = append(rec, 0x1A, 0x3C)
+	rec = append(rec, zonedUnsigned("45")...)
+	rec = append(rec, ebc(t, "X", 1)...)
+	rec = append(rec, ebc(t, "OK", 2)...)
+
+	decoded, err := d.DecodeDisplay(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := decoded.JSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"PREFIX":"A··","ZONED-VALUE":"1�3","PACKED-VALUE":"1�3","SIGNED-VALUE":"45�","AFTER":"OK"}`
+	if string(got) != want {
+		t.Fatalf("display JSON = %s, want %s", got, want)
+	}
+	if !json.Valid(got) {
+		t.Fatalf("display JSON is invalid: %s", got)
+	}
+	if len(decoded.Diagnostics) != 4 {
+		t.Fatalf("diagnostics = %#v, want four", decoded.Diagnostics)
+	}
+	checks := []struct {
+		path   string
+		offset int
+		length int
+		raw    string
+	}{
+		{path: "PREFIX", offset: 0, length: 3, raw: "C10000"},
+		{path: "ZONED-VALUE", offset: 3, length: 3, raw: "F1FAF3"},
+		{path: "PACKED-VALUE", offset: 6, length: 2, raw: "1A3C"},
+		{path: "SIGNED-VALUE", offset: 8, length: 3},
+	}
+	for i, check := range checks {
+		diagnostic := decoded.Diagnostics[i]
+		if diagnostic.FieldPath != check.path || diagnostic.Offset != check.offset || diagnostic.Length != check.length {
+			t.Errorf("diagnostic %d = %#v, want path=%s offset=%d length=%d", i, diagnostic, check.path, check.offset, check.length)
+		}
+		if check.raw != "" && diagnostic.RawHex != check.raw {
+			t.Errorf("diagnostic %d raw = %q, want %q", i, diagnostic.RawHex, check.raw)
+		}
+		if diagnostic.Err == nil {
+			t.Errorf("diagnostic %d has no original error", i)
+		}
+	}
+	if !errors.Is(decoded.Diagnostics[0], ErrLowValue) {
+		t.Fatalf("LOW-VALUE diagnostic does not wrap ErrLowValue: %v", decoded.Diagnostics[0])
+	}
+	if !strings.Contains(decoded.Diagnostics[1].Err.Error(), "invalid digit nibble") {
+		t.Fatalf("zoned diagnostic lost decoder error: %v", decoded.Diagnostics[1].Err)
+	}
+	if after, ok := decoded.Value.Lookup("AFTER"); !ok || after != "OK" {
+		t.Fatalf("independent field after invalid scalars was not decoded: %#v", after)
+	}
+}
+
+func TestDecodeDisplayEditedLowValues(t *testing.T) {
+	d := mustDecoder(t, `01 R.
+   05 EDITED-VALUE PIC ZZ9.
+`)
+	if d.Rec.Children[0].Kind != layout.KindEdited {
+		t.Fatalf("test field kind = %s, want edited", d.Rec.Children[0].Kind)
+	}
+	rec := []byte{0xF1, 0x00, 0x00}
+	decoded, err := d.DecodeDisplay(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, _ := decoded.Value.Lookup("EDITED-VALUE")
+	if value != "1··" || len(decoded.Diagnostics) != 1 || !errors.Is(decoded.Diagnostics[0], ErrLowValue) {
+		t.Fatalf("edited LOW-VALUE result = %#v diagnostics=%#v", value, decoded.Diagnostics)
+	}
+}
+
+func TestDecodeDisplayNestedDiagnosticPath(t *testing.T) {
+	d := mustDecoder(t, custBook)
+	rec := custRecord(t)
+	rec[28] = 0xFA // ITEMS(2).ITEM-QTY, absolute offset 28
+
+	decoded, err := d.DecodeDisplay(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.Diagnostics) != 1 {
+		t.Fatalf("diagnostics = %#v, want one", decoded.Diagnostics)
+	}
+	diagnostic := decoded.Diagnostics[0]
+	if diagnostic.FieldPath != "ITEMS[2].ITEM-QTY" || diagnostic.Offset != 28 || diagnostic.Length != 3 {
+		t.Fatalf("nested diagnostic = %#v", diagnostic)
+	}
+	itemsValue, _ := decoded.Value.Lookup("ITEMS")
+	items := itemsValue.(Array)
+	second := items[1].(Object)
+	qty, _ := second.Lookup("ITEM-QTY")
+	if qty != "-�20" {
+		t.Fatalf("localized nested value = %#v, want %q", qty, "-�20")
+	}
+}
+
+func TestDecodeDisplayKeepsValidNumbersExact(t *testing.T) {
+	d := mustDecoder(t, `01 R.
+   05 BIG PIC 9(18)V99.
+   05 AMOUNT PIC S9(5)V99 COMP-3.
+`)
+	rec := append(zonedUnsigned("12345678901234567890"), packed("0012300", false)...)
+	decoded, err := d.DecodeDisplay(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.Diagnostics) != 0 {
+		t.Fatalf("unexpected diagnostics: %#v", decoded.Diagnostics)
+	}
+	big, _ := decoded.Value.Lookup("BIG")
+	amount, _ := decoded.Value.Lookup("AMOUNT")
+	if big != json.Number("123456789012345678.90") || amount != json.Number("123.00") {
+		t.Fatalf("numbers lost exact representation: BIG=%#v AMOUNT=%#v", big, amount)
+	}
+	got, err := decoded.JSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"BIG":123456789012345678.90,"AMOUNT":123.00}`; string(got) != want {
+		t.Fatalf("JSON = %s, want %s", got, want)
+	}
+}
+
+func TestDecodeDisplayStructuralErrorsRemainFatal(t *testing.T) {
+	t.Run("short fixed record including skipped filler", func(t *testing.T) {
+		d := mustDecoder(t, `01 R.
+   05 A PIC X(2).
+   05 FILLER PIC X(3).
+`)
+		rec := ebc(t, "OK", 2)
+
+		// This is existing strict behavior: a skipped trailing filler is not read.
+		strict, err := d.Decode(rec)
+		if err != nil || string(strict) != `{"A":"OK"}` {
+			t.Fatalf("strict regression: JSON=%s error=%v", strict, err)
+		}
+		if _, err := d.DecodeDisplay(rec); err == nil || !strings.Contains(err.Error(), "record R is short") {
+			t.Fatalf("want hard short-record error, got %v", err)
+		}
+	})
+
+	t.Run("invalid ODO counter", func(t *testing.T) {
+		d := mustDecoder(t, odoBook)
+		rec := append([]byte{0xF0, 0xFA, 0xF2}, ebc(t, "AAAA", 4)...)
+		if _, err := d.DecodeDisplay(rec); err == nil || !strings.Contains(err.Error(), "decoding DEPENDING ON") {
+			t.Fatalf("want hard ODO decode error, got %v", err)
+		}
+	})
+
+	t.Run("ODO below declared minimum", func(t *testing.T) {
+		d := mustDecoder(t, odoBook)
+		if _, err := d.DecodeDisplay(zoned("000", false)); err == nil || !strings.Contains(err.Error(), "outside 1..5") {
+			t.Fatalf("want hard ODO minimum error, got %v", err)
+		}
+	})
+
+	t.Run("short ODO tail", func(t *testing.T) {
+		d := mustDecoder(t, odoBook)
+		rec := append(zoned("002", false), ebc(t, "AAAA", 4)...)
+		if _, err := d.DecodeDisplay(rec); err == nil || !strings.Contains(err.Error(), "requires 11 bytes") {
+			t.Fatalf("want hard ODO short-record error, got %v", err)
+		}
+	})
+}
+
+func TestDecodeDisplayBoundsDiagnosticRawHex(t *testing.T) {
+	d := mustDecoder(t, `01 R.
+   05 N PIC 9(40).
+`)
+	rec := bytes.Repeat([]byte{0xFA}, 40)
+	decoded, err := d.DecodeDisplay(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.Diagnostics) != 1 {
+		t.Fatalf("diagnostics = %#v", decoded.Diagnostics)
+	}
+	raw := decoded.Diagnostics[0].RawHex
+	if len(raw) != diagnosticRawByteLimit*2+3 || !strings.HasSuffix(raw, "...") {
+		t.Fatalf("bounded raw hex = %q (length %d)", raw, len(raw))
+	}
+}
+
+func TestNewDecoderStrictValidationRegression(t *testing.T) {
+	items, err := copybook.Parse(`01 R.
+   05 N PIC 9.
+   05 T OCCURS 1 TO 2 TIMES DEPENDING ON N PIC X.
+   05 AFTER PIC X.
+`, copybook.FormatFree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records, err := layout.Build(items)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = NewDecoder(records[0], cp037(t))
+	want := "record R: OCCURS DEPENDING ON table T is not at the end of the record; only trailing ODO is supported"
+	if err == nil || err.Error() != want {
+		t.Fatalf("NewDecoder error = %v, want %q", err, want)
+	}
+}
+
+func TestStrictDecodeErrorAndLowValueRegression(t *testing.T) {
+	t.Run("invalid zoned error", func(t *testing.T) {
+		d := mustDecoder(t, `01 R.
+   05 N PIC 9(2).
+   05 AFTER PIC X(1).
+`)
+		_, err := d.Decode([]byte{0xFA, 0xF1, 0xC1})
+		want := "field N (offset 0): decode: Zoned: invalid digit nibble 0xA at byte 0 (0xFA)"
+		if err == nil || err.Error() != want {
+			t.Fatalf("strict error = %v, want %q", err, want)
+		}
+	})
+
+	t.Run("trailing low values remain trimmed", func(t *testing.T) {
+		d := mustDecoder(t, `01 R.
+   05 TEXT-VALUE PIC X(3).
+`)
+		got, err := d.Decode([]byte{0xC1, 0x00, 0x00})
+		if err != nil || string(got) != `{"TEXT-VALUE":"A"}` {
+			t.Fatalf("strict JSON=%s error=%v", got, err)
+		}
+	})
 }
 
 func cp037(t *testing.T) *decode.Charmap {

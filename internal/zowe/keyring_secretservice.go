@@ -1,6 +1,6 @@
 //go:build linux || freebsd || netbsd || openbsd || dragonfly
 
-package main
+package zowe
 
 import (
 	dbus "github.com/godbus/dbus/v5"
@@ -11,7 +11,7 @@ import (
 // backend. They are named "service" and "account"; the generic go-keyring
 // API uses "username" instead, so using it directly would not find an
 // existing Zowe entry on Linux/BSD.
-func (systemZoweKeyring) Get(service, account string) (string, error) {
+func (systemKeyring) Get(service, account string) (string, error) {
 	vault, err := ss.NewSecretService()
 	if err != nil {
 		return "", err
@@ -31,7 +31,7 @@ func (systemZoweKeyring) Get(service, account string) (string, error) {
 		return "", err
 	}
 	if len(items) == 0 {
-		return "", errZoweSecretNotFound
+		return "", ErrSecretNotFound
 	}
 	return getZoweSecretServiceItem(vault, items[0])
 }
