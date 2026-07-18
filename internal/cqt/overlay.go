@@ -174,14 +174,7 @@ func overlayColumns(rec *layout.Record) []fieldColumn {
 				path = prefix + "." + child.Name
 			}
 			if child.Occurs > 0 || child.Kind != layout.KindGroup {
-				width := len(path)
-				if width < 10 {
-					width = 10
-				}
-				if width > 28 {
-					width = 28
-				}
-				columns = append(columns, fieldColumn{Path: path, Parts: strings.Split(path, "."), Width: width})
+				columns = append(columns, fieldColumn{Path: path, Parts: strings.Split(path, "."), Width: columnWidth(path, child)})
 				continue
 			}
 			walk(child, path)
@@ -189,6 +182,50 @@ func overlayColumns(rec *layout.Record) []fieldColumn {
 	}
 	walk(rec.Field, "")
 	return columns
+}
+
+const (
+	minColumnWidth  = 10
+	maxHeaderWidth  = 28
+	jsonColumnWidth = 40
+	floatValueWidth = 14
+)
+
+// columnWidth sizes a column to fit the widest value the field can render, so
+// table cells never silently truncate data. The header path contributes up to
+// maxHeaderWidth, matching the pre-existing header clamp.
+func columnWidth(path string, field *layout.Field) int {
+	width := min(len(path), maxHeaderWidth)
+	if data := fieldDisplayWidth(field); data > width {
+		width = data
+	}
+	return max(width, minColumnWidth)
+}
+
+// fieldDisplayWidth estimates the widest rendering of a field's decoded value.
+func fieldDisplayWidth(field *layout.Field) int {
+	if field.Occurs > 0 || field.Kind == layout.KindGroup {
+		// Arrays and groups render as compact JSON with no fixed bound; give
+		// them a generous column and leave full inspection to the JSON view.
+		return jsonColumnWidth
+	}
+	switch field.Kind {
+	case layout.KindText, layout.KindEdited:
+		return field.Length
+	case layout.KindZoned, layout.KindPacked, layout.KindBinary:
+		width := field.Digits
+		if field.Signed {
+			width++
+		}
+		if field.Scale > 0 {
+			width += 2 // decimal point plus a possible leading zero
+		}
+		return width
+	case layout.KindFloat:
+		return floatValueWidth
+	default:
+		return minColumnWidth
+	}
 }
 
 func valueAtPath(value record.Object, parts []string) (record.Value, bool) {

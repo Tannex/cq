@@ -96,6 +96,36 @@ func TestOverlayColumnsFlattenGroupsButKeepOccursAsCompactCells(t *testing.T) {
 	}
 }
 
+func TestOverlayColumnWidthsFitFieldData(t *testing.T) {
+	built, err := buildOverlay(context.Background(), CopybookSource{Local: "book", Format: "free"}, "latin1", &fakeBrowser{}, func(context.Context, string) ([]byte, error) {
+		return []byte(`01 R.
+ 05 NAME PIC X(20).
+ 05 AMT PIC S9(7)V99.
+ 05 CODES PIC X OCCURS 4 TIMES.
+`), nil
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(built.Columns) != 3 {
+		t.Fatalf("columns = %#v", built.Columns)
+	}
+	// A short-named X(20) column must fit its 20-character values, not just
+	// the header path.
+	if built.Columns[0].Width != 20 {
+		t.Fatalf("NAME width = %d", built.Columns[0].Width)
+	}
+	// Signed decimal: seven integer digits, two decimals, sign, point, and a
+	// possible leading zero.
+	if built.Columns[1].Width < 12 {
+		t.Fatalf("AMT width = %d", built.Columns[1].Width)
+	}
+	// OCCURS renders as compact JSON and gets the generous JSON column width.
+	if built.Columns[2].Width != jsonColumnWidth {
+		t.Fatalf("CODES width = %d", built.Columns[2].Width)
+	}
+}
+
 func TestInvalidOverlayResultRetainsPreviousValidOverlay(t *testing.T) {
 	model := &Model{
 		workspace: workspace{
