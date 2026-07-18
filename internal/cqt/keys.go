@@ -232,7 +232,7 @@ func (k KeyMap) shortHelp(ctx keyContext, overlay bool) []key.Binding {
 	} else {
 		bindings = append(bindings, k.Locate, k.WideLeft, k.WideRight, k.Copybook)
 		if overlay {
-			bindings = append(bindings, k.ToggleOverlay, k.ToggleView)
+			bindings = append(bindings, k.ToggleOverlay, k.ToggleView, k.ClearOverlay)
 		}
 	}
 	return append(bindings, k.Help, k.Quit)

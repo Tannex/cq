@@ -416,7 +416,7 @@ func TestTinyLoadingEmptyErrorAndDialogViewsAreExplicit(t *testing.T) {
 
 	model.dialog = newCopybookDialog(CopybookSource{Local: "customer.cpy", Format: "free", Record: "CUSTOMER"})
 	content := model.View().Content
-	for _, want := range []string{"COPYBOOK OVERLAY", "LOCAL", "DSN", "FORMAT", "RECORD", "previous valid overlay is retained"} {
+	for _, want := range []string{"COPYBOOK OVERLAY", "LOCAL", "DSN", "FORMAT", "RECORD", "empty clears overlay"} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("dialog view missing %q: %q", want, content)
 		}

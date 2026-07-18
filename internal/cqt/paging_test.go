@@ -119,60 +119,79 @@ func TestPagerSuppressesPrefetchWhileRequestPending(t *testing.T) {
 	}
 }
 
-func TestPagerMovesCursorAcrossViewportBeforeScrolling(t *testing.T) {
+func TestPagerScrollsAtOneRowViewportMargin(t *testing.T) {
 	keys := []string{"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"}
 	var p pager[string]
 	p.reset(5, 24)
 	p.apply(keys, false, p.initialPlan(""))
 
-	p.bottom()
-	assertPagerWindow(t, &p, 11, 7, 4, scrollIdle)
 	for _, want := range []struct {
 		selected, start, offset int
-		scrolling               scrollDirection
 	}{
-		{10, 7, 3, scrollIdle},
-		{9, 7, 2, scrollIdle},
-		{8, 7, 1, scrollIdle},
-		{7, 7, 0, scrollIdle},
-		{6, 5, 1, scrollUp},
-		{5, 4, 1, scrollUp},
+		{1, 0, 1},
+		{2, 0, 2},
+		{3, 0, 3},
+		{4, 1, 3},
+		{5, 2, 3},
+		{6, 3, 3},
+	} {
+		p.move(1)
+		assertPagerWindow(t, &p, want.selected, want.start, want.offset)
+	}
+
+	p.bottom()
+	assertPagerWindow(t, &p, 11, 7, 4)
+	for _, want := range []struct {
+		selected, start, offset int
+	}{
+		{10, 7, 3},
+		{9, 7, 2},
+		{8, 7, 1},
+		{7, 6, 1},
+		{6, 5, 1},
+		{5, 4, 1},
 	} {
 		p.move(-1)
-		assertPagerWindow(t, &p, want.selected, want.start, want.offset, want.scrolling)
+		assertPagerWindow(t, &p, want.selected, want.start, want.offset)
+	}
+}
+
+func TestPagerSingleStepMovementNeverJumpsAgainstDirection(t *testing.T) {
+	keys := make([]string, 30)
+	for i := range keys {
+		keys[i] = string(rune('A' + i))
+	}
+	var p pager[string]
+	p.reset(7, 30)
+	p.apply(keys, false, p.initialPlan(""))
+
+	previousOffset := p.cursorOffset()
+	for p.selectedIndex() < len(keys)-1 {
+		previousStart := p.windowStart
+		p.move(1)
+		offset := p.cursorOffset()
+		if p.windowStart == previousStart && offset < previousOffset {
+			t.Fatalf("down movement jumped upward: offset %d to %d", previousOffset, offset)
+		}
+		if p.windowStart > previousStart && offset != 5 && p.windowStart < len(keys)-p.visible {
+			t.Fatalf("down scroll offset=%d, want one-row bottom margin", offset)
+		}
+		previousOffset = offset
 	}
 
-	for _, want := range []struct {
-		selected, start, offset int
-		scrolling               scrollDirection
-	}{
-		{6, 4, 2, scrollIdle},
-		{7, 4, 3, scrollIdle},
-		{8, 4, 4, scrollIdle},
-		{9, 6, 3, scrollDown},
-	} {
-		p.move(1)
-		assertPagerWindow(t, &p, want.selected, want.start, want.offset, want.scrolling)
+	previousOffset = p.cursorOffset()
+	for p.selectedIndex() > 0 {
+		previousStart := p.windowStart
+		p.move(-1)
+		offset := p.cursorOffset()
+		if p.windowStart == previousStart && offset > previousOffset {
+			t.Fatalf("up movement jumped downward: offset %d to %d", previousOffset, offset)
+		}
+		if p.windowStart < previousStart && offset != 1 && p.windowStart > 0 {
+			t.Fatalf("up scroll offset=%d, want one-row top margin", offset)
+		}
+		previousOffset = offset
 	}
-
-	p.top()
-	assertPagerWindow(t, &p, 0, 0, 0, scrollIdle)
-	for _, want := range []struct {
-		selected, start, offset int
-		scrolling               scrollDirection
-	}{
-		{1, 0, 1, scrollIdle},
-		{2, 0, 2, scrollIdle},
-		{3, 0, 3, scrollIdle},
-		{4, 0, 4, scrollIdle},
-		{5, 2, 3, scrollDown},
-		{6, 3, 3, scrollDown},
-	} {
-		p.move(1)
-		assertPagerWindow(t, &p, want.selected, want.start, want.offset, want.scrolling)
-	}
-	p.move(5)
-	assertPagerWindow(t, &p, 11, 7, 4, scrollDown)
 }
 
 func TestPagerPageMovementPreservesCursorScreenRow(t *testing.T) {
@@ -184,21 +203,21 @@ func TestPagerPageMovementPreservesCursorScreenRow(t *testing.T) {
 	p.reset(5, 24)
 	p.apply(keys, false, p.initialPlan(""))
 	p.move(6)
-	assertPagerWindow(t, &p, 6, 3, 3, scrollDown)
+	assertPagerWindow(t, &p, 6, 3, 3)
 
 	p.page(scrollDown)
-	assertPagerWindow(t, &p, 11, 8, 3, scrollIdle)
+	assertPagerWindow(t, &p, 11, 8, 3)
 	p.page(scrollUp)
-	assertPagerWindow(t, &p, 6, 3, 3, scrollIdle)
+	assertPagerWindow(t, &p, 6, 3, 3)
 	p.page(scrollUp)
-	assertPagerWindow(t, &p, 1, 0, 1, scrollIdle)
+	assertPagerWindow(t, &p, 1, 0, 1)
 	p.page(scrollUp)
-	assertPagerWindow(t, &p, 0, 0, 0, scrollIdle)
+	assertPagerWindow(t, &p, 0, 0, 0)
 
 	p.bottom()
-	assertPagerWindow(t, &p, 19, 15, 4, scrollIdle)
+	assertPagerWindow(t, &p, 19, 15, 4)
 	p.top()
-	assertPagerWindow(t, &p, 0, 0, 0, scrollIdle)
+	assertPagerWindow(t, &p, 0, 0, 0)
 }
 
 func TestPagerAppendPreservesLiveSelectionAndWindow(t *testing.T) {
@@ -211,15 +230,15 @@ func TestPagerAppendPreservesLiveSelectionAndWindow(t *testing.T) {
 		t.Fatalf("forward plan = %#v ok=%v", plan, ok)
 	}
 	p.move(1)
-	assertPagerWindow(t, &p, 4, 3, 1, scrollDown)
+	assertPagerWindow(t, &p, 4, 3, 1)
 
 	p.apply([]string{"G", "H", "I", "J", "K", "L"}, true, plan)
-	assertPagerWindow(t, &p, 4, 3, 1, scrollDown)
+	assertPagerWindow(t, &p, 4, 3, 1)
 	if p.selectedKey() != "E" {
 		t.Fatalf("append restored request-time selection: %q", p.selectedKey())
 	}
 	p.move(1)
-	assertPagerWindow(t, &p, 5, 4, 1, scrollDown)
+	assertPagerWindow(t, &p, 5, 4, 1)
 }
 
 func TestPagerRefreshPreservesCursorOffset(t *testing.T) {
@@ -229,16 +248,16 @@ func TestPagerRefreshPreservesCursorOffset(t *testing.T) {
 	p.apply(keys, false, p.initialPlan(""))
 	p.bottom()
 	p.move(-2)
-	assertPagerWindow(t, &p, 9, 7, 2, scrollIdle)
+	assertPagerWindow(t, &p, 9, 7, 2)
 
 	plan := p.refreshPlan()
 	p.reset(5, 24)
 	p.apply(keys, false, plan)
-	assertPagerWindow(t, &p, 9, 7, 2, scrollIdle)
+	assertPagerWindow(t, &p, 9, 7, 2)
 
 	p.reset(5, 24)
 	p.apply(keys[:6], false, plan)
-	assertPagerWindow(t, &p, 0, 0, 0, scrollIdle)
+	assertPagerWindow(t, &p, 0, 0, 0)
 	if p.selectedKey() != "A" {
 		t.Fatalf("missing preserved key selected %q", p.selectedKey())
 	}
@@ -251,18 +270,18 @@ func TestPagerResizeRetainsAndReconcilesWindow(t *testing.T) {
 	p.apply(keys, false, p.initialPlan(""))
 	p.bottom()
 	p.move(-2)
-	assertPagerWindow(t, &p, 9, 7, 2, scrollIdle)
+	assertPagerWindow(t, &p, 9, 7, 2)
 
 	p.resize(3, 6)
-	assertPagerWindow(t, &p, 9, 7, 2, scrollIdle)
+	assertPagerWindow(t, &p, 9, 7, 2)
 	p.resize(2, 4)
-	assertPagerWindow(t, &p, 9, 8, 1, scrollIdle)
+	assertPagerWindow(t, &p, 9, 8, 1)
 	p.resize(0, 0)
 	if p.windowStart != 8 || p.selectedIndex() != 9 || p.cursorOffset() != -1 {
 		t.Fatalf("tiny resize selected=%d start=%d offset=%d", p.selectedIndex(), p.windowStart, p.cursorOffset())
 	}
 	p.resize(5, 10)
-	assertPagerWindow(t, &p, 9, 7, 2, scrollIdle)
+	assertPagerWindow(t, &p, 9, 7, 2)
 }
 
 func TestPagerSmallViewportsDegradeContextMargin(t *testing.T) {
@@ -270,25 +289,25 @@ func TestPagerSmallViewportsDegradeContextMargin(t *testing.T) {
 	one.reset(1, 3)
 	one.apply([]string{"A", "B", "C"}, false, one.initialPlan(""))
 	one.bottom()
-	assertPagerWindow(t, &one, 2, 2, 0, scrollIdle)
+	assertPagerWindow(t, &one, 2, 2, 0)
 	one.move(-1)
-	assertPagerWindow(t, &one, 1, 1, 0, scrollUp)
+	assertPagerWindow(t, &one, 1, 1, 0)
 
 	var two pager[string]
 	two.reset(2, 3)
 	two.apply([]string{"A", "B", "C"}, false, two.initialPlan(""))
 	two.bottom()
-	assertPagerWindow(t, &two, 2, 1, 1, scrollIdle)
+	assertPagerWindow(t, &two, 2, 1, 1)
 	two.move(-1)
-	assertPagerWindow(t, &two, 1, 1, 0, scrollIdle)
+	assertPagerWindow(t, &two, 1, 1, 0)
 	two.move(-1)
-	assertPagerWindow(t, &two, 0, 0, 0, scrollUp)
+	assertPagerWindow(t, &two, 0, 0, 0)
 }
 
-func assertPagerWindow[A comparable](t *testing.T, p *pager[A], selected, start, offset int, scrolling scrollDirection) {
+func assertPagerWindow[A comparable](t *testing.T, p *pager[A], selected, start, offset int, _ ...scrollDirection) {
 	t.Helper()
-	if p.selectedIndex() != selected || p.windowStart != start || p.cursorOffset() != offset || p.scrolling != scrolling {
-		t.Fatalf("pager selected/start/offset/scrolling = %d/%d/%d/%d, want %d/%d/%d/%d", p.selectedIndex(), p.windowStart, p.cursorOffset(), p.scrolling, selected, start, offset, scrolling)
+	if p.selectedIndex() != selected || p.windowStart != start || p.cursorOffset() != offset {
+		t.Fatalf("pager selected/start/offset = %d/%d/%d, want %d/%d/%d", p.selectedIndex(), p.windowStart, p.cursorOffset(), selected, start, offset)
 	}
 	windowStart, windowEnd := p.windowRange()
 	if windowStart != start || windowEnd != min(len(p.keys), start+p.visible) {

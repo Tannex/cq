@@ -429,6 +429,13 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		switch selectedAction {
 		case actionAccept:
 			source := m.dialog.source()
+			if source.empty() {
+				m.dialog = nil
+				if m.overlay != nil {
+					m.clearOverlay()
+				}
+				return nil
+			}
 			if _, _, err := source.validate(); err != nil {
 				m.dialog.err = err.Error()
 				return nil
@@ -530,20 +537,7 @@ func (m *Model) handleAction(selected action) tea.Cmd {
 		m.dialog.setWidth(m.width)
 		return nil
 	case actionClearOverlay:
-		m.cancelOverlay()
-		m.overlayGeneration++
-		m.cancelDecode()
-		m.overlay = nil
-		m.overlaySource = CopybookSource{}
-		m.overlayError = ""
-		m.recordMode = ModeRaw
-		m.horizontal = 0
-		m.jsonVertical = 0
-		for i := range m.records {
-			m.records[i].Decoded = nil
-			m.records[i].Err = nil
-		}
-		m.status = status{Level: statusReady, Text: "copybook overlay cleared"}
+		m.clearOverlay()
 		return nil
 	case actionToggleOverlay:
 		if m.overlay == nil {
@@ -608,6 +602,23 @@ func (m *Model) handleAction(selected action) tea.Cmd {
 		return nil
 	}
 	return nil
+}
+
+func (m *Model) clearOverlay() {
+	m.cancelOverlay()
+	m.overlayGeneration++
+	m.cancelDecode()
+	m.overlay = nil
+	m.overlaySource = CopybookSource{}
+	m.overlayError = ""
+	m.recordMode = ModeRaw
+	m.horizontal = 0
+	m.jsonVertical = 0
+	for i := range m.records {
+		m.records[i].Decoded = nil
+		m.records[i].Err = nil
+	}
+	m.status = status{Level: statusReady, Text: "copybook overlay cleared"}
 }
 
 func (m *Model) inputFocused() bool {

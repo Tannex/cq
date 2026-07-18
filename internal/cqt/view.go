@@ -122,7 +122,7 @@ func (m *Model) dialogView() string {
 	if m.dialog.err != "" {
 		lines = append(lines, "   "+consolePalette.danger.Render("ERROR  "+m.dialog.err))
 	} else {
-		lines = append(lines, "   "+consolePalette.muted.Render("Enter apply  Tab next field  Esc cancel  previous valid overlay is retained on failure"))
+		lines = append(lines, "   "+consolePalette.muted.Render("Enter apply (empty clears overlay)  Tab next  Esc cancel  errors keep prior overlay"))
 	}
 	available := max(1, m.height-4)
 	body := lipgloss.Place(m.width, available, lipgloss.Left, lipgloss.Center, strings.Join(lines, "\n"), lipgloss.WithWhitespaceChars(" "))

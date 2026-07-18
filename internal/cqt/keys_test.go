@@ -132,6 +132,27 @@ func TestShowHelpSuppressesNavigationAndEnablesScrolling(t *testing.T) {
 	}
 }
 
+func TestRecordShortHelpExposesClearOverlay(t *testing.T) {
+	keys := DefaultKeyMap()
+	withoutOverlay := keys.shortHelp(keyContext{Screen: ScreenRecords}, false)
+	withOverlay := keys.shortHelp(keyContext{Screen: ScreenRecords}, true)
+
+	containsClear := func(bindings []key.Binding) bool {
+		for _, binding := range bindings {
+			if slices.Equal(binding.Keys(), keys.ClearOverlay.Keys()) {
+				return true
+			}
+		}
+		return false
+	}
+	if containsClear(withoutOverlay) {
+		t.Fatal("clear overlay appeared in short help without an overlay")
+	}
+	if !containsClear(withOverlay) {
+		t.Fatal("clear overlay missing from short help with an active overlay")
+	}
+}
+
 func TestJSONHelpDescribesPageKeysAsViewportScrolling(t *testing.T) {
 	groups := DefaultKeyMap().fullHelp(keyContext{Screen: ScreenRecords, Mode: ModeJSON}, true)
 	var descriptions []string

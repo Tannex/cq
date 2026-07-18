@@ -784,7 +784,7 @@ func TestNavigateBackReusesCachedParentWithoutRefetch(t *testing.T) {
 	if command := model.navigateBack(); command != nil {
 		t.Fatal("returning to a cached parent unexpectedly refetched")
 	}
-	if len(browser.dataSetRequests) != 0 || len(model.datasets) != 4 || model.datasetPage.selectedKey() != "C" || model.datasetPage.windowStart != 2 {
+	if len(browser.dataSetRequests) != 0 || len(model.datasets) != 4 || model.datasetPage.selectedKey() != "C" || model.datasetPage.windowStart != 1 {
 		t.Fatalf("requests=%#v cache=%#v selected=%q start=%d", browser.dataSetRequests, model.datasets, model.datasetPage.selectedKey(), model.datasetPage.windowStart)
 	}
 	if len(model.records) != 0 {
@@ -925,6 +925,57 @@ func TestJSONPageKeysScrollAndRecordSelectionResetsOffset(t *testing.T) {
 	model.handleAction(actionDown)
 	if model.recordPage.selectedKey() != "6" || model.recordPage.windowStart != 4 || model.jsonVertical != 0 {
 		t.Fatalf("record change selected=%q start=%d offset=%d", model.recordPage.selectedKey(), model.recordPage.windowStart, model.jsonVertical)
+	}
+}
+
+func TestEmptyCopybookDialogClearsActiveOverlay(t *testing.T) {
+	model := recordViewModel(t)
+	decoded := record.DecodedRecord{Value: record.Object{{Name: "FIELD", Value: "VALUE"}}}
+	model.overlay = &overlay{
+		Source: CopybookSource{Local: "layout.cpy"},
+		Record: &layout.Record{Field: &layout.Field{Name: "ROW"}},
+	}
+	model.overlaySource = model.overlay.Source
+	model.recordMode = ModeTable
+	model.horizontal = 3
+	model.jsonVertical = 4
+	model.records = []recordRow{{
+		Record:  zosmf.Record{Number: 1, Data: []byte("RAW")},
+		Decoded: &decoded,
+		Err:     errors.New("old diagnostic"),
+	}}
+	model.dialog = newCopybookDialog(CopybookSource{})
+
+	if command := model.handleKey(keyPress(tea.KeyEnter, "")); command != nil {
+		t.Fatal("empty copybook dialog returned a command")
+	}
+	if model.dialog != nil || model.overlay != nil || !model.overlaySource.empty() {
+		t.Fatalf("dialog/overlay not cleared: dialog=%v overlay=%v source=%#v", model.dialog, model.overlay, model.overlaySource)
+	}
+	if model.recordMode != ModeRaw || model.horizontal != 0 || model.jsonVertical != 0 {
+		t.Fatalf("presentation not reset: mode=%d horizontal=%d vertical=%d", model.recordMode, model.horizontal, model.jsonVertical)
+	}
+	if model.records[0].Decoded != nil || model.records[0].Err != nil {
+		t.Fatalf("decoded state retained: %#v", model.records[0])
+	}
+	if model.status.Level != statusReady || model.status.Text != "copybook overlay cleared" {
+		t.Fatalf("clear status = %#v", model.status)
+	}
+}
+
+func TestEmptyCopybookDialogWithoutOverlayClosesCleanly(t *testing.T) {
+	model := recordViewModel(t)
+	model.status = status{Level: statusReady, Text: "unchanged"}
+	model.dialog = newCopybookDialog(CopybookSource{})
+
+	if command := model.handleKey(keyPress(tea.KeyEnter, "")); command != nil {
+		t.Fatal("empty copybook dialog returned a command")
+	}
+	if model.dialog != nil {
+		t.Fatal("empty copybook dialog remained open")
+	}
+	if model.status.Level != statusReady || model.status.Text != "unchanged" {
+		t.Fatalf("empty dialog changed status: %#v", model.status)
 	}
 }
 
