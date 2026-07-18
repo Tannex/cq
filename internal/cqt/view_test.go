@@ -356,27 +356,35 @@ func TestFitHeightTruncatesAndPadsLinesToTerminalWidth(t *testing.T) {
 	}
 }
 
-func TestHelpPanelReplacesDataAreaWithGroupedBindings(t *testing.T) {
+func TestHelpPopupOverlaysMainViewWithGroupedBindings(t *testing.T) {
 	model := recordViewModel(t)
 	// Use a taller terminal so every help section fits without truncation.
-	model.width, model.height = 80, 28
+	model.width, model.height = 80, 36
 	model.visible = VisibleRows(model.width, model.height, false)
 	model.budget = RowBudget(model.visible)
 	model.recordPage.resize(model.visible, model.budget)
 	model.showHelp = true
 	content := model.View().Content
-	if !strings.Contains(content, "HELP") || !strings.Contains(content, "press ? to close") {
-		t.Fatalf("help panel header missing: %q", content)
+	if !strings.Contains(content, "HELP") || !strings.Contains(content, "? or esc to close") {
+		t.Fatalf("help popup header/footer missing: %q", content)
 	}
 	for _, section := range []string{"NAVIGATION", "ACTIONS", "GENERAL"} {
 		if !strings.Contains(content, section) {
-			t.Fatalf("help panel missing section %q: %q", section, content)
+			t.Fatalf("help popup missing section %q: %q", section, content)
 		}
 	}
 	for _, binding := range []string{"enter", "/", "←/h", "→/l", "q"} {
 		if !strings.Contains(content, binding) {
-			t.Fatalf("help panel missing binding %q: %q", binding, content)
+			t.Fatalf("help popup missing binding %q: %q", binding, content)
 		}
+	}
+	// The main view remains visible behind the popup.
+	if !strings.Contains(ansi.Strip(content), "HQ.DATA") {
+		t.Fatalf("main view title line hidden behind help popup: %q", ansi.Strip(content))
+	}
+	// Rounded popup border should be present.
+	if !strings.Contains(content, "╭") || !strings.Contains(content, "╰") {
+		t.Fatalf("help popup rounded border missing: %q", content)
 	}
 	if lines := strings.Count(content, "\n") + 1; lines != model.height {
 		t.Fatalf("help view lines = %d, want terminal height %d", lines, model.height)

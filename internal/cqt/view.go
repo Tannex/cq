@@ -18,28 +18,36 @@ import (
 const hScrollStep = 8
 
 var consolePalette = struct {
-	navy, panel, cyan, green, amber, danger, muted, selected, plain lipgloss.Style
+	navy, panel, header, activeTab, popup, popupBorder, cyan, green, amber, danger, muted, bright, selected, plain lipgloss.Style
 }{
-	navy:     lipgloss.NewStyle().Background(lipgloss.Color("#111827")).Foreground(lipgloss.Color("#CCFBF1")),
-	panel:    lipgloss.NewStyle().Background(lipgloss.Color("#1F2937")).Foreground(lipgloss.Color("#CBD5E1")),
-	cyan:     lipgloss.NewStyle().Foreground(lipgloss.Color("#5EEAD4")),
-	green:    lipgloss.NewStyle().Foreground(lipgloss.Color("#4ADE80")),
-	amber:    lipgloss.NewStyle().Foreground(lipgloss.Color("#FBBF24")),
-	danger:   lipgloss.NewStyle().Foreground(lipgloss.Color("#FB7185")),
-	muted:    lipgloss.NewStyle().Foreground(lipgloss.Color("#94A3B8")).Faint(true),
-	selected: lipgloss.NewStyle().Background(lipgloss.Color("#263449")).Foreground(lipgloss.Color("#99F6E4")).Bold(true),
-	plain:    lipgloss.NewStyle(),
+	navy:        lipgloss.NewStyle().Background(lipgloss.Color("#111827")).Foreground(lipgloss.Color("#CCFBF1")),
+	panel:       lipgloss.NewStyle().Background(lipgloss.Color("#1F2937")).Foreground(lipgloss.Color("#CBD5E1")),
+	header:      lipgloss.NewStyle().Background(lipgloss.Color("#334155")).Foreground(lipgloss.Color("#E2E8F0")).Bold(true),
+	activeTab:   lipgloss.NewStyle().Background(lipgloss.Color("#334155")).Foreground(lipgloss.Color("#5EEAD4")).Bold(true),
+	popup:       lipgloss.NewStyle().Background(lipgloss.Color("#0B1220")).Foreground(lipgloss.Color("#E2E8F0")),
+	popupBorder: lipgloss.NewStyle().Foreground(lipgloss.Color("#2DD4BF")),
+	cyan:        lipgloss.NewStyle().Foreground(lipgloss.Color("#5EEAD4")),
+	green:       lipgloss.NewStyle().Foreground(lipgloss.Color("#4ADE80")),
+	amber:       lipgloss.NewStyle().Foreground(lipgloss.Color("#FBBF24")),
+	danger:      lipgloss.NewStyle().Foreground(lipgloss.Color("#FB7185")),
+	muted:       lipgloss.NewStyle().Foreground(lipgloss.Color("#94A3B8")).Faint(true),
+	bright:      lipgloss.NewStyle().Foreground(lipgloss.Color("#F8FAFC")),
+	selected:    lipgloss.NewStyle().Background(lipgloss.Color("#263449")).Foreground(lipgloss.Color("#99F6E4")).Bold(true),
+	plain:       lipgloss.NewStyle(),
 }
 
 func (m *Model) View() tea.View {
 	var content string
 	switch {
-	case m.visible <= 0:
+	case m.visible <= 0 && !m.showHelp:
 		content = m.tinyView()
 	case m.dialog != nil:
 		content = m.dialogView()
 	default:
 		content = m.mainView()
+	}
+	if m.showHelp && m.width >= MinTerminalWidth && m.visible > 0 && m.dialog == nil {
+		content = m.overlayHelp(content)
 	}
 	view := tea.NewView(content)
 	view.AltScreen = true
@@ -63,9 +71,9 @@ func (m *Model) mainView() string {
 		lines = append(lines, m.tabBar())
 	}
 	data := m.dataView()
-	if m.showHelp {
-		// Full help replaces the data area so every binding stays readable;
-		// the chrome row count (and therefore the row budget) is unchanged.
+	if m.showHelp && (m.width < MinTerminalWidth || m.visible <= 0) {
+		// Tiny-terminal fallback: full-area help panel so every binding stays
+		// readable; the chrome row count (and therefore the row budget) is unchanged.
 		data = m.helpPanel()
 	}
 	lines = append(lines, m.titleLine(), m.searchLine(), data, m.statusLine(), m.helpLine())
@@ -78,7 +86,7 @@ func (m *Model) tabBar() string {
 	if !m.hasTabs() {
 		return strings.Repeat(" ", max(0, m.width))
 	}
-	activeStyle := consolePalette.selected.Bold(true)
+	activeStyle := consolePalette.activeTab
 	inactiveStyle := consolePalette.panel
 	separator := consolePalette.panel.Render("│")
 
@@ -91,6 +99,10 @@ func (m *Model) tabBar() string {
 	totalWidth := 0
 	for i, profile := range m.profiles {
 		label := " " + profile + " "
+		loaded := i == m.active || (i < len(m.workspaces) && m.workspaces[i].sessionReady)
+		if !loaded {
+			label += "· "
+		}
 		var rendered string
 		if i == m.active {
 			rendered = activeStyle.Render(label)
@@ -168,22 +180,30 @@ func (m *Model) tabBar() string {
 	return consolePalette.panel.Width(m.width).Render(bar)
 }
 
-// helpPanel renders the grouped key map as a dedicated panel in the data
-// area, since a single flattened line cannot hold the full binding set.
-func (m *Model) helpPanel() string {
-	ctx := keyContext{Screen: m.screen, Mode: m.recordMode, InputFocused: m.inputFocused(), DialogOpen: m.dialog != nil}
+// helpContent returns the grouped key bindings as styled text lines (no header or
+// footer) so it can be consumed by both the full-area panel and the popup.
+func (m *Model) helpContent() []string {
+	ctx := keyContext{Screen: m.screen, Mode: m.recordMode, InputFocused: m.inputFocused(), DialogOpen: m.dialog != nil, Tabs: m.hasTabs()}
 	groups := m.keys.fullHelp(ctx, m.overlay != nil)
-	lines := []string{consolePalette.panel.Bold(true).Width(m.width).Render("  HELP  press ? to close")}
+	var lines []string
 	for i, group := range groups {
 		if i > 0 {
 			lines = append(lines, "")
 		}
-		lines = append(lines, "  "+consolePalette.cyan.Bold(true).Render(group.Name))
+		lines = append(lines, consolePalette.cyan.Bold(true).Render(group.Name))
 		for _, binding := range group.Bindings {
 			help := binding.Help()
-			lines = append(lines, truncateStyled(fmt.Sprintf("    %-11s %s", help.Key, help.Desc), m.width))
+			lines = append(lines, fmt.Sprintf("  %-11s %s", help.Key, help.Desc))
 		}
 	}
+	return lines
+}
+
+// helpPanel renders the grouped key map as a dedicated panel in the data area.
+// This is the fallback used when the terminal is too small for a popup.
+func (m *Model) helpPanel() string {
+	lines := []string{consolePalette.panel.Bold(true).Width(m.width).Render("  HELP  press ? to close")}
+	lines = append(lines, m.helpContent()...)
 	capacity := m.visible + 1
 	maxOffset := max(0, len(lines)-capacity)
 	offset := min(m.helpVertical, maxOffset)
@@ -197,6 +217,68 @@ func (m *Model) helpPanel() string {
 		lines = append(lines, "")
 	}
 	return strings.Join(lines, "\n")
+}
+
+// overlayHelp renders the grouped key map as a centered floating popup over the
+// supplied background using the lipgloss v2 Canvas/Layer compositor.
+func (m *Model) overlayHelp(background string) string {
+	popupWidth := min(60, m.width-4)
+	popupHeight := min(max(10, int(float64(m.height)*0.8)), m.height-2)
+	if popupWidth < 24 || popupHeight < 8 {
+		return background
+	}
+
+	innerWidth := popupWidth - 4 // border + 1 cell horizontal padding each side
+	contentHeight := popupHeight - 4
+
+	contentLines := m.helpContent()
+	maxOffset := max(0, len(contentLines)-contentHeight)
+	offset := min(m.helpVertical, maxOffset)
+	if offset > 0 {
+		contentLines = contentLines[offset:]
+	}
+	if len(contentLines) > contentHeight {
+		contentLines = contentLines[:contentHeight]
+	}
+
+	innerLines := []string{
+		centerOrPad(consolePalette.cyan.Bold(true).Render("HELP"), innerWidth),
+	}
+	for _, line := range contentLines {
+		innerLines = append(innerLines, truncateStyled(line, innerWidth))
+	}
+	for len(innerLines) < contentHeight+1 {
+		innerLines = append(innerLines, strings.Repeat(" ", innerWidth))
+	}
+	innerLines = append(innerLines, centerOrPad(consolePalette.muted.Render("? or esc to close"), innerWidth))
+
+	popupStyle := consolePalette.popup.
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(consolePalette.popupBorder.GetForeground()).
+		Padding(0, 1).
+		Width(popupWidth).
+		Height(popupHeight)
+	popup := popupStyle.Render(strings.Join(innerLines, "\n"))
+
+	x := (m.width - popupWidth) / 2
+	y := (m.height - popupHeight) / 2
+
+	canvas := lipgloss.NewCanvas(m.width, m.height)
+	mainLayer := lipgloss.NewLayer(background).X(0).Y(0).Z(0)
+	popupLayer := lipgloss.NewLayer(popup).X(x).Y(y).Z(1)
+	compositor := lipgloss.NewCompositor(mainLayer, popupLayer)
+	return canvas.Compose(compositor).Render()
+}
+
+func centerOrPad(s string, width int) string {
+	w := lipgloss.Width(s)
+	if w >= width {
+		return truncateStyled(s, width)
+	}
+	pad := width - w
+	left := pad / 2
+	right := pad - left
+	return strings.Repeat(" ", left) + s + strings.Repeat(" ", right)
 }
 
 func (m *Model) dialogView() string {
@@ -230,39 +312,73 @@ func (m *Model) dialogView() string {
 }
 
 func (m *Model) titleLine() string {
-	var title string
+	var screenName, body, chip string
 	switch m.screen {
 	case ScreenDataSets:
+		screenName = "DATASETS"
 		rangeText := nameRange(m.datasets, func(index int) string { return m.datasets[index].Name })
-		title = fmt.Sprintf(" DATASETS  prefix %-24s  range %s", displayOr(m.prefix, "—"), rangeText)
+		body = fmt.Sprintf("prefix %-24s  range %s", displayOr(m.prefix, "—"), rangeText)
 	case ScreenMembers:
+		screenName = "MEMBERS"
 		rangeText := nameRange(m.members, func(index int) string { return m.members[index].Name })
-		title = fmt.Sprintf(" %s  MEMBERS  pattern %-8s  range %s", m.dataSet.Name, displayOr(m.memberPattern, "*"), rangeText)
+		body = fmt.Sprintf("%s  pattern %-8s  range %s", m.dataSet.Name, displayOr(m.memberPattern, "*"), rangeText)
 	case ScreenRecords:
-		target := m.dataSet.Name
+		screenName = m.dataSet.Name
 		if m.member != nil {
-			target += "(" + m.member.Name + ")"
+			screenName += "(" + m.member.Name + ")"
 		}
 		first, last := m.recordRange()
-		title = fmt.Sprintf(" %s  records %s / cached %d  %s", target, formatRange(first, last), len(m.records), m.modeName())
+		body = fmt.Sprintf("records %s / cached %d  %s", formatRange(first, last), len(m.records), m.modeName())
 	}
-	return consolePalette.navy.Bold(true).Width(m.width).Render(truncatePlain(title, m.width))
+	if profile := m.activeProfile(); profile != "" {
+		chip = profile
+	} else if m.user != "" {
+		chip = m.user
+	}
+
+	accent := consolePalette.cyan.Bold(true).Inherit(consolePalette.navy)
+	plain := consolePalette.navy.Foreground(lipgloss.Color("#CBD5E1"))
+	chipStyle := consolePalette.navy.Foreground(lipgloss.Color("#94A3B8")).Faint(true)
+
+	plainMiddle := "  " + body
+	chipText := ""
+	if chip != "" {
+		chipText = " " + chip
+	}
+	baseWidth := 1 + lipgloss.Width(screenName) + lipgloss.Width(plainMiddle) + lipgloss.Width(chipText)
+	gap := 0
+	if baseWidth < m.width {
+		gap = m.width - baseWidth
+	}
+
+	line := plain.Render(" ") + accent.Render(screenName) + plain.Render(plainMiddle)
+	if gap > 0 {
+		line += plain.Render(strings.Repeat(" ", gap))
+	}
+	if chipText != "" && lipgloss.Width(line)+lipgloss.Width(chipStyle.Render(chipText)) <= m.width {
+		line += chipStyle.Render(chipText)
+	}
+	return truncateStyled(line, m.width)
 }
 
 func (m *Model) searchLine() string {
+	label := consolePalette.panel.Foreground(lipgloss.Color("#64748B"))
+	value := consolePalette.panel.Foreground(lipgloss.Color("#F8FAFC"))
+
 	var line string
 	switch m.screen {
 	case ScreenDataSets:
 		if m.prefixInput.Focused() {
 			line = m.prefixInput.View()
 		} else {
-			line = " PREFIX  " + displayOr(m.prefix, "press / to enter a prefix")
+			line = label.Render("PREFIX") + "  " + value.Render(displayOr(m.prefix, "press / to enter a prefix"))
 		}
 	case ScreenMembers:
 		if m.memberInput.Focused() {
 			line = m.memberInput.View()
 		} else {
-			line = fmt.Sprintf(" DATA SET  %s    MEMBER FILTER  %s", m.dataSet.Name, displayOr(m.memberPattern, "*"))
+			line = label.Render("DATA SET") + "  " + value.Render(m.dataSet.Name) +
+				"    " + label.Render("MEMBER FILTER") + "  " + value.Render(displayOr(m.memberPattern, "*"))
 		}
 	case ScreenRecords:
 		if m.locateInput.Focused() {
@@ -276,9 +392,10 @@ func (m *Model) searchLine() string {
 				overlayText += " / " + m.overlay.Record.Name
 			}
 		}
-		line = fmt.Sprintf(" CODEPAGE  %-8s  COPYBOOK  %s", m.codepageName, overlayText)
+		line = label.Render("CODEPAGE") + "  " + value.Render(m.codepageName) +
+			"  " + label.Render("COPYBOOK") + "  " + value.Render(overlayText)
 	}
-	return consolePalette.panel.Width(m.width).Render(truncatePlain(line, m.width))
+	return consolePalette.panel.Width(m.width).Render(truncateStyled(line, m.width))
 }
 
 func (m *Model) dataView() string {
@@ -319,11 +436,10 @@ func (m *Model) activeRowCount() int {
 }
 
 func (m *Model) statePanel(level statusLevel, text string) string {
-	header := consolePalette.panel.Bold(true).Render("  STATE    DETAIL")
-	// Pad the plain label before styling so DETAIL stays column-aligned for
+	header := consolePalette.header.Render("  STATE    DETAIL")
+	// The status chip is fixed-width (7) so DETAIL stays column-aligned for
 	// every status word length.
-	padding := strings.Repeat(" ", max(1, 9-len(string(level))))
-	bodyLine := "  " + m.renderStatusLabel(level) + padding + text
+	bodyLine := "  " + m.renderStatusLabel(level) + "  " + text
 	lines := []string{header, truncateStyled(bodyLine, m.width)}
 	for len(lines) < m.visible+1 {
 		lines = append(lines, "")
@@ -333,7 +449,7 @@ func (m *Model) statePanel(level statusLevel, text string) string {
 
 func denseTableStyles() table.Styles {
 	styles := table.DefaultStyles()
-	styles.Header = consolePalette.panel.Bold(true).Padding(0, 1)
+	styles.Header = consolePalette.header.Padding(0, 1)
 	styles.Cell = lipgloss.NewStyle().Padding(0, 1)
 	styles.Selected = consolePalette.selected
 	return styles
@@ -462,7 +578,7 @@ func endMarker(width int) string {
 
 func (m *Model) rawRecordView() string {
 	numberWidth := m.recordNumberWidth()
-	header := consolePalette.panel.Bold(true).Render(fmt.Sprintf("  %-*s │ RAW DATA", numberWidth, "RECORD"))
+	header := consolePalette.header.Render(fmt.Sprintf("  %-*s │ RAW DATA", numberWidth, "RECORD"))
 	start, end, showEnd := endMarkerWindow(&m.recordPage)
 	lines := make([]string, end-start)
 	for i, row := range m.records[start:end] {
@@ -578,7 +694,7 @@ func (m *Model) recordJSONView() string {
 	numberWidth := m.recordNumberWidth()
 	title := fmt.Sprintf("  %-*s │ PRETTY JSON", numberWidth, "RECORD")
 	hint := "  j/k record  pgup/pgdn scroll"
-	header := truncateStyled(consolePalette.panel.Bold(true).Render(title)+consolePalette.panel.Faint(true).Render(hint), m.width)
+	header := truncateStyled(consolePalette.header.Render(title)+consolePalette.panel.Faint(true).Render(hint), m.width)
 	model := viewport.New(viewport.WithWidth(m.width), viewport.WithHeight(m.visible))
 	model.SoftWrap = false
 	model.FillHeight = true
@@ -652,17 +768,18 @@ func (m *Model) effectiveStatus() (statusLevel, string) {
 
 func (m *Model) renderStatusLabel(level statusLevel) string {
 	label := string(level)
+	chip := fmt.Sprintf("%-*s", 7, label)
 	switch level {
 	case statusReady:
-		return consolePalette.green.Bold(true).Render(label)
+		return consolePalette.green.Background(lipgloss.Color("#064E3B")).Bold(true).Render(chip)
 	case statusWarn, statusLoading:
-		return consolePalette.amber.Bold(true).Render(label)
+		return consolePalette.amber.Background(lipgloss.Color("#78350F")).Bold(true).Render(chip)
 	case statusError:
-		return consolePalette.danger.Bold(true).Render(label)
+		return consolePalette.danger.Background(lipgloss.Color("#7F1D1D")).Bold(true).Render(chip)
 	case statusEmpty:
-		return consolePalette.cyan.Bold(true).Render(label)
+		return consolePalette.cyan.Background(lipgloss.Color("#164E63")).Bold(true).Render(chip)
 	default:
-		return label
+		return chip
 	}
 }
 
@@ -718,7 +835,7 @@ func (m *Model) windowStatus() string {
 }
 
 func (m *Model) helpLine() string {
-	ctx := keyContext{Screen: m.screen, Mode: m.recordMode, InputFocused: m.inputFocused(), DialogOpen: m.dialog != nil, ShowHelp: m.showHelp}
+	ctx := keyContext{Screen: m.screen, Mode: m.recordMode, InputFocused: m.inputFocused(), DialogOpen: m.dialog != nil, ShowHelp: m.showHelp, Tabs: m.hasTabs()}
 	line := m.help.ShortHelpView(m.keys.shortHelp(ctx, m.overlay != nil))
 	return consolePalette.muted.Width(m.width).Render(truncateStyled(" "+line, m.width))
 }

@@ -313,6 +313,12 @@ func (m *Model) loadWorkspace(index int) {
 	}
 	m.workspace = *m.workspaces[index]
 	m.active = index
+	// A workspace created or last active under a different terminal size
+	// carries stale pager geometry; align it before anything renders or
+	// resets a pager from its own visible/budget values.
+	m.workspace.datasetPage.resize(m.visible, m.budget)
+	m.workspace.memberPage.resize(m.visible, m.budget)
+	m.workspace.recordPage.resize(m.visible, m.budget)
 }
 
 func (m *Model) syncInputsFromWorkspace() {

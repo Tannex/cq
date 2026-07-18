@@ -27,14 +27,14 @@ declare -a key_batches=()
 
 while getopts "o:t:a:x:y:k:d:" opt; do
   case "$opt" in
-    o) shot="$OPTARG" ;;
-    t) text_out="$OPTARG" ;;
-    a) ansi_out="$OPTARG" ;;
-    x) cols="$OPTARG" ;;
-    y) rows="$OPTARG" ;;
-    k) key_batches+=("$OPTARG") ;;
-    d) delay="$OPTARG" ;;
-    *) exit 2 ;;
+  o) shot="$OPTARG" ;;
+  t) text_out="$OPTARG" ;;
+  a) ansi_out="$OPTARG" ;;
+  x) cols="$OPTARG" ;;
+  y) rows="$OPTARG" ;;
+  k) key_batches+=("$OPTARG") ;;
+  d) delay="$OPTARG" ;;
+  *) exit 2 ;;
   esac
 done
 shift $((OPTIND - 1))
@@ -44,26 +44,37 @@ if [ $# -eq 0 ]; then
 fi
 
 session="tui-shot-$$"
-trap 'tmux kill-session -t "$session" 2>/dev/null || true' EXIT
+tmux_socket="${PWD}/.tui-shot-tmux-${UID}-$$.sock"
+tmux_cmd=(tmux -S "$tmux_socket" -f /dev/null)
 
-tmux new-session -d -s "$session" -x "$cols" -y "$rows" "exec $(printf '%q ' "$@")"
-tmux set-option -t "$session" status off
+cleanup() {
+  "${tmux_cmd[@]}" kill-server 2>/dev/null || true
+  rm -f "$tmux_socket"
+}
+trap cleanup EXIT
+
+# Bubble Tea treats tmux-256color as an ANSI-256 terminal even when the host
+# terminal supports RGB. The direct-color entry keeps screenshots faithful to
+# the application's palette while retaining tmux for deterministic input.
+"${tmux_cmd[@]}" new-session -d -s "$session" -x "$cols" -y "$rows" \
+  "exec env -u NO_COLOR TERM=tmux-direct COLORTERM=truecolor $(printf '%q ' "$@")"
+"${tmux_cmd[@]}" set-option -t "$session" status off
 sleep "$delay"
 
 for keys in "${key_batches[@]+"${key_batches[@]}"}"; do
   # shellcheck disable=SC2086 — word splitting is intentional: each -k batch
   # is a space-separated tmux key list.
-  tmux send-keys -t "$session" $keys
+  "${tmux_cmd[@]}" send-keys -t "$session" $keys
   sleep "$delay"
 done
 
 if [ -n "$text_out" ]; then
   mkdir -p "$(dirname "$text_out")"
-  tmux capture-pane -t "$session" -p > "$text_out"
+  "${tmux_cmd[@]}" capture-pane -t "$session" -p >"$text_out"
 fi
 if [ -n "$ansi_out" ]; then
   mkdir -p "$(dirname "$ansi_out")"
-  tmux capture-pane -t "$session" -e -p > "$ansi_out"
+  "${tmux_cmd[@]}" capture-pane -t "$session" -e -p >"$ansi_out"
 fi
 
 if [ "$shot" != "-" ]; then
@@ -71,12 +82,16 @@ if [ "$shot" != "-" ]; then
   shot="$(realpath "$shot")"
   xvfb-run -a -s '-screen 0 1600x1000x24' \
     sh -c '
-      xterm -geometry "${3}x${4}" -fa monospace -fs 12 \
-        -e tmux attach-session -t "$1" &
+      LC_ALL=C.UTF-8 LANG=C.UTF-8 xterm \
+        -geometry "${3}x${4}+0+0" -tn xterm-direct -u8 \
+        -fa "Iosevka Nerd Font" -fs 12 \
+        -bg "#111827" -fg "#CBD5E1" -b 0 -bw 0 \
+        -e tmux -S "$5" attach-session -t "$1" &
       terminal_pid=$!
       sleep 1.2
       magick import -window root "$2"
       kill "$terminal_pid" 2>/dev/null || true
-    ' sh "$session" "$shot" "$cols" "$rows"
+      magick "$2" -trim +repage "$2"
+    ' sh "$session" "$shot" "$cols" "$rows" "$tmux_socket"
   echo "wrote $shot"
 fi
