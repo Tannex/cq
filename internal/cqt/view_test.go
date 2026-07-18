@@ -41,7 +41,7 @@ func recordViewModel(t *testing.T) *Model {
 		{Record: zosmf.Record{Number: 1, Data: []byte{'A', 0, '\n', 'B'}}},
 		{Record: zosmf.Record{Number: 2, Data: []byte("SECOND")}},
 	}
-	model.recordPage.reset(0, model.visible, model.budget)
+	model.recordPage.reset(model.visible, model.budget)
 	model.recordPage.apply([]string{"1", "2"}, false, model.recordPage.initialPlan(0))
 	return model
 }
@@ -58,7 +58,7 @@ func recordWindowModel(t *testing.T, visible, count int) *Model {
 		keys[i] = strconv.FormatInt(number, 10)
 		model.records[i] = recordRow{Record: zosmf.Record{Number: number, Data: []byte(fmt.Sprintf("ROW%02d", i))}}
 	}
-	model.recordPage.reset(0, model.visible, model.budget)
+	model.recordPage.reset(model.visible, model.budget)
 	model.recordPage.apply(keys, false, model.recordPage.initialPlan(0))
 	return model
 }
@@ -180,7 +180,7 @@ func TestSelectedTableRowRemainsAboveStatusLine(t *testing.T) {
 		keys[i] = strconv.FormatInt(number, 10)
 		model.records[i] = recordRow{Record: zosmf.Record{Number: number, Data: []byte("VALUE")}}
 	}
-	model.recordPage.reset(0, model.visible, model.budget)
+	model.recordPage.reset(model.visible, model.budget)
 	model.recordPage.apply(keys, false, model.recordPage.initialPlan(0))
 	model.recordPage.bottom()
 
@@ -207,7 +207,7 @@ func TestBrowseViewsRenderPersistentWindow(t *testing.T) {
 			model.datasets[i] = zosmf.DataSet{Name: name, Organization: "PS"}
 			keys[i] = name
 		}
-		model.datasetPage.reset("", model.visible, model.budget)
+		model.datasetPage.reset(model.visible, model.budget)
 		model.datasetPage.apply(keys, false, model.datasetPage.initialPlan(""))
 		model.datasetPage.bottom()
 		model.datasetPage.move(-2)
@@ -226,7 +226,7 @@ func TestBrowseViewsRenderPersistentWindow(t *testing.T) {
 			model.members[i] = zosmf.Member{Name: name}
 			keys[i] = name
 		}
-		model.memberPage.reset("", model.visible, model.budget)
+		model.memberPage.reset(model.visible, model.budget)
 		model.memberPage.apply(keys, false, model.memberPage.initialPlan(""))
 		model.memberPage.bottom()
 		model.memberPage.move(-2)

@@ -234,9 +234,14 @@ func (k KeyMap) shortHelp(ctx keyContext, overlay bool) []key.Binding {
 	return append(bindings, k.Help, k.Quit)
 }
 
-func (k KeyMap) fullHelp(ctx keyContext, overlay bool) [][]key.Binding {
+type helpGroup struct {
+	Name     string
+	Bindings []key.Binding
+}
+
+func (k KeyMap) fullHelp(ctx keyContext, overlay bool) []helpGroup {
 	if ctx.DialogOpen || ctx.InputFocused {
-		return [][]key.Binding{k.shortHelp(ctx, overlay)}
+		return []helpGroup{{Name: "KEYS", Bindings: k.shortHelp(ctx, overlay)}}
 	}
 	pageUp, pageDown := k.PageUp, k.PageDown
 	if ctx.Screen == ScreenRecords && ctx.Mode == ModeJSON {
@@ -253,5 +258,9 @@ func (k KeyMap) fullHelp(ctx keyContext, overlay bool) [][]key.Binding {
 			actions = append(actions, k.ToggleOverlay, k.ToggleView, k.Diagnostics, k.ClearOverlay)
 		}
 	}
-	return [][]key.Binding{navigation, actions, {k.Help, k.Quit}}
+	return []helpGroup{
+		{Name: "NAVIGATION", Bindings: navigation},
+		{Name: "ACTIONS", Bindings: actions},
+		{Name: "GENERAL", Bindings: []key.Binding{k.Help, k.Quit}},
+	}
 }

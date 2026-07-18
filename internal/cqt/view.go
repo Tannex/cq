@@ -15,16 +15,20 @@ import (
 	"github.com/Tannex/cq/internal/record"
 )
 
+const hScrollStep = 8
+
 var consolePalette = struct {
-	navy, panel, cyan, green, amber, danger, muted lipgloss.Style
+	navy, panel, cyan, green, amber, danger, muted, selected, plain lipgloss.Style
 }{
-	navy:   lipgloss.NewStyle().Background(lipgloss.Color("#071827")).Foreground(lipgloss.Color("#E7F3F5")),
-	panel:  lipgloss.NewStyle().Background(lipgloss.Color("#12344D")).Foreground(lipgloss.Color("#E7F3F5")),
-	cyan:   lipgloss.NewStyle().Foreground(lipgloss.Color("#6FD7E5")),
-	green:  lipgloss.NewStyle().Foreground(lipgloss.Color("#89D185")),
-	amber:  lipgloss.NewStyle().Foreground(lipgloss.Color("#E8BD68")),
-	danger: lipgloss.NewStyle().Foreground(lipgloss.Color("#FF7B72")),
-	muted:  lipgloss.NewStyle().Faint(true),
+	navy:     lipgloss.NewStyle().Background(lipgloss.Color("#071827")).Foreground(lipgloss.Color("#E7F3F5")),
+	panel:    lipgloss.NewStyle().Background(lipgloss.Color("#12344D")).Foreground(lipgloss.Color("#E7F3F5")),
+	cyan:     lipgloss.NewStyle().Foreground(lipgloss.Color("#6FD7E5")),
+	green:    lipgloss.NewStyle().Foreground(lipgloss.Color("#89D185")),
+	amber:    lipgloss.NewStyle().Foreground(lipgloss.Color("#E8BD68")),
+	danger:   lipgloss.NewStyle().Foreground(lipgloss.Color("#FF7B72")),
+	muted:    lipgloss.NewStyle().Faint(true),
+	selected: lipgloss.NewStyle().Background(lipgloss.Color("#12344D")).Foreground(lipgloss.Color("#6FD7E5")).Bold(true),
+	plain:    lipgloss.NewStyle(),
 }
 
 func (m *Model) View() tea.View {
@@ -71,18 +75,13 @@ func (m *Model) mainView() string {
 func (m *Model) helpPanel() string {
 	ctx := keyContext{Screen: m.screen, Mode: m.recordMode, InputFocused: m.inputFocused(), DialogOpen: m.dialog != nil}
 	groups := m.keys.fullHelp(ctx, m.overlay != nil)
-	names := []string{"NAVIGATION", "ACTIONS", "GENERAL"}
 	lines := []string{consolePalette.panel.Bold(true).Width(m.width).Render("  HELP  press ? to close")}
 	for i, group := range groups {
-		name := "KEYS"
-		if i < len(names) {
-			name = names[i]
-		}
 		if i > 0 {
 			lines = append(lines, "")
 		}
-		lines = append(lines, "  "+consolePalette.cyan.Bold(true).Render(name))
-		for _, binding := range group {
+		lines = append(lines, "  "+consolePalette.cyan.Bold(true).Render(group.Name))
+		for _, binding := range group.Bindings {
 			help := binding.Help()
 			lines = append(lines, truncateStyled(fmt.Sprintf("    %-11s %s", help.Key, help.Desc), m.width))
 		}
@@ -234,7 +233,7 @@ func denseTableStyles() table.Styles {
 	styles := table.DefaultStyles()
 	styles.Header = consolePalette.panel.Bold(true).Padding(0, 1)
 	styles.Cell = lipgloss.NewStyle().Padding(0, 1)
-	styles.Selected = lipgloss.NewStyle().Background(lipgloss.Color("#12344D")).Foreground(lipgloss.Color("#6FD7E5")).Bold(true)
+	styles.Selected = consolePalette.selected
 	return styles
 }
 
@@ -348,9 +347,9 @@ func (m *Model) rawRecordView() string {
 	model := viewport.New(viewport.WithWidth(m.width), viewport.WithHeight(m.visible))
 	model.SoftWrap = false
 	model.FillHeight = true
-	model.SetHorizontalStep(8)
+	model.SetHorizontalStep(hScrollStep)
 	model.SetContentLines(lines)
-	model.SetXOffset(m.horizontal * 8)
+	model.SetXOffset(m.horizontal * hScrollStep)
 	model.LeftGutterFunc = func(context viewport.GutterContext) string {
 		absolute := start + context.Index
 		if context.Index < 0 || absolute >= end {
@@ -364,9 +363,9 @@ func (m *Model) rawRecordView() string {
 	}
 	model.StyleLineFunc = func(index int) lipgloss.Style {
 		if start+index == selected {
-			return lipgloss.NewStyle().Background(lipgloss.Color("#12344D")).Foreground(lipgloss.Color("#6FD7E5")).Bold(true)
+			return consolePalette.selected
 		}
-		return lipgloss.NewStyle()
+		return consolePalette.plain
 	}
 	return header + "\n" + model.View()
 }
@@ -375,16 +374,16 @@ func (m *Model) recordTableView() string {
 	if m.overlay == nil {
 		return m.rawRecordView()
 	}
-	start := m.horizontal
-	if start >= len(m.overlay.Columns) {
-		start = max(0, len(m.overlay.Columns)-1)
+	colStart := m.horizontal
+	if colStart >= len(m.overlay.Columns) {
+		colStart = max(0, len(m.overlay.Columns)-1)
 	}
 	numberWidth := m.recordNumberWidth()
 	gutterColumnWidth := numberWidth + 5
 	columns := []table.Column{{Title: fmt.Sprintf("  %-*s │", numberWidth, "RECORD"), Width: gutterColumnWidth}}
 	used := gutterColumnWidth + 2 // fixed gutter content plus table cell padding
-	visibleColumns := m.overlay.Columns[start:start]
-	for _, column := range m.overlay.Columns[start:] {
+	visibleColumns := m.overlay.Columns[colStart:colStart]
+	for _, column := range m.overlay.Columns[colStart:] {
 		width := column.Width
 		if used+width+2 > m.width && len(visibleColumns) > 0 {
 			break
@@ -394,7 +393,7 @@ func (m *Model) recordTableView() string {
 		used += width + 2
 	}
 	if len(visibleColumns) == 0 && len(m.overlay.Columns) > 0 {
-		column := m.overlay.Columns[start]
+		column := m.overlay.Columns[colStart]
 		visibleColumns = append(visibleColumns, column)
 		columns = append(columns, table.Column{Title: column.Path, Width: max(8, m.width-used-2)})
 	}
@@ -448,9 +447,9 @@ func (m *Model) recordJSONView() string {
 	model := viewport.New(viewport.WithWidth(m.width), viewport.WithHeight(m.visible))
 	model.SoftWrap = false
 	model.FillHeight = true
-	model.SetHorizontalStep(8)
+	model.SetHorizontalStep(hScrollStep)
 	model.SetContent(content)
-	model.SetXOffset(m.horizontal * 8)
+	model.SetXOffset(m.horizontal * hScrollStep)
 	model.SetYOffset(min(m.jsonVertical, m.maxJSONVertical()))
 	model.LeftGutterFunc = func(context viewport.GutterContext) string {
 		if context.Index == 0 {
@@ -625,7 +624,7 @@ func (m *Model) maxHorizontal() int {
 	if longest <= available {
 		return 0
 	}
-	return (longest - available + 7) / 8
+	return (longest - available + hScrollStep - 1) / hScrollStep
 }
 
 func (m *Model) recordNumberWidth() int {

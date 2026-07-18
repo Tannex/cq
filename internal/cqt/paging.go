@@ -55,6 +55,14 @@ type pagePlan[A comparable] struct {
 // pager owns cached row identities, selection, and the visible row window.
 // Typed rows live in the model. The cache may grow for the lifetime of the
 // current browse screen, but every individual request remains bounded by budget.
+type pagerNavigator interface {
+	selectedKey() string
+	move(int) (bool, bool)
+	page(scrollDirection)
+	top()
+	bottom()
+}
+
 type pager[A comparable] struct {
 	keys        []string
 	selected    int
@@ -66,7 +74,7 @@ type pager[A comparable] struct {
 	preserve    string
 }
 
-func (p *pager[A]) reset(_ A, visible, budget int) {
+func (p *pager[A]) reset(visible, budget int) {
 	*p = pager[A]{visible: visible, budget: budget}
 }
 

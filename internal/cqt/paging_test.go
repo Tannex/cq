@@ -29,7 +29,7 @@ func TestVisibleRowsAndExactBudget(t *testing.T) {
 
 func TestNamePagerPrefetchesWithOneVisiblePageRemaining(t *testing.T) {
 	var p pager[string]
-	p.reset("", 3, 6)
+	p.reset(3, 6)
 	p.apply([]string{"A", "B", "C", "D", "E", "F"}, true, p.initialPlan(""))
 
 	p.move(2)
@@ -56,7 +56,7 @@ func TestNamePagerPrefetchesWithOneVisiblePageRemaining(t *testing.T) {
 
 func TestPagerForwardMergeDeduplicatesAndPreservesSelection(t *testing.T) {
 	var p pager[string]
-	p.reset("", 2, 4)
+	p.reset(2, 4)
 	p.apply([]string{"A", "B", "C", "D"}, true, p.initialPlan(""))
 	p.move(2)
 	p.apply([]string{"D", "E", "F", "G"}, false, pagePlan[string]{Anchor: "D", Direction: pageForward})
@@ -77,7 +77,7 @@ func TestPagerForwardMergeDeduplicatesAndPreservesSelection(t *testing.T) {
 
 func TestRecordPagerPrefetchStartsAfterLastCachedRecord(t *testing.T) {
 	var p pager[int64]
-	p.reset(0, 2, 4)
+	p.reset(2, 4)
 	p.apply([]string{"1", "2", "3", "4"}, true, p.initialPlan(0))
 	p.move(2)
 	plan, ok := forwardRecordPlan(&p, []int64{1, 2, 3, 4})
@@ -88,7 +88,7 @@ func TestRecordPagerPrefetchStartsAfterLastCachedRecord(t *testing.T) {
 
 func TestPagerResizeRetainsSessionCacheAndSelection(t *testing.T) {
 	var p pager[string]
-	p.reset("", 5, 24)
+	p.reset(5, 24)
 	p.apply([]string{"A", "B", "C", "D", "E", "F"}, true, p.initialPlan(""))
 	p.move(4)
 
@@ -108,7 +108,7 @@ func TestPagerResizeRetainsSessionCacheAndSelection(t *testing.T) {
 
 func TestPagerSuppressesPrefetchWhileRequestPending(t *testing.T) {
 	var p pager[string]
-	p.reset("", 2, 4)
+	p.reset(2, 4)
 	p.apply([]string{"A", "B", "C", "D"}, true, p.initialPlan(""))
 	p.bottom()
 	if !p.shouldPrefetch(false) {
@@ -122,7 +122,7 @@ func TestPagerSuppressesPrefetchWhileRequestPending(t *testing.T) {
 func TestPagerMovesCursorAcrossViewportBeforeScrolling(t *testing.T) {
 	keys := []string{"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"}
 	var p pager[string]
-	p.reset("", 5, 24)
+	p.reset(5, 24)
 	p.apply(keys, false, p.initialPlan(""))
 
 	p.bottom()
@@ -181,7 +181,7 @@ func TestPagerPageMovementPreservesCursorScreenRow(t *testing.T) {
 		keys[i] = string(rune('A' + i))
 	}
 	var p pager[string]
-	p.reset("", 5, 24)
+	p.reset(5, 24)
 	p.apply(keys, false, p.initialPlan(""))
 	p.move(6)
 	assertPagerWindow(t, &p, 6, 3, 3, scrollDown)
@@ -203,7 +203,7 @@ func TestPagerPageMovementPreservesCursorScreenRow(t *testing.T) {
 
 func TestPagerAppendPreservesLiveSelectionAndWindow(t *testing.T) {
 	var p pager[string]
-	p.reset("", 3, 6)
+	p.reset(3, 6)
 	p.apply([]string{"A", "B", "C", "D", "E", "F"}, true, p.initialPlan(""))
 	p.move(3)
 	plan, ok := forwardNamePlan(&p)
@@ -225,18 +225,18 @@ func TestPagerAppendPreservesLiveSelectionAndWindow(t *testing.T) {
 func TestPagerRefreshPreservesCursorOffset(t *testing.T) {
 	keys := []string{"A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L"}
 	var p pager[string]
-	p.reset("", 5, 24)
+	p.reset(5, 24)
 	p.apply(keys, false, p.initialPlan(""))
 	p.bottom()
 	p.move(-2)
 	assertPagerWindow(t, &p, 9, 7, 2, scrollIdle)
 
 	plan := p.refreshPlan()
-	p.reset("", 5, 24)
+	p.reset(5, 24)
 	p.apply(keys, false, plan)
 	assertPagerWindow(t, &p, 9, 7, 2, scrollIdle)
 
-	p.reset("", 5, 24)
+	p.reset(5, 24)
 	p.apply(keys[:6], false, plan)
 	assertPagerWindow(t, &p, 0, 0, 0, scrollIdle)
 	if p.selectedKey() != "A" {
@@ -247,7 +247,7 @@ func TestPagerRefreshPreservesCursorOffset(t *testing.T) {
 func TestPagerResizeRetainsAndReconcilesWindow(t *testing.T) {
 	keys := []string{"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"}
 	var p pager[string]
-	p.reset("", 5, 24)
+	p.reset(5, 24)
 	p.apply(keys, false, p.initialPlan(""))
 	p.bottom()
 	p.move(-2)
@@ -267,7 +267,7 @@ func TestPagerResizeRetainsAndReconcilesWindow(t *testing.T) {
 
 func TestPagerSmallViewportsDegradeContextMargin(t *testing.T) {
 	var one pager[string]
-	one.reset("", 1, 3)
+	one.reset(1, 3)
 	one.apply([]string{"A", "B", "C"}, false, one.initialPlan(""))
 	one.bottom()
 	assertPagerWindow(t, &one, 2, 2, 0, scrollIdle)
@@ -275,7 +275,7 @@ func TestPagerSmallViewportsDegradeContextMargin(t *testing.T) {
 	assertPagerWindow(t, &one, 1, 1, 0, scrollUp)
 
 	var two pager[string]
-	two.reset("", 2, 3)
+	two.reset(2, 3)
 	two.apply([]string{"A", "B", "C"}, false, two.initialPlan(""))
 	two.bottom()
 	assertPagerWindow(t, &two, 2, 1, 1, scrollIdle)

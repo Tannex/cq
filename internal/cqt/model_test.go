@@ -691,11 +691,11 @@ func TestNavigateBackReusesCachedParentWithoutRefetch(t *testing.T) {
 	model.budget = 4
 	model.dataSet = zosmf.DataSet{Name: "A.DATA", Organization: "PS"}
 	model.datasets = []zosmf.DataSet{{Name: "A"}, {Name: "B"}, {Name: "C"}, {Name: "D"}}
-	model.datasetPage.reset("", model.visible, model.budget)
+	model.datasetPage.reset(model.visible, model.budget)
 	model.datasetPage.apply([]string{"A", "B", "C", "D"}, false, model.datasetPage.initialPlan(""))
 	model.datasetPage.move(2)
 	model.records = []recordRow{{Record: zosmf.Record{Number: 1, Data: []byte("X")}}}
-	model.recordPage.reset(0, model.visible, model.budget)
+	model.recordPage.reset(model.visible, model.budget)
 	model.recordPage.apply([]string{"1"}, false, model.recordPage.initialPlan(0))
 
 	if command := model.navigateBack(); command != nil {
@@ -756,7 +756,7 @@ func TestDecodeInFlightSurvivesRecordCacheGrowth(t *testing.T) {
 		{Record: zosmf.Record{Number: 1, Data: []byte("A")}},
 		{Record: zosmf.Record{Number: 2, Data: []byte("B")}},
 	}
-	model.recordPage.reset(0, model.visible, model.budget)
+	model.recordPage.reset(model.visible, model.budget)
 	model.recordPage.apply([]string{"1", "2"}, true, model.recordPage.initialPlan(0))
 
 	firstDecode := model.startDecode()
@@ -791,7 +791,7 @@ func TestListPageActionsPreserveCursorScreenRow(t *testing.T) {
 		keys[i] = strconv.FormatInt(number, 10)
 		model.records[i] = recordRow{Record: zosmf.Record{Number: number, Data: []byte("RAW")}}
 	}
-	model.recordPage.reset(0, model.visible, model.budget)
+	model.recordPage.reset(model.visible, model.budget)
 	model.recordPage.apply(keys, false, model.recordPage.initialPlan(0))
 	model.recordPage.move(6)
 	assertPagerWindow(t, &model.recordPage, 6, 3, 3, scrollDown)
@@ -818,7 +818,7 @@ func TestJSONPageKeysScrollAndRecordSelectionResetsOffset(t *testing.T) {
 		keys[i] = strconv.FormatInt(number, 10)
 		model.records[i] = recordRow{Record: zosmf.Record{Number: number, Data: []byte("RAW")}}
 	}
-	model.recordPage.reset(0, model.visible, model.budget)
+	model.recordPage.reset(model.visible, model.budget)
 	model.recordPage.apply(keys, false, model.recordPage.initialPlan(0))
 	model.recordPage.move(4)
 	decoded := record.DecodedRecord{Value: record.Object{
@@ -874,7 +874,7 @@ func TestPresentationTogglesReuseDecodedValuesWithoutRefetch(t *testing.T) {
 		keys[i] = strconv.FormatInt(number, 10)
 		model.records[i] = recordRow{Record: zosmf.Record{Number: number, Data: []byte("VALUE")}, Decoded: &decoded}
 	}
-	model.recordPage.reset(0, model.visible, model.budget)
+	model.recordPage.reset(model.visible, model.budget)
 	model.recordPage.apply(keys, false, model.recordPage.initialPlan(0))
 	model.recordPage.bottom()
 	model.recordPage.move(-2)

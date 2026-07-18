@@ -106,7 +106,7 @@ func TestJSONHelpDescribesPageKeysAsViewportScrolling(t *testing.T) {
 	groups := DefaultKeyMap().fullHelp(keyContext{Screen: ScreenRecords, Mode: ModeJSON}, true)
 	var descriptions []string
 	for _, group := range groups {
-		for _, binding := range group {
+		for _, binding := range group.Bindings {
 			descriptions = append(descriptions, binding.Help().Desc)
 		}
 	}
