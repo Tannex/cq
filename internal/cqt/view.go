@@ -180,9 +180,11 @@ func (m *Model) tabBar() string {
 	return consolePalette.panel.Width(m.width).Render(bar)
 }
 
-// helpContent returns the grouped key bindings as styled text lines (no header or
-// footer) so it can be consumed by both the full-area panel and the popup.
-func (m *Model) helpContent() []string {
+// helpContent returns the grouped key bindings as styled text lines (no header
+// or footer) so it can be consumed by both the full-area panel and the popup.
+// Every line is rendered through the supplied styles so all cells carry the
+// caller's background instead of falling back to the terminal default.
+func (m *Model) helpContent(accent, body lipgloss.Style) []string {
 	ctx := keyContext{Screen: m.screen, Mode: m.recordMode, InputFocused: m.inputFocused(), DialogOpen: m.dialog != nil, Tabs: m.hasTabs()}
 	groups := m.keys.fullHelp(ctx, m.overlay != nil)
 	var lines []string
@@ -190,10 +192,10 @@ func (m *Model) helpContent() []string {
 		if i > 0 {
 			lines = append(lines, "")
 		}
-		lines = append(lines, consolePalette.cyan.Bold(true).Render(group.Name))
+		lines = append(lines, accent.Render(group.Name))
 		for _, binding := range group.Bindings {
 			help := binding.Help()
-			lines = append(lines, fmt.Sprintf("  %-11s %s", help.Key, help.Desc))
+			lines = append(lines, body.Render(fmt.Sprintf("  %-11s %s", help.Key, help.Desc)))
 		}
 	}
 	return lines
@@ -203,7 +205,7 @@ func (m *Model) helpContent() []string {
 // This is the fallback used when the terminal is too small for a popup.
 func (m *Model) helpPanel() string {
 	lines := []string{consolePalette.panel.Bold(true).Width(m.width).Render("  HELP  press ? to close")}
-	lines = append(lines, m.helpContent()...)
+	lines = append(lines, m.helpContent(consolePalette.cyan.Bold(true), consolePalette.plain)...)
 	capacity := m.visible + 1
 	maxOffset := max(0, len(lines)-capacity)
 	offset := min(m.helpVertical, maxOffset)
@@ -231,7 +233,14 @@ func (m *Model) overlayHelp(background string) string {
 	innerWidth := popupWidth - 4 // border + 1 cell horizontal padding each side
 	contentHeight := popupHeight - 4
 
-	contentLines := m.helpContent()
+	// Each line carries the popup background itself: a styled segment ends in
+	// an ANSI reset, which would otherwise drop the box background for the
+	// remainder of that row.
+	fill := consolePalette.popup.Width(innerWidth)
+	accent := consolePalette.cyan.Bold(true).Inherit(consolePalette.popup)
+	body := consolePalette.popup
+
+	contentLines := m.helpContent(accent, body)
 	maxOffset := max(0, len(contentLines)-contentHeight)
 	offset := min(m.helpVertical, maxOffset)
 	if offset > 0 {
@@ -241,20 +250,23 @@ func (m *Model) overlayHelp(background string) string {
 		contentLines = contentLines[:contentHeight]
 	}
 
+	title := accent.Render("HELP")
 	innerLines := []string{
-		centerOrPad(consolePalette.cyan.Bold(true).Render("HELP"), innerWidth),
+		fill.Render(strings.Repeat(" ", max(0, (innerWidth-lipgloss.Width(title))/2)) + title),
 	}
 	for _, line := range contentLines {
-		innerLines = append(innerLines, truncateStyled(line, innerWidth))
+		innerLines = append(innerLines, fill.Render(truncateStyled(line, innerWidth)))
 	}
 	for len(innerLines) < contentHeight+1 {
-		innerLines = append(innerLines, strings.Repeat(" ", innerWidth))
+		innerLines = append(innerLines, fill.Render(""))
 	}
-	innerLines = append(innerLines, centerOrPad(consolePalette.muted.Render("? or esc to close"), innerWidth))
+	footer := consolePalette.muted.Inherit(consolePalette.popup).Render("? or esc to close")
+	innerLines = append(innerLines, fill.Render(strings.Repeat(" ", max(0, (innerWidth-lipgloss.Width(footer))/2))+footer))
 
 	popupStyle := consolePalette.popup.
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(consolePalette.popupBorder.GetForeground()).
+		BorderBackground(consolePalette.popup.GetBackground()).
 		Padding(0, 1).
 		Width(popupWidth).
 		Height(popupHeight)
@@ -268,17 +280,6 @@ func (m *Model) overlayHelp(background string) string {
 	popupLayer := lipgloss.NewLayer(popup).X(x).Y(y).Z(1)
 	compositor := lipgloss.NewCompositor(mainLayer, popupLayer)
 	return canvas.Compose(compositor).Render()
-}
-
-func centerOrPad(s string, width int) string {
-	w := lipgloss.Width(s)
-	if w >= width {
-		return truncateStyled(s, width)
-	}
-	pad := width - w
-	left := pad / 2
-	right := pad - left
-	return strings.Repeat(" ", left) + s + strings.Repeat(" ", right)
 }
 
 func (m *Model) dialogView() string {
