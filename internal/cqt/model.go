@@ -480,13 +480,13 @@ func (m *Model) handleAction(selected action) tea.Cmd {
 			m.jsonVertical = max(0, m.jsonVertical-max(1, m.visible))
 			return nil
 		}
-		return m.moveSelection(-max(1, m.visible))
+		return m.pageSelection(scrollUp)
 	case actionPageDown:
 		if m.screen == ScreenRecords && m.recordMode == ModeJSON {
 			m.jsonVertical = min(m.maxJSONVertical(), m.jsonVertical+max(1, m.visible))
 			return nil
 		}
-		return m.moveSelection(max(1, m.visible))
+		return m.pageSelection(scrollDown)
 	case actionTop:
 		m.activePagerTop()
 		return nil
@@ -660,6 +660,22 @@ func (m *Model) moveSelection(delta int) tea.Cmd {
 	return m.maybePrefetch()
 }
 
+func (m *Model) pageSelection(direction scrollDirection) tea.Cmd {
+	switch m.screen {
+	case ScreenDataSets:
+		m.datasetPage.page(direction)
+	case ScreenMembers:
+		m.memberPage.page(direction)
+	case ScreenRecords:
+		selected := m.recordPage.selectedKey()
+		m.recordPage.page(direction)
+		if m.recordPage.selectedKey() != selected {
+			m.jsonVertical = 0
+		}
+	}
+	return m.maybePrefetch()
+}
+
 func (m *Model) activePagerTop() {
 	switch m.screen {
 	case ScreenDataSets:
@@ -800,23 +816,23 @@ func (m *Model) refresh() tea.Cmd {
 	m.cancelBrowse()
 	switch m.screen {
 	case ScreenDataSets:
-		preserve := m.datasetPage.selectedKey()
+		plan := m.datasetPage.refreshPlan()
 		m.datasets = nil
 		m.datasetTotal = nil
 		m.datasetPage.reset("", m.visible, m.budget)
-		return m.startDataSets(pagePlan[string]{Preserve: preserve, Direction: pageRefresh})
+		return m.startDataSets(plan)
 	case ScreenMembers:
-		preserve := m.memberPage.selectedKey()
+		plan := m.memberPage.refreshPlan()
 		m.members = nil
 		m.memberTotal = nil
 		m.memberPage.reset("", m.visible, m.budget)
-		return m.startMembers(pagePlan[string]{Preserve: preserve, Direction: pageRefresh})
+		return m.startMembers(plan)
 	case ScreenRecords:
-		preserve := m.recordPage.selectedKey()
+		plan := m.recordPage.refreshPlan()
 		m.cancelDecode()
 		m.records = nil
 		m.recordPage.reset(0, m.visible, m.budget)
-		return m.startRecords(pagePlan[int64]{Preserve: preserve, Direction: pageRefresh})
+		return m.startRecords(plan)
 	}
 	return nil
 }

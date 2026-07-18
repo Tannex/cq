@@ -37,22 +37,33 @@ const (
 	pageForward
 )
 
+type scrollDirection int8
+
+const (
+	scrollUp   scrollDirection = -1
+	scrollIdle scrollDirection = 0
+	scrollDown scrollDirection = 1
+)
+
 type pagePlan[A comparable] struct {
-	Anchor    A
-	Preserve  string
-	Direction pageDirection
+	Anchor       A
+	Preserve     string
+	CursorOffset int
+	Direction    pageDirection
 }
 
-// pager owns cached row identities and selection state. Typed rows live in the
-// model. The cache may grow for the lifetime of the current browse screen, but
-// every individual request remains bounded by budget.
+// pager owns cached row identities, selection, and the visible row window.
+// Typed rows live in the model. The cache may grow for the lifetime of the
+// current browse screen, but every individual request remains bounded by budget.
 type pager[A comparable] struct {
-	keys     []string
-	selected int
-	visible  int
-	budget   int
-	more     bool
-	preserve string
+	keys        []string
+	selected    int
+	windowStart int
+	scrolling   scrollDirection
+	visible     int
+	budget      int
+	more        bool
+	preserve    string
 }
 
 func (p *pager[A]) reset(_ A, visible, budget int) {
@@ -79,18 +90,32 @@ func (p *pager[A]) selectedIndex() int {
 	return p.selected
 }
 
+func (p *pager[A]) windowRange() (int, int) {
+	if len(p.keys) == 0 || p.visible <= 0 {
+		return 0, 0
+	}
+	start := p.windowStart
+	return start, min(len(p.keys), start+p.visible)
+}
+
+func (p *pager[A]) cursorOffset() int {
+	selected := p.selectedIndex()
+	start, end := p.windowRange()
+	if selected < start || selected >= end {
+		return -1
+	}
+	return selected - start
+}
+
 // apply replaces the cache for an initial/refresh response and appends unseen
-// identities for a forward response. Selection is restored by identity.
+// identities for a forward response. Replacement selection is restored by
+// identity; append preserves the live selection and window.
 func (p *pager[A]) apply(keys []string, more bool, plan pagePlan[A]) {
 	if p.budget > 0 && len(keys) > p.budget {
 		keys = keys[:p.budget]
 		more = true
 	}
 
-	selected := p.selectedKey()
-	if plan.Preserve != "" {
-		selected = plan.Preserve
-	}
 	if plan.Direction == pageForward {
 		seen := make(map[string]struct{}, len(p.keys)+len(keys))
 		for _, key := range p.keys {
@@ -103,19 +128,36 @@ func (p *pager[A]) apply(keys []string, more bool, plan pagePlan[A]) {
 			seen[key] = struct{}{}
 			p.keys = append(p.keys, key)
 		}
-	} else {
-		p.keys = append(p.keys[:0], keys...)
+		p.more = more
+		p.normalizeWindow()
+		p.preserve = p.selectedKey()
+		return
 	}
 
+	selected := p.selectedKey()
+	if plan.Preserve != "" {
+		selected = plan.Preserve
+	}
+	p.keys = append(p.keys[:0], keys...)
 	p.more = more
-	p.preserve = selected
+	p.scrolling = scrollIdle
 	p.selected = indexOfKey(p.keys, selected)
 	if p.selected < 0 {
 		p.selected = 0
+		p.windowStart = 0
+	} else if plan.Direction == pageRefresh {
+		p.windowStart = p.selected - max(0, plan.CursorOffset)
+	} else {
+		p.windowStart = 0
 	}
 	if len(p.keys) == 0 {
 		p.selected = 0
+		p.windowStart = 0
+		p.preserve = selected
+		return
 	}
+	p.normalizeWindow()
+	p.preserve = p.selectedKey()
 }
 
 func indexOfKey(keys []string, wanted string) int {
@@ -135,6 +177,48 @@ func indexOfKey(keys []string, wanted string) int {
 func (p *pager[A]) resize(visible, budget int) {
 	p.visible = visible
 	p.budget = budget
+	p.scrolling = scrollIdle
+	if visible > 0 {
+		p.normalizeWindow()
+	}
+}
+
+func (p *pager[A]) normalizeWindow() {
+	if len(p.keys) == 0 {
+		p.selected = 0
+		p.windowStart = 0
+		p.scrolling = scrollIdle
+		return
+	}
+	p.selected = min(max(0, p.selected), len(p.keys)-1)
+	if p.visible <= 0 {
+		return
+	}
+	lastStart := max(0, len(p.keys)-p.visible)
+	p.windowStart = min(max(0, p.windowStart), lastStart)
+	if p.selected < p.windowStart {
+		p.windowStart = p.selected
+	}
+	if p.selected >= p.windowStart+p.visible {
+		p.windowStart = p.selected - p.visible + 1
+	}
+	p.windowStart = min(max(0, p.windowStart), lastStart)
+}
+
+func (p *pager[A]) alignDirectionalWindow(direction scrollDirection) {
+	if p.visible <= 0 || len(p.keys) == 0 {
+		return
+	}
+	offset := 0
+	if p.visible > 1 {
+		if direction == scrollUp {
+			offset = 1
+		} else {
+			offset = p.visible - 2
+		}
+	}
+	p.windowStart = p.selected - offset
+	p.normalizeWindow()
 }
 
 func (p *pager[A]) move(delta int) (before, after bool) {
@@ -142,22 +226,77 @@ func (p *pager[A]) move(delta int) (before, after bool) {
 		return false, false
 	}
 	target := p.selected + delta
-	if target < 0 {
-		before = true
-		target = 0
+	before = target < 0
+	after = target >= len(p.keys)
+	direction := scrollDown
+	steps := delta
+	if delta < 0 {
+		direction = scrollUp
+		steps = -delta
 	}
-	if target >= len(p.keys) {
-		after = true
-		target = len(p.keys) - 1
+	for i := 0; i < steps; i++ {
+		if !p.moveOne(direction) {
+			break
+		}
 	}
-	p.selected = target
-	p.preserve = p.selectedKey()
 	return before, after
+}
+
+func (p *pager[A]) moveOne(direction scrollDirection) bool {
+	p.normalizeWindow()
+	target := p.selected + int(direction)
+	if target < 0 || target >= len(p.keys) {
+		return false
+	}
+	if p.visible <= 0 {
+		p.selected = target
+		p.scrolling = scrollIdle
+		p.preserve = p.selectedKey()
+		return true
+	}
+
+	if p.scrolling == direction {
+		p.selected = target
+		p.alignDirectionalWindow(direction)
+		p.preserve = p.selectedKey()
+		return true
+	}
+
+	start, end := p.windowRange()
+	p.selected = target
+	if target >= start && target < end {
+		p.scrolling = scrollIdle
+	} else {
+		p.scrolling = direction
+		p.alignDirectionalWindow(direction)
+	}
+	p.preserve = p.selectedKey()
+	return true
+}
+
+func (p *pager[A]) page(direction scrollDirection) {
+	if len(p.keys) == 0 || p.visible <= 0 || direction == scrollIdle {
+		return
+	}
+	p.normalizeWindow()
+	offset := p.cursorOffset()
+	if offset < 0 {
+		offset = 0
+	}
+	target := p.selected + int(direction)*p.visible
+	target = min(max(0, target), len(p.keys)-1)
+	p.selected = target
+	p.windowStart = target - offset
+	p.scrolling = scrollIdle
+	p.normalizeWindow()
+	p.preserve = p.selectedKey()
 }
 
 func (p *pager[A]) top() {
 	if len(p.keys) > 0 {
 		p.selected = 0
+		p.windowStart = 0
+		p.scrolling = scrollIdle
 		p.preserve = p.keys[0]
 	}
 }
@@ -165,6 +304,8 @@ func (p *pager[A]) top() {
 func (p *pager[A]) bottom() {
 	if len(p.keys) > 0 {
 		p.selected = len(p.keys) - 1
+		p.windowStart = max(0, len(p.keys)-p.visible)
+		p.scrolling = scrollIdle
 		p.preserve = p.keys[p.selected]
 	}
 }
@@ -180,17 +321,21 @@ func (p *pager[A]) initialPlan(anchor A) pagePlan[A] {
 	return pagePlan[A]{Anchor: anchor, Preserve: p.preserve, Direction: pageInitial}
 }
 
+func (p *pager[A]) refreshPlan() pagePlan[A] {
+	return pagePlan[A]{Preserve: p.selectedKey(), CursorOffset: max(0, p.cursorOffset()), Direction: pageRefresh}
+}
+
 func forwardNamePlan(p *pager[string]) (pagePlan[string], bool) {
 	if !p.shouldPrefetch(false) {
 		return pagePlan[string]{}, false
 	}
 	anchor := p.keys[len(p.keys)-1]
-	return pagePlan[string]{Anchor: anchor, Preserve: p.selectedKey(), Direction: pageForward}, true
+	return pagePlan[string]{Anchor: anchor, Direction: pageForward}, true
 }
 
 func forwardRecordPlan(p *pager[int64], numbers []int64) (pagePlan[int64], bool) {
 	if !p.shouldPrefetch(false) || len(numbers) != len(p.keys) || len(numbers) == 0 {
 		return pagePlan[int64]{}, false
 	}
-	return pagePlan[int64]{Anchor: numbers[len(numbers)-1], Preserve: p.selectedKey(), Direction: pageForward}, true
+	return pagePlan[int64]{Anchor: numbers[len(numbers)-1], Direction: pageForward}, true
 }

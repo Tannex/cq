@@ -265,11 +265,12 @@ func (m *Model) dataSetTableView() string {
 	if showReferenced {
 		columns = append(columns, table.Column{Title: "REFERENCED", Width: 10})
 	}
-	rows := make([]table.Row, len(m.datasets))
+	start, end := m.datasetPage.windowRange()
+	rows := make([]table.Row, end-start)
 	selected := m.datasetPage.selectedIndex()
-	for i, dataSet := range m.datasets {
+	for i, dataSet := range m.datasets[start:end] {
 		marker := " "
-		if i == selected {
+		if start+i == selected {
 			marker = ">"
 		}
 		row := table.Row{marker, dataSet.Name, dataSet.Organization, dataSet.RecordFormat, dataSet.RecordLength}
@@ -281,7 +282,7 @@ func (m *Model) dataSetTableView() string {
 		}
 		rows[i] = row
 	}
-	return renderTable(m.width, m.visible, columns, rows, selected)
+	return renderTable(m.width, m.visible, columns, rows, m.datasetPage.cursorOffset())
 }
 
 func (m *Model) memberTableView() string {
@@ -300,11 +301,12 @@ func (m *Model) memberTableView() string {
 	if showDate {
 		columns = append(columns, table.Column{Title: "MODIFIED", Width: 12})
 	}
-	rows := make([]table.Row, len(m.members))
+	start, end := m.memberPage.windowRange()
+	rows := make([]table.Row, end-start)
 	selected := m.memberPage.selectedIndex()
-	for i, member := range m.members {
+	for i, member := range m.members[start:end] {
 		marker := " "
-		if i == selected {
+		if start+i == selected {
 			marker = ">"
 		}
 		row := table.Row{marker, member.Name, strconv.Itoa(member.Version), strconv.Itoa(member.Modification), strconv.Itoa(member.CurrentRecords)}
@@ -316,10 +318,10 @@ func (m *Model) memberTableView() string {
 		}
 		rows[i] = row
 	}
-	return renderTable(m.width, m.visible, columns, rows, selected)
+	return renderTable(m.width, m.visible, columns, rows, m.memberPage.cursorOffset())
 }
 
-func renderTable(width, visible int, columns []table.Column, rows []table.Row, selected int) string {
+func renderTable(width, visible int, columns []table.Column, rows []table.Row, cursorOffset int) string {
 	model := table.New(
 		table.WithColumns(columns),
 		table.WithRows(rows),
@@ -328,10 +330,8 @@ func renderTable(width, visible int, columns []table.Column, rows []table.Row, s
 		table.WithHeight(visible+1),
 		table.WithStyles(denseTableStyles()),
 	)
-	if selected > 0 {
-		// MoveDown updates both the cursor and viewport offset. SetCursor alone can
-		// leave a deep selection one row below the visible table viewport.
-		model.MoveDown(selected)
+	if cursorOffset >= 0 {
+		model.SetCursor(cursorOffset)
 	}
 	return model.View()
 }
@@ -339,8 +339,9 @@ func renderTable(width, visible int, columns []table.Column, rows []table.Row, s
 func (m *Model) rawRecordView() string {
 	numberWidth := m.recordNumberWidth()
 	header := consolePalette.panel.Bold(true).Render(fmt.Sprintf("  %-*s │ RAW DATA", numberWidth, "RECORD"))
-	lines := make([]string, len(m.records))
-	for i, row := range m.records {
+	start, end := m.recordPage.windowRange()
+	lines := make([]string, end-start)
+	for i, row := range m.records[start:end] {
 		lines[i] = decode.DisplayBytes(row.Record.Data, m.charmap)
 	}
 	selected := m.recordPage.selectedIndex()
@@ -351,22 +352,22 @@ func (m *Model) rawRecordView() string {
 	model.SetContentLines(lines)
 	model.SetXOffset(m.horizontal * 8)
 	model.LeftGutterFunc = func(context viewport.GutterContext) string {
-		if context.Index < 0 || context.Index >= len(m.records) {
+		absolute := start + context.Index
+		if context.Index < 0 || absolute >= end {
 			return strings.Repeat(" ", numberWidth+5)
 		}
 		marker := " "
-		if context.Index == selected {
+		if absolute == selected {
 			marker = ">"
 		}
-		return fmt.Sprintf("%s %0*d │ ", marker, numberWidth, m.records[context.Index].Record.Number)
+		return fmt.Sprintf("%s %0*d │ ", marker, numberWidth, m.records[absolute].Record.Number)
 	}
 	model.StyleLineFunc = func(index int) lipgloss.Style {
-		if index == selected {
+		if start+index == selected {
 			return lipgloss.NewStyle().Background(lipgloss.Color("#12344D")).Foreground(lipgloss.Color("#6FD7E5")).Bold(true)
 		}
 		return lipgloss.NewStyle()
 	}
-	ensureViewportSelection(&model, selected)
 	return header + "\n" + model.View()
 }
 
@@ -398,11 +399,12 @@ func (m *Model) recordTableView() string {
 		columns = append(columns, table.Column{Title: column.Path, Width: max(8, m.width-used-2)})
 	}
 
+	start, end := m.recordPage.windowRange()
 	selected := m.recordPage.selectedIndex()
-	rows := make([]table.Row, len(m.records))
-	for i, row := range m.records {
+	rows := make([]table.Row, end-start)
+	for i, row := range m.records[start:end] {
 		marker := " "
-		if i == selected {
+		if start+i == selected {
 			marker = ">"
 		}
 		tableRow := table.Row{fmt.Sprintf("%s %0*d │", marker, numberWidth, row.Record.Number)}
@@ -431,7 +433,7 @@ func (m *Model) recordTableView() string {
 		}
 		rows[i] = tableRow
 	}
-	return renderTable(m.width, m.visible, columns, rows, selected)
+	return renderTable(m.width, m.visible, columns, rows, m.recordPage.cursorOffset())
 }
 
 func (m *Model) recordJSONView() string {
@@ -476,19 +478,6 @@ func (m *Model) maxJSONVertical() int {
 		return 0
 	}
 	return max(0, len(strings.Split(m.recordJSONContent(m.records[selected]), "\n"))-m.visible)
-}
-
-func ensureViewportSelection(model *viewport.Model, selected int) {
-	if selected < 0 {
-		return
-	}
-	if selected < model.YOffset() {
-		model.SetYOffset(selected)
-		return
-	}
-	if selected >= model.YOffset()+model.Height() {
-		model.SetYOffset(selected - model.Height() + 1)
-	}
 }
 
 func (m *Model) statusLine() string {

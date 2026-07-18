@@ -234,7 +234,7 @@ func TestModelEndToEndBrowsesSequentialAndPartitionedDataSets(t *testing.T) {
 		t.Fatalf("sequential record flow screen=%d records=%#v", model.screen, model.records)
 	}
 	executeCommand(t, model, model.navigateBack())
-	model.datasetPage.selected = 1
+	model.datasetPage.move(1)
 	executeCommand(t, model, model.openSelection())
 	if model.screen != ScreenMembers || len(model.members) != 1 || model.members[0].Name != "MEM1" {
 		t.Fatalf("member flow screen=%d members=%#v", model.screen, model.members)
@@ -327,7 +327,7 @@ func TestDatasetRoutingMembersAndUnsupportedOrganizations(t *testing.T) {
 	}
 
 	executeCommand(t, model, model.navigateBack())
-	model.datasetPage.selected = 1
+	model.datasetPage.move(1)
 	command = model.openSelection()
 	if model.screen != ScreenRecords || command == nil {
 		t.Fatalf("PS-L route screen=%d command=%v", model.screen, command)
@@ -338,7 +338,7 @@ func TestDatasetRoutingMembersAndUnsupportedOrganizations(t *testing.T) {
 	}
 
 	executeCommand(t, model, model.navigateBack())
-	model.datasetPage.selected = 2
+	model.datasetPage.move(1)
 	command = model.openSelection()
 	if model.screen != ScreenMembers || command == nil {
 		t.Fatalf("PDSE route screen=%d command=%v", model.screen, command)
@@ -349,7 +349,7 @@ func TestDatasetRoutingMembersAndUnsupportedOrganizations(t *testing.T) {
 	}
 
 	executeCommand(t, model, model.navigateBack())
-	model.datasetPage.selected = 3
+	model.datasetPage.move(1)
 	if command := model.openSelection(); command != nil {
 		t.Fatal("unsupported DSORG dispatched a command")
 	}
@@ -425,7 +425,12 @@ func TestRepeatedMovementDoesNotRestartPendingPrefetch(t *testing.T) {
 	if model.browsePending == nil || model.browsePending.Generation != generation {
 		t.Fatalf("pending generation changed from %d to %#v", generation, model.browsePending)
 	}
+	selected := model.datasetPage.selectedKey()
+	windowStart := model.datasetPage.windowStart
 	executeCommand(t, model, pending)
+	if model.datasetPage.selectedKey() != selected || model.datasetPage.windowStart != windowStart {
+		t.Fatalf("forward result moved live cursor/window from %q/%d to %q/%d", selected, windowStart, model.datasetPage.selectedKey(), model.datasetPage.windowStart)
+	}
 }
 
 func TestMemberCacheSurvivesChildRecordsAndClearsOnBackToDataSets(t *testing.T) {
@@ -686,15 +691,18 @@ func TestNavigateBackReusesCachedParentWithoutRefetch(t *testing.T) {
 	model.budget = 4
 	model.dataSet = zosmf.DataSet{Name: "A.DATA", Organization: "PS"}
 	model.datasets = []zosmf.DataSet{{Name: "A"}, {Name: "B"}, {Name: "C"}, {Name: "D"}}
-	model.datasetPage = pager[string]{keys: []string{"A", "B", "C", "D"}, selected: 2, visible: 2, budget: 4, preserve: "C"}
+	model.datasetPage.reset("", model.visible, model.budget)
+	model.datasetPage.apply([]string{"A", "B", "C", "D"}, false, model.datasetPage.initialPlan(""))
+	model.datasetPage.move(2)
 	model.records = []recordRow{{Record: zosmf.Record{Number: 1, Data: []byte("X")}}}
-	model.recordPage = pager[int64]{keys: []string{"1"}, visible: 2, budget: 4}
+	model.recordPage.reset(0, model.visible, model.budget)
+	model.recordPage.apply([]string{"1"}, false, model.recordPage.initialPlan(0))
 
 	if command := model.navigateBack(); command != nil {
 		t.Fatal("returning to a cached parent unexpectedly refetched")
 	}
-	if len(browser.dataSetRequests) != 0 || len(model.datasets) != 4 || model.datasetPage.selectedKey() != "C" {
-		t.Fatalf("requests=%#v cache=%#v selected=%q", browser.dataSetRequests, model.datasets, model.datasetPage.selectedKey())
+	if len(browser.dataSetRequests) != 0 || len(model.datasets) != 4 || model.datasetPage.selectedKey() != "C" || model.datasetPage.windowStart != 2 {
+		t.Fatalf("requests=%#v cache=%#v selected=%q start=%d", browser.dataSetRequests, model.datasets, model.datasetPage.selectedKey(), model.datasetPage.windowStart)
 	}
 	if len(model.records) != 0 {
 		t.Fatalf("child record cache survived Back: %#v", model.records)
@@ -756,7 +764,7 @@ func TestDecodeInFlightSurvivesRecordCacheGrowth(t *testing.T) {
 		t.Fatal("initial decode did not start")
 	}
 	model.records = append(model.records, recordRow{Record: zosmf.Record{Number: 3, Data: []byte("C")}})
-	model.recordPage.apply([]string{"3"}, false, pagePlan[int64]{Anchor: 2, Preserve: "1", Direction: pageForward})
+	model.recordPage.apply([]string{"3"}, false, pagePlan[int64]{Anchor: 2, Direction: pageForward})
 
 	next := applyMessage(t, model, decodeResultMessage(t, firstDecode))
 	if model.records[0].Decoded == nil || model.records[1].Decoded == nil || model.records[2].Decoded != nil {
@@ -772,14 +780,51 @@ func TestDecodeInFlightSurvivesRecordCacheGrowth(t *testing.T) {
 	}
 }
 
+func TestListPageActionsPreserveCursorScreenRow(t *testing.T) {
+	model := recordViewModel(t)
+	model.visible = 5
+	model.budget = 40
+	model.records = make([]recordRow, 20)
+	keys := make([]string, len(model.records))
+	for i := range model.records {
+		number := int64(i + 1)
+		keys[i] = strconv.FormatInt(number, 10)
+		model.records[i] = recordRow{Record: zosmf.Record{Number: number, Data: []byte("RAW")}}
+	}
+	model.recordPage.reset(0, model.visible, model.budget)
+	model.recordPage.apply(keys, false, model.recordPage.initialPlan(0))
+	model.recordPage.move(6)
+	assertPagerWindow(t, &model.recordPage, 6, 3, 3, scrollDown)
+
+	model.jsonVertical = 4
+	model.handleAction(actionPageDown)
+	assertPagerWindow(t, &model.recordPage, 11, 8, 3, scrollIdle)
+	if model.jsonVertical != 0 {
+		t.Fatalf("record page movement retained JSON offset %d", model.jsonVertical)
+	}
+	model.handleAction(actionPageUp)
+	assertPagerWindow(t, &model.recordPage, 6, 3, 3, scrollIdle)
+}
+
 func TestJSONPageKeysScrollAndRecordSelectionResetsOffset(t *testing.T) {
 	model := recordViewModel(t)
 	model.visible = 3
+	model.budget = 16
 	model.recordMode = ModeJSON
+	model.records = make([]recordRow, 8)
+	keys := make([]string, len(model.records))
+	for i := range model.records {
+		number := int64(i + 1)
+		keys[i] = strconv.FormatInt(number, 10)
+		model.records[i] = recordRow{Record: zosmf.Record{Number: number, Data: []byte("RAW")}}
+	}
+	model.recordPage.reset(0, model.visible, model.budget)
+	model.recordPage.apply(keys, false, model.recordPage.initialPlan(0))
+	model.recordPage.move(4)
 	decoded := record.DecodedRecord{Value: record.Object{
 		{Name: "A", Value: "one"}, {Name: "B", Value: "two"}, {Name: "C", Value: "three"}, {Name: "D", Value: "four"},
 	}}
-	model.records[0].Decoded = &decoded
+	model.records[4].Decoded = &decoded
 	if before := model.recordJSONView(); !strings.Contains(before, `"A": "one"`) {
 		t.Fatalf("initial JSON view = %q", before)
 	}
@@ -788,15 +833,15 @@ func TestJSONPageKeysScrollAndRecordSelectionResetsOffset(t *testing.T) {
 	if model.jsonVertical == 0 {
 		t.Fatal("PageDown did not scroll the JSON viewport")
 	}
-	if selected := model.recordPage.selectedKey(); selected != "1" {
-		t.Fatalf("PageDown changed selected record to %q", selected)
+	if selected := model.recordPage.selectedKey(); selected != "5" || model.recordPage.windowStart != 3 {
+		t.Fatalf("PageDown changed record viewport to %q/%d", selected, model.recordPage.windowStart)
 	}
 	if after := model.recordJSONView(); strings.Contains(after, `"A": "one"`) || !strings.Contains(after, `"D": "four"`) {
 		t.Fatalf("scrolled JSON view = %q", after)
 	}
 	model.handleAction(actionDown)
-	if model.recordPage.selectedKey() != "2" || model.jsonVertical != 0 {
-		t.Fatalf("record change selected=%q offset=%d", model.recordPage.selectedKey(), model.jsonVertical)
+	if model.recordPage.selectedKey() != "6" || model.recordPage.windowStart != 4 || model.jsonVertical != 0 {
+		t.Fatalf("record change selected=%q start=%d offset=%d", model.recordPage.selectedKey(), model.recordPage.windowStart, model.jsonVertical)
 	}
 }
 
@@ -822,9 +867,19 @@ func TestPresentationTogglesReuseDecodedValuesWithoutRefetch(t *testing.T) {
 	model.screen = ScreenRecords
 	model.dataSet = zosmf.DataSet{Name: "A.DATA", Organization: "PS"}
 	decoded := record.DecodedRecord{Value: record.Object{{Name: "FIELD", Value: "VALUE"}}}
-	model.records = []recordRow{{Record: zosmf.Record{Number: 1, Data: []byte("VALUE")}, Decoded: &decoded}}
+	model.records = make([]recordRow, 12)
+	keys := make([]string, len(model.records))
+	for i := range model.records {
+		number := int64(i + 1)
+		keys[i] = strconv.FormatInt(number, 10)
+		model.records[i] = recordRow{Record: zosmf.Record{Number: number, Data: []byte("VALUE")}, Decoded: &decoded}
+	}
 	model.recordPage.reset(0, model.visible, model.budget)
-	model.recordPage.apply([]string{"1"}, false, model.recordPage.initialPlan(0))
+	model.recordPage.apply(keys, false, model.recordPage.initialPlan(0))
+	model.recordPage.bottom()
+	model.recordPage.move(-2)
+	windowStart := model.recordPage.windowStart
+	selected := model.recordPage.selectedKey()
 	model.overlay = &overlay{Columns: []fieldColumn{{Path: "FIELD", Parts: []string{"FIELD"}}}}
 	model.recordMode = ModeTable
 	before := len(browser.recordRequests)
@@ -850,6 +905,9 @@ func TestPresentationTogglesReuseDecodedValuesWithoutRefetch(t *testing.T) {
 	model.handleAction(actionToggleOverlay)
 	if model.recordMode != ModeTable || model.records[0].Decoded != pointer {
 		t.Fatalf("overlay restore after raw view toggle mode=%d decoded pointer changed", model.recordMode)
+	}
+	if model.recordPage.windowStart != windowStart || model.recordPage.selectedKey() != selected {
+		t.Fatalf("presentation toggles moved record viewport from %q/%d to %q/%d", selected, windowStart, model.recordPage.selectedKey(), model.recordPage.windowStart)
 	}
 	if len(browser.recordRequests) != before {
 		t.Fatalf("presentation toggle refetched records: before=%d after=%d", before, len(browser.recordRequests))

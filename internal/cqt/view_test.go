@@ -3,6 +3,7 @@ package cqt
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -42,6 +43,23 @@ func recordViewModel(t *testing.T) *Model {
 	}
 	model.recordPage.reset(0, model.visible, model.budget)
 	model.recordPage.apply([]string{"1", "2"}, false, model.recordPage.initialPlan(0))
+	return model
+}
+
+func recordWindowModel(t *testing.T, visible, count int) *Model {
+	t.Helper()
+	model := recordViewModel(t)
+	model.visible = visible
+	model.budget = max(count, RowBudget(visible))
+	model.records = make([]recordRow, count)
+	keys := make([]string, count)
+	for i := range model.records {
+		number := int64(101 + i)
+		keys[i] = strconv.FormatInt(number, 10)
+		model.records[i] = recordRow{Record: zosmf.Record{Number: number, Data: []byte(fmt.Sprintf("ROW%02d", i))}}
+	}
+	model.recordPage.reset(0, model.visible, model.budget)
+	model.recordPage.apply(keys, false, model.recordPage.initialPlan(0))
 	return model
 }
 
@@ -172,6 +190,84 @@ func TestSelectedTableRowRemainsAboveStatusLine(t *testing.T) {
 	if selected < 0 || status < 0 || selected >= status {
 		t.Fatalf("selected row disappeared behind status: selected=%d status=%d\n%s", selected, status, content)
 	}
+	if !strings.Contains(content, "  00000006 │") || strings.Contains(content, "00000005 │") {
+		t.Fatalf("table rendered the wrong persistent window:\n%s", content)
+	}
+}
+
+func TestBrowseViewsRenderPersistentWindow(t *testing.T) {
+	t.Run("data sets", func(t *testing.T) {
+		model := recordViewModel(t)
+		model.visible = 5
+		model.budget = 24
+		model.datasets = make([]zosmf.DataSet, 12)
+		keys := make([]string, len(model.datasets))
+		for i := range model.datasets {
+			name := fmt.Sprintf("DATASET.%02d", i)
+			model.datasets[i] = zosmf.DataSet{Name: name, Organization: "PS"}
+			keys[i] = name
+		}
+		model.datasetPage.reset("", model.visible, model.budget)
+		model.datasetPage.apply(keys, false, model.datasetPage.initialPlan(""))
+		model.datasetPage.bottom()
+		model.datasetPage.move(-2)
+
+		assertRenderedWindow(t, model.dataSetTableView(), "DATASET.07", "DATASET.11", "DATASET.06", "DATASET.09", 5, 2)
+	})
+
+	t.Run("members", func(t *testing.T) {
+		model := recordViewModel(t)
+		model.visible = 5
+		model.budget = 24
+		model.members = make([]zosmf.Member, 12)
+		keys := make([]string, len(model.members))
+		for i := range model.members {
+			name := fmt.Sprintf("MEMBER%02d", i)
+			model.members[i] = zosmf.Member{Name: name}
+			keys[i] = name
+		}
+		model.memberPage.reset("", model.visible, model.budget)
+		model.memberPage.apply(keys, false, model.memberPage.initialPlan(""))
+		model.memberPage.bottom()
+		model.memberPage.move(-2)
+
+		assertRenderedWindow(t, model.memberTableView(), "MEMBER07", "MEMBER11", "MEMBER06", "MEMBER09", 5, 2)
+	})
+
+	t.Run("raw records", func(t *testing.T) {
+		model := recordWindowModel(t, 5, 12)
+		model.recordPage.bottom()
+		model.recordPage.move(-2)
+
+		assertRenderedWindow(t, model.rawRecordView(), "00000108", "00000112", "00000107", "00000110", 5, 2)
+	})
+
+	t.Run("copybook table", func(t *testing.T) {
+		model := recordWindowModel(t, 5, 12)
+		model.overlay = &overlay{Columns: []fieldColumn{{Path: "FIELD", Parts: []string{"FIELD"}, Width: 20}}}
+		model.recordPage.bottom()
+		model.recordPage.move(-2)
+
+		assertRenderedWindow(t, model.recordTableView(), "00000108", "00000112", "00000107", "00000110", 5, 2)
+	})
+}
+
+func assertRenderedWindow(t *testing.T, content, first, last, hidden, selected string, visible, cursorOffset int) {
+	t.Helper()
+	lines := strings.Split(ansi.Strip(content), "\n")
+	if len(lines) != visible+1 {
+		t.Fatalf("rendered lines = %d, want %d:\n%s", len(lines), visible+1, strings.Join(lines, "\n"))
+	}
+	if !strings.Contains(lines[1], first) || !strings.Contains(lines[visible], last) {
+		t.Fatalf("rendered range does not start/end with %q/%q:\n%s", first, last, strings.Join(lines, "\n"))
+	}
+	if strings.Contains(strings.Join(lines, "\n"), hidden) {
+		t.Fatalf("rendered hidden row %q:\n%s", hidden, strings.Join(lines, "\n"))
+	}
+	selectedLine := 1 + cursorOffset
+	if !strings.Contains(lines[selectedLine], selected) || !strings.Contains(lines[selectedLine], ">") {
+		t.Fatalf("cursor line %d does not select %q:\n%s", selectedLine, selected, strings.Join(lines, "\n"))
+	}
 }
 
 func TestDiagnosticsDoNotHideLoadingOrErrorStatus(t *testing.T) {
@@ -214,6 +310,7 @@ func TestHelpPanelReplacesDataAreaWithGroupedBindings(t *testing.T) {
 	model.width, model.height = 80, 24
 	model.visible = VisibleRows(model.width, model.height)
 	model.budget = RowBudget(model.visible)
+	model.recordPage.resize(model.visible, model.budget)
 	model.showHelp = true
 	content := model.View().Content
 	if !strings.Contains(content, "HELP") || !strings.Contains(content, "press ? to close") {
@@ -290,6 +387,8 @@ func TestTinyLoadingEmptyErrorAndDialogViewsAreExplicit(t *testing.T) {
 	model.width = MinTerminalWidth - 1
 	model.height = 7
 	model.visible = 0
+	model.budget = 0
+	model.recordPage.resize(model.visible, model.budget)
 	if content := model.View().Content; !strings.Contains(content, "TERMINAL TOO SMALL") || !strings.Contains(content, "no row request dispatched") {
 		t.Fatalf("tiny view = %q", content)
 	}
@@ -297,6 +396,7 @@ func TestTinyLoadingEmptyErrorAndDialogViewsAreExplicit(t *testing.T) {
 	model.width, model.height = 80, 12
 	model.visible = VisibleRows(80, 12)
 	model.budget = RowBudget(model.visible)
+	model.recordPage.resize(model.visible, model.budget)
 	model.records = nil
 	model.status = status{Level: statusLoading, Text: "reading bounded range"}
 	if content := model.View().Content; !strings.Contains(content, "LOADING") {
