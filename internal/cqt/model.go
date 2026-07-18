@@ -24,6 +24,7 @@ import (
 const (
 	defaultRequestTimeout = 30 * time.Second
 	maxScrollOffset       = int(^uint(0) >> 1)
+	mouseWheelStep        = 3
 )
 
 // Options are the approved cqt command-line settings.
@@ -354,6 +355,8 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, command
 	case tea.KeyPressMsg:
 		return m, m.handleKey(msg)
+	case tea.MouseWheelMsg:
+		return m, m.handleMouseWheel(msg)
 	default:
 		return m, nil
 	}
@@ -416,6 +419,32 @@ func (m *Model) initialCopybookSource() CopybookSource {
 	return CopybookSource{
 		Local: m.options.Copybook, DSN: m.options.CopybookDSN, Format: m.options.Format, Record: m.options.Record,
 	}
+}
+
+func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
+	switch msg.Button {
+	case tea.MouseWheelLeft:
+		return m.handleAction(actionWideLeft)
+	case tea.MouseWheelRight:
+		return m.handleAction(actionWideRight)
+	}
+
+	delta := mouseWheelStep
+	if msg.Button == tea.MouseWheelUp {
+		delta = -delta
+	} else if msg.Button != tea.MouseWheelDown {
+		return nil
+	}
+
+	if m.showHelp {
+		m.helpVertical = max(0, m.helpVertical+delta)
+		return nil
+	}
+	if m.screen == ScreenRecords && m.recordMode == ModeJSON {
+		m.jsonVertical = min(m.maxJSONVertical(), max(0, m.jsonVertical+delta))
+		return nil
+	}
+	return m.moveSelection(delta)
 }
 
 func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"charm.land/bubbles/v2/help"
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
@@ -79,6 +80,32 @@ func TestRawRecordViewUsesFixedGutterAndVisibleControlMarkers(t *testing.T) {
 	}
 	if lines := strings.Count(content, "\n") + 1; lines != model.height {
 		t.Fatalf("view lines = %d, want terminal height %d", lines, model.height)
+	}
+}
+
+func TestEndMarkerAppearsOnlyAtKnownEnd(t *testing.T) {
+	model := recordWindowModel(t, 4, 8)
+	model.recordMode = ModeRaw
+
+	if content := ansi.Strip(model.rawRecordView()); strings.Contains(content, "end of results") {
+		t.Fatalf("end marker appeared before the last row was selected:\n%s", content)
+	}
+
+	model.recordPage.bottom()
+	if content := ansi.Strip(model.rawRecordView()); !strings.Contains(content, "── end of results ──") {
+		t.Fatalf("known end did not show the marker:\n%s", content)
+	}
+
+	model.recordPage.more = true
+	if content := ansi.Strip(model.rawRecordView()); strings.Contains(content, "end of results") {
+		t.Fatalf("end marker appeared while more records were available:\n%s", content)
+	}
+}
+
+func TestViewEnablesCellMotionMouseReporting(t *testing.T) {
+	model := recordViewModel(t)
+	if mode := model.View().MouseMode; mode != tea.MouseModeCellMotion {
+		t.Fatalf("mouse mode = %v, want cell motion", mode)
 	}
 }
 
@@ -193,8 +220,11 @@ func TestSelectedTableRowRemainsAboveStatusLine(t *testing.T) {
 	if selected < 0 || status < 0 || selected >= status {
 		t.Fatalf("selected row disappeared behind status: selected=%d status=%d\n%s", selected, status, content)
 	}
-	if !strings.Contains(content, "  00000006 │") || strings.Contains(content, "00000005 │") {
-		t.Fatalf("table rendered the wrong persistent window:\n%s", content)
+	if !strings.Contains(content, "  00000007 │") || strings.Contains(content, "00000006 │") {
+		t.Fatalf("table rendered the wrong end-marker window:\n%s", content)
+	}
+	if !strings.Contains(content, "── end of results ──") {
+		t.Fatalf("table did not show the end marker:\n%s", content)
 	}
 }
 

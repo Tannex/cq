@@ -1070,6 +1070,40 @@ func TestFocusedModelInputSuppressesQuitAndFunctionKeys(t *testing.T) {
 	}
 }
 
+func TestMouseWheelRoutesToListJSONAndHelp(t *testing.T) {
+	model := recordWindowModel(t, 5, 10)
+	model.recordMode = ModeRaw
+	applyMessage(t, model, tea.MouseWheelMsg{Button: tea.MouseWheelDown})
+	if got := model.recordPage.selectedIndex(); got != mouseWheelStep {
+		t.Fatalf("wheel-down selected index = %d, want %d", got, mouseWheelStep)
+	}
+	applyMessage(t, model, tea.MouseWheelMsg{Button: tea.MouseWheelUp})
+	if got := model.recordPage.selectedIndex(); got != 0 {
+		t.Fatalf("wheel-up selected index = %d, want 0", got)
+	}
+
+	fields := make(record.Object, 0, 8)
+	for i := range 8 {
+		fields = append(fields, record.Member{Name: fmt.Sprintf("FIELD-%d", i), Value: "VALUE"})
+	}
+	decoded := record.DecodedRecord{Value: fields}
+	model.records[0].Decoded = &decoded
+	model.recordMode = ModeJSON
+	model.visible = 3
+	applyMessage(t, model, tea.MouseWheelMsg{Button: tea.MouseWheelDown})
+	if model.jsonVertical != mouseWheelStep {
+		t.Fatalf("JSON wheel offset = %d, want %d", model.jsonVertical, mouseWheelStep)
+	}
+
+	model.showHelp = true
+	model.helpVertical = 0
+	model.jsonVertical = 0
+	applyMessage(t, model, tea.MouseWheelMsg{Button: tea.MouseWheelDown})
+	if model.helpVertical != mouseWheelStep || model.jsonVertical != 0 {
+		t.Fatalf("help wheel offset=%d JSON offset=%d", model.helpVertical, model.jsonVertical)
+	}
+}
+
 func TestSessionErrorAndEmptyResultStates(t *testing.T) {
 	model, err := NewModel(Options{}, Dependencies{LoadSession: func(context.Context) (Session, error) {
 		return Session{}, errors.New("profile missing")

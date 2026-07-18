@@ -125,6 +125,10 @@ func (p *pager[A]) cursorOffset() int {
 	return selected - start
 }
 
+func (p *pager[A]) atEnd() bool {
+	return len(p.keys) > 0 && !p.more && p.selectedIndex() == len(p.keys)-1
+}
+
 // apply replaces the cache for an initial/refresh response and appends unseen
 // identities for a forward response. Replacement selection is restored by
 // identity; append preserves the live selection and window.

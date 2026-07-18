@@ -20,14 +20,14 @@ const hScrollStep = 8
 var consolePalette = struct {
 	navy, panel, cyan, green, amber, danger, muted, selected, plain lipgloss.Style
 }{
-	navy:     lipgloss.NewStyle().Background(lipgloss.Color("#071827")).Foreground(lipgloss.Color("#E7F3F5")),
-	panel:    lipgloss.NewStyle().Background(lipgloss.Color("#12344D")).Foreground(lipgloss.Color("#E7F3F5")),
-	cyan:     lipgloss.NewStyle().Foreground(lipgloss.Color("#6FD7E5")),
-	green:    lipgloss.NewStyle().Foreground(lipgloss.Color("#89D185")),
-	amber:    lipgloss.NewStyle().Foreground(lipgloss.Color("#E8BD68")),
-	danger:   lipgloss.NewStyle().Foreground(lipgloss.Color("#FF7B72")),
-	muted:    lipgloss.NewStyle().Faint(true),
-	selected: lipgloss.NewStyle().Background(lipgloss.Color("#12344D")).Foreground(lipgloss.Color("#6FD7E5")).Bold(true),
+	navy:     lipgloss.NewStyle().Background(lipgloss.Color("#111827")).Foreground(lipgloss.Color("#CCFBF1")),
+	panel:    lipgloss.NewStyle().Background(lipgloss.Color("#1F2937")).Foreground(lipgloss.Color("#CBD5E1")),
+	cyan:     lipgloss.NewStyle().Foreground(lipgloss.Color("#5EEAD4")),
+	green:    lipgloss.NewStyle().Foreground(lipgloss.Color("#4ADE80")),
+	amber:    lipgloss.NewStyle().Foreground(lipgloss.Color("#FBBF24")),
+	danger:   lipgloss.NewStyle().Foreground(lipgloss.Color("#FB7185")),
+	muted:    lipgloss.NewStyle().Foreground(lipgloss.Color("#94A3B8")).Faint(true),
+	selected: lipgloss.NewStyle().Background(lipgloss.Color("#263449")).Foreground(lipgloss.Color("#99F6E4")).Bold(true),
 	plain:    lipgloss.NewStyle(),
 }
 
@@ -43,6 +43,7 @@ func (m *Model) View() tea.View {
 	}
 	view := tea.NewView(content)
 	view.AltScreen = true
+	view.MouseMode = tea.MouseModeCellMotion
 	view.WindowTitle = "cqt — z/OSMF data sets"
 	return view
 }
@@ -268,7 +269,7 @@ func (m *Model) dataSetTableView() string {
 	if showReferenced {
 		columns = append(columns, table.Column{Title: "REFERENCED", Width: 10})
 	}
-	start, end := m.datasetPage.windowRange()
+	start, end, showEnd := endMarkerWindow(&m.datasetPage)
 	rows := make([]table.Row, end-start)
 	selected := m.datasetPage.selectedIndex()
 	for i, dataSet := range m.datasets[start:end] {
@@ -285,7 +286,7 @@ func (m *Model) dataSetTableView() string {
 		}
 		rows[i] = row
 	}
-	return renderTable(m.width, m.visible, columns, rows, m.datasetPage.cursorOffset())
+	return renderTable(m.width, m.visible, columns, rows, selected-start, showEnd)
 }
 
 func (m *Model) memberTableView() string {
@@ -304,7 +305,7 @@ func (m *Model) memberTableView() string {
 	if showDate {
 		columns = append(columns, table.Column{Title: "MODIFIED", Width: 12})
 	}
-	start, end := m.memberPage.windowRange()
+	start, end, showEnd := endMarkerWindow(&m.memberPage)
 	rows := make([]table.Row, end-start)
 	selected := m.memberPage.selectedIndex()
 	for i, member := range m.members[start:end] {
@@ -321,34 +322,61 @@ func (m *Model) memberTableView() string {
 		}
 		rows[i] = row
 	}
-	return renderTable(m.width, m.visible, columns, rows, m.memberPage.cursorOffset())
+	return renderTable(m.width, m.visible, columns, rows, selected-start, showEnd)
 }
 
-func renderTable(width, visible int, columns []table.Column, rows []table.Row, cursorOffset int) string {
+func endMarkerWindow[A comparable](pager *pager[A]) (start, end int, showEnd bool) {
+	start, end = pager.windowRange()
+	showEnd = pager.visible > 1 && pager.atEnd()
+	// Reserve one row only at the true end. Dropping the oldest visible row
+	// keeps the selected final row stationary while making the boundary explicit.
+	if showEnd && end-start >= pager.visible {
+		start++
+	}
+	return start, end, showEnd
+}
+
+func renderTable(width, visible int, columns []table.Column, rows []table.Row, cursorOffset int, showEnd bool) string {
+	height := visible + 1
+	if showEnd {
+		height--
+	}
 	model := table.New(
 		table.WithColumns(columns),
 		table.WithRows(rows),
 		table.WithFocused(true),
 		table.WithWidth(width),
-		table.WithHeight(visible+1),
+		table.WithHeight(height),
 		table.WithStyles(denseTableStyles()),
 	)
 	if cursorOffset >= 0 {
 		model.SetCursor(cursorOffset)
 	}
-	return model.View()
+	view := model.View()
+	if showEnd {
+		view += "\n" + endMarker(width)
+	}
+	return view
+}
+
+func endMarker(width int) string {
+	return consolePalette.muted.Width(width).Render("  ── end of results ──")
 }
 
 func (m *Model) rawRecordView() string {
 	numberWidth := m.recordNumberWidth()
 	header := consolePalette.panel.Bold(true).Render(fmt.Sprintf("  %-*s │ RAW DATA", numberWidth, "RECORD"))
-	start, end := m.recordPage.windowRange()
+	start, end, showEnd := endMarkerWindow(&m.recordPage)
 	lines := make([]string, end-start)
 	for i, row := range m.records[start:end] {
 		lines[i] = decode.DisplayBytes(row.Record.Data, m.charmap)
 	}
 	selected := m.recordPage.selectedIndex()
-	model := viewport.New(viewport.WithWidth(m.width), viewport.WithHeight(m.visible))
+	height := m.visible
+	if showEnd {
+		height--
+	}
+	model := viewport.New(viewport.WithWidth(m.width), viewport.WithHeight(height))
 	model.SoftWrap = false
 	model.FillHeight = true
 	model.SetHorizontalStep(hScrollStep)
@@ -371,7 +399,11 @@ func (m *Model) rawRecordView() string {
 		}
 		return consolePalette.plain
 	}
-	return header + "\n" + model.View()
+	view := header + "\n" + model.View()
+	if showEnd {
+		view += "\n" + endMarker(m.width)
+	}
+	return view
 }
 
 func (m *Model) recordTableView() string {
@@ -402,7 +434,7 @@ func (m *Model) recordTableView() string {
 		columns = append(columns, table.Column{Title: column.Path, Width: max(8, m.width-used-2)})
 	}
 
-	start, end := m.recordPage.windowRange()
+	start, end, showEnd := endMarkerWindow(&m.recordPage)
 	selected := m.recordPage.selectedIndex()
 	rows := make([]table.Row, end-start)
 	for i, row := range m.records[start:end] {
@@ -436,7 +468,7 @@ func (m *Model) recordTableView() string {
 		}
 		rows[i] = tableRow
 	}
-	return renderTable(m.width, m.visible, columns, rows, m.recordPage.cursorOffset())
+	return renderTable(m.width, m.visible, columns, rows, selected-start, showEnd)
 }
 
 func (m *Model) recordJSONView() string {
