@@ -85,7 +85,7 @@ if [ "$shot" != "-" ]; then
       LC_ALL=C.UTF-8 LANG=C.UTF-8 xterm \
         -geometry "${3}x${4}+0+0" -tn xterm-direct -u8 \
         -fa "Iosevka Nerd Font" -fs 12 \
-        -bg "#111827" -fg "#CBD5E1" -b 0 -bw 0 \
+        -bg "#0B0E14" -fg "#BFBDB6" -b 0 -bw 0 \
         -e tmux -S "$5" attach-session -t "$1" &
       terminal_pid=$!
       sleep 1.2
