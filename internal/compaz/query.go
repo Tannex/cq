@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -38,6 +39,11 @@ const (
 type queryPopup struct {
 	input    textinput.Model
 	compiled *query.Query
+
+	// fields are the overlay's flattened field paths offered by the
+	// ctrl+space completion; comp is the open completion list, nil otherwise.
+	fields []completionField
+	comp   *queryCompletion
 
 	lines    []string // retained "number │ output" result lines, capped
 	matches  int      // all outputs emitted, including past the cap
@@ -138,6 +144,132 @@ func (p *queryPopup) scrollBy(delta int) {
 	p.scroll = max(0, min(p.scroll+delta, max(0, len(p.lines)-1)))
 }
 
+// completionField is one insertable field path: label is the display form
+// from the table header, parts the path segments used to build the jq
+// reference with per-segment quoting.
+type completionField struct {
+	label string
+	parts []string
+}
+
+type queryCompletion struct {
+	filtered []completionField
+	selected int
+}
+
+// jqPlainIdent matches field names jq accepts after a bare dot; anything else
+// (COBOL names with dashes, above all) needs the quoted ."NAME" form.
+var jqPlainIdent = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+func jqFieldRef(parts []string) string {
+	var sb strings.Builder
+	for _, part := range parts {
+		if jqPlainIdent.MatchString(part) {
+			sb.WriteString("." + part)
+		} else {
+			sb.WriteString(`."` + part + `"`)
+		}
+	}
+	return sb.String()
+}
+
+// fieldTokenAt finds the partial field reference ending at the cursor: the
+// name characters scanned left from the cursor plus the `."` or `.` opener in
+// front of them. start is the rune index where an inserted reference should
+// replace from; token is the partial name used as the completion filter.
+func fieldTokenAt(value []rune, cursor int) (start int, token string) {
+	cursor = max(0, min(cursor, len(value)))
+	nameStart := cursor
+	for nameStart > 0 {
+		r := value[nameStart-1]
+		if r == '-' || r == '_' ||
+			'a' <= r && r <= 'z' || 'A' <= r && r <= 'Z' || '0' <= r && r <= '9' {
+			nameStart--
+			continue
+		}
+		break
+	}
+	start = nameStart
+	if nameStart > 1 && value[nameStart-1] == '"' && value[nameStart-2] == '.' {
+		start = nameStart - 2
+	} else if nameStart > 0 && value[nameStart-1] == '.' {
+		start = nameStart - 1
+	}
+	return start, string(value[nameStart:cursor])
+}
+
+// completionCandidates filters the overlay fields by a case-insensitive
+// substring match on the partial name.
+func (p *queryPopup) completionCandidates(token string) []completionField {
+	token = strings.ToUpper(token)
+	var matched []completionField
+	for _, field := range p.fields {
+		if token == "" || strings.Contains(strings.ToUpper(field.label), token) {
+			matched = append(matched, field)
+		}
+	}
+	return matched
+}
+
+// openCompletion opens the field list for the token under the cursor. A
+// single candidate is inserted immediately instead of opening a one-row list.
+func (p *queryPopup) openCompletion() {
+	_, token := fieldTokenAt([]rune(p.input.Value()), p.input.Position())
+	matched := p.completionCandidates(token)
+	switch len(matched) {
+	case 0:
+		return
+	case 1:
+		p.comp = nil
+		p.insertCompletion(matched[0])
+		return
+	}
+	p.comp = &queryCompletion{filtered: matched}
+}
+
+// refreshCompletion re-filters an open list after the input changed; the list
+// closes when nothing matches any more.
+func (p *queryPopup) refreshCompletion() {
+	if p.comp == nil {
+		return
+	}
+	matched := p.completionCandidates(func() string {
+		_, token := fieldTokenAt([]rune(p.input.Value()), p.input.Position())
+		return token
+	}())
+	if len(matched) == 0 {
+		p.comp = nil
+		return
+	}
+	p.comp.filtered = matched
+	p.comp.selected = min(p.comp.selected, len(matched)-1)
+}
+
+func (p *queryPopup) moveCompletion(delta int) {
+	comp := p.comp
+	if comp == nil || len(comp.filtered) == 0 {
+		return
+	}
+	comp.selected = (comp.selected + delta + len(comp.filtered)) % len(comp.filtered)
+}
+
+// insertCompletion replaces the partial field reference under the cursor with
+// the selected field's jq form, quoting segments jq cannot take after a bare
+// dot (dashes in COBOL names).
+func (p *queryPopup) insertCompletion(field completionField) {
+	value := []rune(p.input.Value())
+	cursor := max(0, min(p.input.Position(), len(value)))
+	start, _ := fieldTokenAt(value, cursor)
+	ref := []rune(jqFieldRef(field.parts))
+	updated := make([]rune, 0, len(value)+len(ref))
+	updated = append(updated, value[:start]...)
+	updated = append(updated, ref...)
+	updated = append(updated, value[cursor:]...)
+	p.input.SetValue(string(updated))
+	p.input.SetCursor(start + len(ref))
+	p.comp = nil
+}
+
 const queryNeedsOverlay = "queries run over decoded records — load a copybook with c first"
 
 // openQueryPopup opens the jq console. Queries need a copybook overlay: they
@@ -145,20 +277,42 @@ const queryNeedsOverlay = "queries run over decoded records — load a copybook 
 // instead of an input that cannot work.
 func (m *Model) openQueryPopup() tea.Cmd {
 	popup := newQueryPopup(m.width)
-	if m.ws().overlay == nil {
+	if overlay := m.ws().overlay; overlay == nil {
 		popup.err = queryNeedsOverlay
+	} else {
+		popup.fields = make([]completionField, 0, len(overlay.Columns))
+		for _, column := range overlay.Columns {
+			popup.fields = append(popup.fields, completionField{label: column.Path, parts: column.Parts})
+		}
 	}
 	m.query = popup
 	return popup.input.Focus()
 }
 
-// handleQueryKey routes keys while the query popup is open.
+// handleQueryKey routes keys while the query popup is open. An open
+// completion list captures navigation and accept/cancel; everything else
+// falls through to the expression input, re-filtering the list as the token
+// under the cursor changes.
 func (m *Model) handleQueryKey(msg tea.KeyPressMsg, selected action) tea.Cmd {
 	popup := m.query
 	switch selected {
-	case actionAccept:
-		return m.runQuery()
+	case actionQueryComplete:
+		popup.openCompletion()
+		return nil
+	case actionAccept, actionNextField:
+		if comp := popup.comp; comp != nil {
+			popup.insertCompletion(comp.filtered[comp.selected])
+			return nil
+		}
+		if selected == actionAccept {
+			return m.runQuery()
+		}
+		return nil
 	case actionCancel:
+		if popup.comp != nil {
+			popup.comp = nil
+			return nil
+		}
 		if popup.running {
 			popup.stopSearch()
 			popup.cancelled = true
@@ -166,6 +320,20 @@ func (m *Model) handleQueryKey(msg tea.KeyPressMsg, selected action) tea.Cmd {
 		}
 		popup.stopSearch()
 		m.query = nil
+		return nil
+	case actionUp:
+		if popup.comp != nil {
+			popup.moveCompletion(-1)
+		} else {
+			popup.scrollBy(-1)
+		}
+		return nil
+	case actionDown:
+		if popup.comp != nil {
+			popup.moveCompletion(1)
+		} else {
+			popup.scrollBy(1)
+		}
 		return nil
 	case actionPageUp:
 		popup.scrollBy(-max(1, m.visible))
@@ -176,6 +344,7 @@ func (m *Model) handleQueryKey(msg tea.KeyPressMsg, selected action) tea.Cmd {
 	default:
 		updated, cmd := popup.input.Update(msg)
 		popup.input = updated
+		popup.refreshCompletion()
 		return cmd
 	}
 }
@@ -253,6 +422,7 @@ func (m *Model) runQuery() tea.Cmd {
 		return nil
 	}
 	popup.stopSearch()
+	popup.comp = nil
 	popup.generation++
 	popup.compiled = compiled
 	popup.lines = nil
@@ -572,13 +742,34 @@ func (m *Model) queryResultLines(body, muted lipgloss.Style, width, rows int) []
 	return lines
 }
 
+// queryCompletionLines renders the open ctrl+space field list, at most
+// maxRows entries with the selection kept in view.
+func (m *Model) queryCompletionLines(width, maxRows int) []string {
+	comp := m.query.comp
+	if comp == nil || maxRows < 1 {
+		return nil
+	}
+	first := max(0, min(comp.selected-maxRows+1, len(comp.filtered)-maxRows))
+	lines := make([]string, 0, maxRows)
+	for i := first; i < len(comp.filtered) && len(lines) < maxRows; i++ {
+		line := truncateStyled("  "+comp.filtered[i].label, width)
+		if i == comp.selected {
+			line = consolePalette.selected.Render(truncateStyled("> "+comp.filtered[i].label, width))
+		}
+		lines = append(lines, line)
+	}
+	return lines
+}
+
 // queryPanel is the tiny-terminal fallback: a full-area panel in the data
 // region, mirroring helpPanel.
 func (m *Model) queryPanel() string {
 	footer := m.queryFooterLines(consolePalette.muted, consolePalette.danger, m.width)
 	lines := []string{consolePalette.panel.Bold(true).Width(m.width).Render("  JQ QUERY  enter run  esc close")}
 	lines = append(lines, truncateStyled(m.query.input.View(), m.width))
-	lines = append(lines, m.queryResultLines(consolePalette.plain, consolePalette.muted, m.width, max(1, m.visible-1-len(footer)))...)
+	completion := m.queryCompletionLines(m.width, 6)
+	lines = append(lines, completion...)
+	lines = append(lines, m.queryResultLines(consolePalette.plain, consolePalette.muted, m.width, max(1, m.visible-1-len(completion)-len(footer)))...)
 	lines = append(lines, footer...)
 	capacity := m.visible + 1
 	lines = scrollWindow(lines, 0, capacity)
@@ -589,10 +780,24 @@ func (m *Model) queryPanel() string {
 }
 
 // overlayQuery composites the query popup over the live view with the same
-// Canvas/Layer mechanism and sizing rules as the help popup.
+// Canvas/Layer mechanism as the help popup. Unlike help it carries no
+// background fill (the compositor blanks the covered cells to the terminal
+// default) and anchors below the table header row, so the column names the
+// expression refers to stay readable while typing.
 func (m *Model) overlayQuery(background string) string {
 	popupWidth := min(76, m.width-4)
-	popupHeight := min(max(12, int(float64(m.height)*0.8)), m.height-2)
+	// Rows above the popup: optional tab bar, title, search, rule, and the
+	// table header line; the status and help lines stay visible below.
+	top := 4
+	if m.hasTabs() {
+		top++
+	}
+	popupHeight := m.height - top - 2
+	if popupHeight < 8 {
+		// Terminal too short to spare the chrome: fall back to centering.
+		popupHeight = min(max(12, int(float64(m.height)*0.8)), m.height-2)
+		top = (m.height - popupHeight) / 2
+	}
 	if popupWidth < 24 || popupHeight < 8 {
 		return background
 	}
@@ -600,11 +805,11 @@ func (m *Model) overlayQuery(background string) string {
 	innerWidth := popupWidth - 4
 	contentHeight := popupHeight - 4
 
-	fill := consolePalette.popup.Width(innerWidth)
-	accent := consolePalette.cyan.Bold(true).Inherit(consolePalette.popup)
-	body := consolePalette.popup
-	muted := consolePalette.muted.Inherit(consolePalette.popup)
-	danger := consolePalette.danger.Inherit(consolePalette.popup)
+	fill := lipgloss.NewStyle().Width(innerWidth)
+	accent := consolePalette.cyan.Bold(true)
+	body := consolePalette.plain
+	muted := consolePalette.muted
+	danger := consolePalette.danger
 
 	title := accent.Render("JQ QUERY")
 	footer := m.queryFooterLines(muted, danger, innerWidth)
@@ -613,7 +818,11 @@ func (m *Model) overlayQuery(background string) string {
 		fill.Render(truncateStyled(m.query.input.View(), innerWidth)),
 		fill.Render(muted.Render(strings.Repeat("─", max(0, innerWidth)))),
 	}
-	for _, line := range m.queryResultLines(body, muted, innerWidth, max(1, contentHeight-1-len(footer))) {
+	completion := m.queryCompletionLines(innerWidth, max(1, contentHeight-2-len(footer)))
+	for _, line := range completion {
+		innerLines = append(innerLines, fill.Render(line))
+	}
+	for _, line := range m.queryResultLines(body, muted, innerWidth, max(1, contentHeight-1-len(completion)-len(footer))) {
 		innerLines = append(innerLines, fill.Render(line))
 	}
 	for len(innerLines) < contentHeight+2-len(footer) {
@@ -623,21 +832,19 @@ func (m *Model) overlayQuery(background string) string {
 		innerLines = append(innerLines, fill.Render(line))
 	}
 
-	popupStyle := consolePalette.popup.
+	popupStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(consolePalette.popupBorder.GetForeground()).
-		BorderBackground(consolePalette.popup.GetBackground()).
 		Padding(0, 1).
 		Width(popupWidth).
 		Height(popupHeight)
 	popup := popupStyle.Render(strings.Join(innerLines, "\n"))
 
 	x := (m.width - popupWidth) / 2
-	y := (m.height - popupHeight) / 2
 
 	canvas := lipgloss.NewCanvas(m.width, m.height)
 	mainLayer := lipgloss.NewLayer(background).X(0).Y(0).Z(0)
-	popupLayer := lipgloss.NewLayer(popup).X(x).Y(y).Z(1)
+	popupLayer := lipgloss.NewLayer(popup).X(x).Y(top).Z(1)
 	compositor := lipgloss.NewCompositor(mainLayer, popupLayer)
 	return canvas.Compose(compositor).Render()
 }
