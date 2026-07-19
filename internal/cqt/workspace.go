@@ -85,7 +85,7 @@ func (ws *workspace) acceptBrowse(meta requestMeta, budget int, screen Screen) b
 		return false
 	}
 	pending := ws.browsePending
-	if pending.Generation != meta.Generation || pending.Kind != meta.Kind || pending.Screen != meta.Screen || pending.Identity != meta.Identity || pending.Budget != meta.Budget {
+	if pending.Generation != meta.Generation || pending.Screen != meta.Screen || pending.Identity != meta.Identity || pending.Budget != meta.Budget {
 		return false
 	}
 	if meta.Budget != budget || meta.Screen != screen {
@@ -95,13 +95,9 @@ func (ws *workspace) acceptBrowse(meta requestMeta, budget int, screen Screen) b
 	case ScreenDataSets:
 		return meta.Identity == ws.prefix
 	case ScreenMembers:
-		return meta.Identity == ws.dataSet.Name+"|"+ws.memberPattern
+		return meta.Identity == ws.memberIdentity()
 	case ScreenRecords:
-		member := ""
-		if ws.member != nil {
-			member = ws.member.Name
-		}
-		return meta.Identity == ws.dataSet.Name+"("+member+")"
+		return meta.Identity == ws.recordIdentity()
 	default:
 		return false
 	}
@@ -117,6 +113,10 @@ func (ws *workspace) finishBrowse() {
 
 func (ws *workspace) canFetch(budget int) bool {
 	return ws.sessionReady && ws.browser != nil && budget > 0
+}
+
+func (ws *workspace) memberIdentity() string {
+	return ws.dataSet.Name + "|" + ws.memberPattern
 }
 
 func (ws *workspace) recordIdentity() string {
@@ -181,6 +181,12 @@ func (ws *workspace) cancelAll() {
 	ws.cancelBrowse()
 	ws.cancelOverlay()
 	ws.cancelDecode()
+}
+
+func (ws *workspace) resizePagers(visible, budget int) {
+	ws.datasetPage.resize(visible, budget)
+	ws.memberPage.resize(visible, budget)
+	ws.recordPage.resize(visible, budget)
 }
 
 func (ws *workspace) activePager() pagerNavigator {

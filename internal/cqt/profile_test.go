@@ -153,12 +153,12 @@ func TestCrossProfileResultDoesNotCorruptActiveView(t *testing.T) {
 	alphaWS := model.workspaces[0]
 	alphaWS.browseGeneration = 7
 	alphaWS.browsePending = &requestMeta{
-		Kind: requestDataSets, Generation: 7, Screen: ScreenDataSets,
+		Generation: 7, Screen: ScreenDataSets,
 		Identity: "A*", Profile: "alpha", Budget: model.budget,
 		NamePlan: alphaWS.datasetPage.initialPlan(""),
 	}
 	applyMessage(t, model, dataSetsResultMsg{
-		Meta: requestMeta{Kind: requestDataSets, Generation: 7, Screen: ScreenDataSets, Identity: "A*", Profile: "alpha", Budget: model.budget, NamePlan: alphaWS.datasetPage.initialPlan("")},
+		Meta: requestMeta{Generation: 7, Screen: ScreenDataSets, Identity: "A*", Profile: "alpha", Budget: model.budget, NamePlan: alphaWS.datasetPage.initialPlan("")},
 		Page: zosmf.DataSetPage{Items: []zosmf.DataSet{{Name: "A.LATE", Organization: "PS"}}},
 	})
 

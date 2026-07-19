@@ -1,6 +1,9 @@
 package cqt
 
-import "strconv"
+import (
+	"math"
+	"strconv"
+)
 
 const (
 	// The row budget is computed after the fixed title, search/breadcrumb,
@@ -40,7 +43,7 @@ func VisibleRows(width, height int, tabBar bool) int {
 
 // RowBudget is the exact maximum item count used for every browse request.
 func RowBudget(visibleRows int) int {
-	if visibleRows <= 0 || visibleRows > int(^uint(0)>>1)/2 {
+	if visibleRows <= 0 || visibleRows > math.MaxInt/2 {
 		return 0
 	}
 	return 2 * visibleRows
@@ -340,23 +343,28 @@ func (p *pager[A]) refreshPlan() pagePlan[A] {
 	return pagePlan[A]{Preserve: p.selectedKey(), CursorOffset: max(0, p.cursorOffset()), Direction: pageRefresh}
 }
 
-func forwardNamePlan(p *pager[string]) (pagePlan[string], bool) {
+// forwardPlan builds a forward prefetch plan anchored on the last cached key,
+// parsed into the pager's anchor type.
+func forwardPlan[A comparable](p *pager[A], parse func(string) (A, bool)) (pagePlan[A], bool) {
 	if !p.shouldPrefetch(false) {
-		return pagePlan[string]{}, false
+		return pagePlan[A]{}, false
 	}
-	anchor := p.keys[len(p.keys)-1]
-	return pagePlan[string]{Anchor: anchor, Direction: pageForward}, true
+	anchor, ok := parse(p.keys[len(p.keys)-1])
+	if !ok {
+		return pagePlan[A]{}, false
+	}
+	return pagePlan[A]{Anchor: anchor, Direction: pageForward}, true
+}
+
+func forwardNamePlan(p *pager[string]) (pagePlan[string], bool) {
+	return forwardPlan(p, func(key string) (string, bool) { return key, true })
 }
 
 func forwardRecordPlan(p *pager[int64]) (pagePlan[int64], bool) {
-	if !p.shouldPrefetch(false) {
-		return pagePlan[int64]{}, false
-	}
 	// Record keys are the decimal encoding of the record number, so the last
 	// key recovers the anchor without a parallel numbers slice.
-	anchor, err := strconv.ParseInt(p.keys[len(p.keys)-1], 10, 64)
-	if err != nil {
-		return pagePlan[int64]{}, false
-	}
-	return pagePlan[int64]{Anchor: anchor, Direction: pageForward}, true
+	return forwardPlan(p, func(key string) (int64, bool) {
+		number, err := strconv.ParseInt(key, 10, 64)
+		return number, err == nil
+	})
 }

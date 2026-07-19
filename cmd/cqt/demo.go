@@ -263,7 +263,7 @@ func filterDataSets(items []zosmf.DataSet, prefix string) []zosmf.DataSet {
 	}
 	var matched []zosmf.DataSet
 	for _, item := range items {
-		if matchNamePrefix(item.Name, prefix) {
+		if matchPattern(item.Name, prefix) {
 			matched = append(matched, item)
 		}
 	}
@@ -307,18 +307,6 @@ func paginate[T any](items []T, start string, maxItems int, name func(T) string)
 		end = len(items)
 	}
 	return items[idx:end], end < len(items)
-}
-
-func matchNamePrefix(name, prefix string) bool {
-	name = strings.ToUpper(strings.TrimSpace(name))
-	prefix = strings.ToUpper(strings.TrimSpace(prefix))
-	if prefix == "" || prefix == "*" {
-		return true
-	}
-	if strings.HasSuffix(prefix, "*") {
-		return strings.HasPrefix(name, strings.TrimSuffix(prefix, "*"))
-	}
-	return name == prefix
 }
 
 func matchPattern(name, pattern string) bool {
