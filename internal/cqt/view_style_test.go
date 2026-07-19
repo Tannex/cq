@@ -200,3 +200,22 @@ func TestStyledCellsSurviveNarrowTruncation(t *testing.T) {
 		t.Fatalf("tint should survive truncation:\n%q", view)
 	}
 }
+
+func TestChromeRuleSeparatesMetaRowsFromData(t *testing.T) {
+	model := recordViewModel(t)
+	model.records = []recordRow{{Record: zosmf.Record{Number: 1, Data: []byte("VALUE")}}}
+	model.recordPage.reset(model.visible, model.budget)
+	model.recordPage.apply([]string{"1"}, false, model.recordPage.initialPlan(0))
+
+	lines := strings.Split(ansi.Strip(model.View().Content), "\n")
+	rule := -1
+	for i, line := range lines {
+		if strings.Count(line, "─") == model.width {
+			rule = i
+			break
+		}
+	}
+	if rule != 2 {
+		t.Fatalf("chrome rule not on the row under title+search: index %d\n%s", rule, strings.Join(lines, "\n"))
+	}
+}

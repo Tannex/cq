@@ -11,7 +11,7 @@ func TestVisibleRowsAndExactBudget(t *testing.T) {
 		{width: MinTerminalWidth - 1, height: 40},
 		{width: 100, height: MinTerminalHeight(false) - 1},
 		{width: MinTerminalWidth, height: MinTerminalHeight(false), visible: 3, budget: 6},
-		{width: 100, height: 25, visible: 20, budget: 40},
+		{width: 100, height: 26, visible: 20, budget: 40},
 	}
 	for _, test := range tests {
 		visible := VisibleRows(test.width, test.height, false)

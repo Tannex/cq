@@ -87,8 +87,14 @@ func (m *Model) mainView() string {
 	} else if m.query != nil && (m.width < MinTerminalWidth || m.visible <= 0) {
 		data = m.queryPanel()
 	}
-	lines = append(lines, m.titleLine(), m.searchLine(), data, m.statusLine(), m.helpLine())
+	lines = append(lines, m.titleLine(), m.searchLine(), m.chromeRule(), data, m.statusLine(), m.helpLine())
 	return fitHeight(strings.Join(lines, "\n"), m.width, m.height)
+}
+
+// chromeRule is the bordered filler line separating the meta rows (tabs,
+// title, search) from the data area, echoing the │ gutter language.
+func (m *Model) chromeRule() string {
+	return consolePalette.muted.Render(strings.Repeat("─", max(0, m.width)))
 }
 
 // tabBar renders the profile tab strip. The active tab is always visible;
