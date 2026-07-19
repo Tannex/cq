@@ -33,6 +33,10 @@ type workspace struct {
 	memberTotal  *int
 	member       *zosmf.Member
 
+	// recalls tracks data sets with an HRECALL in flight, keyed by upper-case
+	// name, so the list can mark them and catalog polling knows when to stop.
+	recalls map[string]struct{}
+
 	records []recordRow
 	// rawLongest caches the widest rendered raw line across the cached
 	// records, so horizontal panning does not rescan the whole cache.
@@ -82,6 +86,26 @@ func newWorkspace(profile string) workspace {
 		decodedMode: ModeTable,
 		status:      status{Level: statusLoading, Text: "loading Zowe session"},
 	}
+}
+
+func (ws *workspace) recallPending(name string) bool {
+	_, ok := ws.recalls[name]
+	return ok
+}
+
+func (ws *workspace) markRecall(name string) {
+	if ws.recalls == nil {
+		ws.recalls = make(map[string]struct{})
+	}
+	ws.recalls[name] = struct{}{}
+}
+
+func (ws *workspace) clearRecall(name string) {
+	delete(ws.recalls, name)
+}
+
+func (ws *workspace) hasRecalls() bool {
+	return len(ws.recalls) > 0
 }
 
 func (ws *workspace) sessionStatusText() string {

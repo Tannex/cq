@@ -53,6 +53,7 @@ const (
 	actionMappingRemove
 	actionToggleFavorite
 	actionFavorites
+	actionRecall
 	actionFavoriteNote
 	actionFavoriteRemove
 	actionEdit
@@ -119,6 +120,7 @@ type KeyMap struct {
 	MappingRemove   key.Binding
 	ToggleFavorite  key.Binding
 	Favorites       key.Binding
+	Recall          key.Binding
 	FavoriteNote    key.Binding
 	FavoriteRemove  key.Binding
 	Edit            key.Binding
@@ -161,6 +163,7 @@ func DefaultKeyMap() KeyMap {
 		MappingRemove:   key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "remove mapping")),
 		ToggleFavorite:  key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "favorite")),
 		Favorites:       key.NewBinding(key.WithKeys("F"), key.WithHelp("F", "favorites")),
+		Recall:          key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "recall migrated")),
 		FavoriteNote:    key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "edit note")),
 		FavoriteRemove:  key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "remove favorite")),
 		Edit:            key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit")),
@@ -331,6 +334,8 @@ func (k KeyMap) actionFor(msg tea.KeyPressMsg, ctx keyContext) action {
 		return actionToggleFavorite
 	case key.Matches(msg, k.Favorites) && ctx.Screen == ScreenDataSets:
 		return actionFavorites
+	case key.Matches(msg, k.Recall) && ctx.Screen == ScreenDataSets:
+		return actionRecall
 	case key.Matches(msg, k.Edit) && ctx.Screen != ScreenRecords:
 		return actionEdit
 	case key.Matches(msg, k.Query) && ctx.Screen == ScreenRecords:
@@ -400,7 +405,7 @@ func (k KeyMap) shortHelp(ctx keyContext, overlay bool) []key.Binding {
 	}
 	bindings := []key.Binding{k.Up, k.Down, k.Open}
 	if ctx.Screen == ScreenDataSets {
-		bindings = append(bindings, k.Search, k.ToggleFavorite, k.Favorites, k.Edit)
+		bindings = append(bindings, k.Search, k.ToggleFavorite, k.Favorites, k.Edit, k.Recall)
 	} else if ctx.Screen != ScreenRecords {
 		bindings = append(bindings, k.Search, k.Edit)
 	} else {
@@ -432,7 +437,7 @@ func (k KeyMap) fullHelp(ctx keyContext, overlay bool) []helpGroup {
 	navigation := []key.Binding{k.Up, k.Down, pageUp, pageDown, k.Top, k.Bottom, k.Open, k.Back}
 	actions := []key.Binding{k.Refresh}
 	if ctx.Screen == ScreenDataSets {
-		actions = append(actions, k.Search, k.ToggleFavorite, k.Favorites, k.Edit)
+		actions = append(actions, k.Search, k.ToggleFavorite, k.Favorites, k.Edit, k.Recall)
 	} else if ctx.Screen != ScreenRecords {
 		actions = append(actions, k.Search, k.Edit)
 	} else {

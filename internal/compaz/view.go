@@ -14,6 +14,7 @@ import (
 	"github.com/Tannex/cq/internal/decode"
 	"github.com/Tannex/cq/internal/layout"
 	"github.com/Tannex/cq/internal/record"
+	"github.com/Tannex/cq/internal/zosmf"
 )
 
 const hScrollStep = 8
@@ -634,7 +635,8 @@ func (m *Model) dataSetTableView() string {
 			styledCell(rightAligned(dataSet.RecordLength, 6), consolePalette.plain, onCursor),
 		)
 		if showVolume {
-			row = append(row, styledCell(displayOr(dataSet.Volume, dataSet.Volumes), consolePalette.muted, onCursor))
+			text, style := m.volumeCell(dataSet)
+			row = append(row, styledCell(text, style, onCursor))
 		}
 		if showReferenced {
 			row = append(row, styledCell(dataSet.ReferenceDate, consolePalette.muted, onCursor))
@@ -642,6 +644,20 @@ func (m *Model) dataSetTableView() string {
 		rows[i] = row
 	}
 	return renderTable(m.width, m.visible, columns, rows, selected-start, showEnd)
+}
+
+// volumeCell renders the VOLUME column. A data set with an HRECALL in flight
+// shows an animated RECALL marker instead of the MIGRAT pseudo volume, driven
+// by the shared status spinner.
+func (m *Model) volumeCell(dataSet zosmf.DataSet) (string, lipgloss.Style) {
+	if m.recallPending(strings.ToUpper(strings.TrimSpace(dataSet.Name))) {
+		frame := ansi.Strip(m.spinner.View())
+		if frame == "" {
+			frame = "~"
+		}
+		return frame + " RECALL", consolePalette.amber
+	}
+	return displayOr(dataSet.Volume, dataSet.Volumes), consolePalette.muted
 }
 
 func (m *Model) memberTableView() string {
