@@ -158,6 +158,7 @@ $ cqt --copybook-dsn 'HQ.COPYLIB(CUSTOMER)' --record CUSTOMER-RECORD
 cqt [--prefix PREFIX]
     [-c COPYBOOK | --copybook COPYBOOK | --copybook-dsn DSN[(MEMBER)]]
     [--format auto|fixed|free] [--record NAME] [--codepage CODEPAGE]
+    [--read-only]
 ```
 
 A copybook is optional, but local and DSN copybook sources are mutually
@@ -184,6 +185,7 @@ prefix patterns.
 | `Enter` | open the selected data set/member, or accept focused input/dialog fields |
 | `Esc` | return to the previous screen, or cancel focused input/dialog fields |
 | `/` | edit the data set prefix or member filter |
+| `e` | edit the selected sequential data set or member (explicit save only) |
 | `r` | clear and refresh the current screen cache |
 | `c` | open the copybook overlay dialog on the record screen |
 | `x` | clear the active copybook overlay |
@@ -262,10 +264,25 @@ the browser remains usable on imperfect operational data:
 - short records, impossible OCCURS DEPENDING ON counters, and other
   layout-determining failures remain row-level errors with a raw fallback.
 
-This release of `cqt` is strictly read-only. It has no allocate, write, rename,
-delete, save, or edit operations, and its z/OSMF browser interface exposes only
-list/read/fetch methods. The separate `cq` command and its existing behavior and
-installation path are unchanged.
+### Edit mode
+
+Press `e` on a sequential (PS) data set or a PDS member to open its text
+content in an editor. Nothing is ever written implicitly: the buffer only
+reaches the host through `Ctrl-S`, which validates every line against the data
+set's record length before sending an `If-Match` conditional write. If the data
+set changed on the host after it was fetched, the save fails cleanly, the
+buffer is kept, and `Ctrl-R` reloads from the host (explicitly discarding the
+buffer). Leaving the editor with unsaved changes requires a confirmation (`d`
+discards, `Esc` keeps editing); a clean buffer closes immediately with `Esc`.
+Load libraries and other undefined-format content are not editable.
+
+Some terminals reserve `Ctrl-S` for flow control (XOFF); run `stty -ixon` to
+free it. Start `cqt --read-only` to disable edit mode entirely and restore the
+strictly read-only console guarantee. Browsing itself remains read-only: the
+z/OSMF browser interface exposes only list/read/fetch methods, and the write
+surface is a separate opt-in interface used exclusively by the editor. The
+separate `cq` command and its existing behavior and installation path are
+unchanged.
 
 ## Using Zowe
 

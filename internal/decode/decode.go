@@ -171,6 +171,38 @@ func DisplayBytes(b []byte, cm *Charmap) string {
 	return sb.String()
 }
 
+// Text decodes text-mode bytes to UTF-8 using cm, faithfully: every byte maps
+// through the table with no trimming, padding, or control-character
+// substitution, so the result round-trips through EncodeText. It is intended
+// for editable text content rather than operator displays.
+func Text(b []byte, cm *Charmap) string {
+	var sb strings.Builder
+	sb.Grow(len(b))
+	for _, c := range b {
+		sb.WriteRune(cm.to[c])
+	}
+	return sb.String()
+}
+
+// EncodeText encodes a UTF-8 string to the given charmap without padding or
+// truncation, reversing Text. A rune with no mapping in the codepage is an
+// error reporting the rune and its 1-based line.
+func EncodeText(s string, cm *Charmap) ([]byte, error) {
+	enc := make([]byte, 0, len(s))
+	line := 1
+	for _, r := range s {
+		b, ok := cm.from[r]
+		if !ok {
+			return nil, fmt.Errorf("decode: EncodeText: line %d: %q cannot be encoded in %s", line, r, cm.name)
+		}
+		if r == '\n' {
+			line++
+		}
+		enc = append(enc, b)
+	}
+	return enc, nil
+}
+
 // EncodeString encodes a UTF-8 string to the given charmap, padding with
 // the charmap's space character to width. The result is truncated if it
 // is longer than width. It is intended as a test and round-trip helper.

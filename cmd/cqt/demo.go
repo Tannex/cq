@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Tannex/cq/internal/cqt"
@@ -100,6 +102,70 @@ func (d *demoBrowser) FetchText(_ context.Context, _ string) ([]byte, error) {
 
 func (d *demoBrowser) Encoding() (string, error) {
 	return "latin1", nil
+}
+
+// demoTexts keeps in-memory edited content so the full edit/save flow —
+// including ETag conflict detection — works offline. It is shared across demo
+// profiles so edits survive profile switches.
+var demoTexts = struct {
+	sync.Mutex
+	content map[string]string
+	version map[string]int
+}{content: map[string]string{}, version: map[string]int{}}
+
+func demoBaseText(target string) string {
+	dataSet, member, _ := splitDemoTarget(target)
+	records := demoRecords(dataSet, member)
+	lines := make([]string, len(records))
+	for i, record := range records {
+		lines[i] = strings.TrimRight(string(record.Data), " ")
+	}
+	return strings.Join(lines, "\n") + "\n"
+}
+
+func splitDemoTarget(target string) (dataSet, member string, found bool) {
+	trimmed := strings.ToUpper(strings.TrimSpace(target))
+	open := strings.IndexByte(trimmed, '(')
+	if open < 0 || !strings.HasSuffix(trimmed, ")") {
+		return trimmed, "", false
+	}
+	return trimmed[:open], trimmed[open+1 : len(trimmed)-1], true
+}
+
+func demoETag(target string) string {
+	return fmt.Sprintf("demo-%d", demoTexts.version[target])
+}
+
+// ReadText serves the demo text content with a version-based ETag.
+func (d *demoBrowser) ReadText(ctx context.Context, dsn string) (zosmf.TextContent, error) {
+	if err := ctx.Err(); err != nil {
+		return zosmf.TextContent{}, err
+	}
+	target := strings.ToUpper(strings.TrimSpace(dsn))
+	demoTexts.Lock()
+	defer demoTexts.Unlock()
+	text, ok := demoTexts.content[target]
+	if !ok {
+		text = demoBaseText(target)
+	}
+	return zosmf.TextContent{Text: []byte(text), ETag: demoETag(target)}, nil
+}
+
+// WriteText stores edits in memory and enforces If-Match semantics so the
+// conflict path is demonstrable offline.
+func (d *demoBrowser) WriteText(ctx context.Context, request zosmf.WriteTextRequest) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	target := strings.ToUpper(strings.TrimSpace(request.Target))
+	demoTexts.Lock()
+	defer demoTexts.Unlock()
+	if request.ETag != "" && request.ETag != demoETag(target) {
+		return "", &zosmf.HTTPError{StatusCode: http.StatusPreconditionFailed, Resource: target, Message: "the data set changed after the entity tag was captured"}
+	}
+	demoTexts.content[target] = string(request.Body)
+	demoTexts.version[target]++
+	return demoETag(target), nil
 }
 
 var demoDataSetDefs = []struct {

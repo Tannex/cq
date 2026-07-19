@@ -292,3 +292,54 @@ func TestDemoBrowserRespectsContextCancellation(t *testing.T) {
 		t.Fatalf("ReadRecords error = %v, want context.Canceled", err)
 	}
 }
+
+func TestDemoBrowserEditRoundTripWithConflict(t *testing.T) {
+	browser := &demoBrowser{}
+	target := "DEMO.CONFIG.PARM.T" + t.Name()[len(t.Name())-4:]
+
+	content, err := browser.ReadText(context.Background(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(content.Text) == 0 || content.ETag == "" {
+		t.Fatalf("content = %q etag = %q", content.Text, content.ETag)
+	}
+
+	etag, err := browser.WriteText(context.Background(), zosmf.WriteTextRequest{
+		Target: target, Body: []byte("EDITED\n"), ETag: content.ETag,
+	})
+	if err != nil {
+		t.Fatalf("WriteText() error = %v", err)
+	}
+	if etag == content.ETag {
+		t.Fatal("etag did not change after write")
+	}
+	updated, err := browser.ReadText(context.Background(), target)
+	if err != nil || string(updated.Text) != "EDITED\n" {
+		t.Fatalf("re-read = %q, %v", updated.Text, err)
+	}
+
+	// A stale etag is a detectable conflict, and the content is untouched.
+	_, err = browser.WriteText(context.Background(), zosmf.WriteTextRequest{
+		Target: target, Body: []byte("CLOBBER\n"), ETag: content.ETag,
+	})
+	if !zosmf.IsConflict(err) {
+		t.Fatalf("stale write error = %v, want conflict", err)
+	}
+	final, _ := browser.ReadText(context.Background(), target)
+	if string(final.Text) != "EDITED\n" {
+		t.Fatalf("conflict overwrote content: %q", final.Text)
+	}
+}
+
+func TestRunSupportsReadOnlyFlag(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	originalRunner := runProgram
+	runProgram = func(*cqt.Model) error { return nil }
+	t.Cleanup(func() { runProgram = originalRunner })
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"--demo", "--read-only"}, &stdout, &stderr); err != nil {
+		t.Fatalf("run(--read-only): %v stderr=%q", err, stderr.String())
+	}
+}

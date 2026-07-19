@@ -100,6 +100,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	fs.StringVar(&options.Format, "format", "auto", "copybook source format: auto, fixed, or free")
 	fs.StringVar(&options.Record, "record", "", "01-level record when the copybook has several")
 	fs.StringVar(&options.Codepage, "codepage", "", "EBCDIC codepage (default: Zowe profile encoding, then cp037)")
+	fs.BoolVar(&options.ReadOnly, "read-only", false, "disable edit mode; the console cannot write to the host")
 	fs.BoolVar(&showVersion, "version", false, "print version and exit")
 	fs.BoolVar(&demoMode, "demo", false, "run with offline fake data")
 	fs.Usage = func() {

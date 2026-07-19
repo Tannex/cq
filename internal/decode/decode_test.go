@@ -755,3 +755,22 @@ func TestCP277Danish(t *testing.T) {
 		t.Errorf("cp277 0x5A = %q, want ¤", got)
 	}
 }
+
+func TestTextRoundTripsLatin1(t *testing.T) {
+	cm := mustCM(t, "latin1")
+	raw := []byte("S\xc6RLIG\n\xd8L \xc5R\n")
+	text := Text(raw, cm)
+	if text != "SÆRLIG\nØL ÅR\n" {
+		t.Fatalf("Text = %q", text)
+	}
+	back, err := EncodeText(text, cm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(back) != string(raw) {
+		t.Fatalf("EncodeText = %q, want %q", back, raw)
+	}
+	if _, err := EncodeText("ok\n☃", cm); err == nil || !strings.Contains(err.Error(), "line 2") {
+		t.Fatalf("unmappable rune error = %v", err)
+	}
+}
