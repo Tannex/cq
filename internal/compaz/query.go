@@ -61,15 +61,12 @@ type queryPopup struct {
 	lastErr   string // most recent per-record runtime error
 
 	// Bulk download state: once paging has run longer than
-	// queryBulkThreshold, the whole data set is pulled into bulkPath in one
-	// request and evaluation continues from that file. The file is kept for
-	// re-runs until the popup closes.
-	bulk       bool   // download decided for the current search
-	bulkFailed bool   // download failed; this search stays on paging
-	bulkPath   string // completed download
-	bulkOffset int64  // resume offset of the next file chunk
-	bulkEOF    bool   // file fully evaluated in the current pass
-	bulkSkip   int64  // leading frames outside the streaming scope
+	// queryBulkThreshold, the whole data set is pulled once into the
+	// workspace's bulk record cache and evaluation continues from that file.
+	bulk       bool  // download decided for the current search
+	bulkFailed bool  // download failed; this search stays on paging
+	bulkOffset int64 // resume offset of the next file chunk
+	bulkEOF    bool  // file fully evaluated in the current pass
 
 	generation uint64
 	ctx        context.Context
@@ -333,7 +330,6 @@ func (m *Model) handleQueryKey(msg tea.KeyPressMsg, selected action) tea.Cmd {
 			return nil
 		}
 		popup.stopSearch()
-		popup.closeBulk()
 		m.query = nil
 		return nil
 	case actionUp:
@@ -445,7 +441,7 @@ func (m *Model) runQuery() tea.Cmd {
 	popup.scroll = 0
 	popup.err, popup.lastErr = "", ""
 	popup.done, popup.capped, popup.cancelled, popup.arrayMode = false, false, false, false
-	popup.bulk = popup.bulkPath != ""
+	popup.bulk = ws.bulkRecords() != ""
 	popup.bulkFailed = false
 	popup.bulkOffset = 0
 	popup.bulkEOF = false
@@ -465,10 +461,10 @@ func (m *Model) queryStep(ws *workspace) tea.Cmd {
 	if popup == nil || !popup.running || ws != &m.workspace {
 		return nil
 	}
-	if popup.bulkPath != "" {
+	if path := ws.bulkRecords(); path != "" {
 		if !popup.bulkEOF {
-			return evalQueryFileChunk(popup.ctx, popup.compiled, ws.overlay, popup.bulkPath,
-				popup.bulkOffset, popup.bulkSkip+int64(popup.next), queryChunkSize,
+			return evalQueryFileChunk(popup.ctx, popup.compiled, ws.overlay, path,
+				popup.bulkOffset, queryScopeStart(ws)+int64(popup.next), queryChunkSize,
 				queryResultCap-len(popup.lines), ws.profile, popup.generation)
 		}
 	} else {
@@ -509,14 +505,24 @@ func (m *Model) queryStep(ws *workspace) tea.Cmd {
 		popup.arrayMode = true
 		popup.errored = 0
 		popup.lastErr = ""
-		if popup.bulkPath != "" {
-			return evalQueryArrayFile(popup.ctx, popup.compiled, ws.overlay, popup.bulkPath, popup.bulkSkip, ws.profile, popup.generation)
+		if path := ws.bulkRecords(); path != "" {
+			return evalQueryArrayFile(popup.ctx, popup.compiled, ws.overlay, path, queryScopeStart(ws), ws.profile, popup.generation)
 		}
 		return evalQueryArray(popup.ctx, popup.compiled, ws.overlay, ws.records, ws.profile, popup.generation)
 	}
 	popup.stopSearch()
 	popup.done = true
 	return nil
+}
+
+// queryScopeStart is the count of records before the search scope: the
+// download always starts at record one, but the cache — and therefore the
+// streaming pass — may start further in after a locate.
+func queryScopeStart(ws *workspace) int64 {
+	if len(ws.records) > 0 {
+		return ws.records[0].Record.Number - 1
+	}
+	return 0
 }
 
 // evalQueryArray runs the expression once over every record's decoded value
@@ -709,9 +715,9 @@ func (m *Model) queryFooter() string {
 	switch {
 	case popup.running && popup.arrayMode:
 		state = fmt.Sprintf("%s %s evaluating all %d records as one array…", popup.spin.View(), clock, total)
-	case popup.running && popup.bulk && popup.bulkPath == "" && !popup.bulkFailed:
+	case popup.running && popup.bulk && !popup.bulkFailed && ws.bulkRecordsPath == "":
 		state = fmt.Sprintf("%s %s paging is slow — downloading the whole data set…", popup.spin.View(), clock)
-	case popup.running && popup.bulkPath != "":
+	case popup.running && ws.bulkRecordsPath != "":
 		state = fmt.Sprintf("%s %s searched %d downloaded records…", popup.spin.View(), clock, popup.searched)
 	case popup.running:
 		state = fmt.Sprintf("%s %s searched %d of %d%s records…", popup.spin.View(), clock, popup.searched, total, suffix)

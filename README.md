@@ -263,8 +263,10 @@ screen; `ctrl+space` completes field names with the quoting jq needs (dashes
 in COBOL names become `."CUST-TYPE"`). Queries stream through the bounded
 record pages; when that paging runs longer than ten seconds, the whole data
 set is downloaded once in a single record-mode request to a temporary file and
-the search finishes from there. The download is reused for re-runs and deleted
-when the console closes.
+the search finishes from there. The download is kept while the same records
+are browsed — re-running, editing the query, or reopening the console reuses
+it — and it is dropped when the browsed data set changes, on refresh with `r`,
+after saving an edit, and at quit.
 
 A valid overlay persists while browsing data sets and members. If a replacement
 copybook fails to load or parse, the previous valid overlay remains active.

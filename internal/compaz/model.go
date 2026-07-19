@@ -814,7 +814,10 @@ func (m *Model) handleAction(selected action) tea.Cmd {
 		m.flushMappingOps()
 		if m.query != nil {
 			m.query.stopSearch()
-			m.query.closeBulk()
+		}
+		m.workspace.dropBulkRecords()
+		for _, ws := range m.workspaces {
+			ws.dropBulkRecords()
 		}
 		m.cancelAll()
 		return tea.Quit
@@ -1401,6 +1404,9 @@ func (m *Model) refresh() tea.Cmd {
 	case ScreenRecords:
 		plan := ws.recordPage.refreshPlan()
 		ws.cancelDecode()
+		// A refresh means the data may have changed on the host; any cached
+		// bulk download is stale.
+		ws.dropBulkRecords()
 		ws.records = nil
 		ws.rawLongest = 0
 		ws.syntaxKind = sourcePlain

@@ -32,14 +32,6 @@ type queryBulkMsg struct {
 	Err        error
 }
 
-// closeBulk removes the downloaded record file, if any.
-func (p *queryPopup) closeBulk() {
-	if p.bulkPath != "" {
-		_ = os.Remove(p.bulkPath)
-		p.bulkPath = ""
-	}
-}
-
 // startQueryBulkDownload pulls every record of the browsed data set in one
 // record-mode request into a temp file. The search continues from that file,
 // so a slow host is asked exactly once more instead of page by page.
@@ -48,13 +40,6 @@ func (m *Model) startQueryBulkDownload(ws *workspace, streamer zosmf.RecordStrea
 	target := ws.dataSet.Name
 	if ws.member != nil {
 		target += "(" + ws.member.Name + ")"
-	}
-	// The cache may start past record one (the user located forward); the
-	// downloaded file always starts at record one, so remember how many
-	// leading frames every file pass must skip to match the streaming scope.
-	popup.bulkSkip = 0
-	if len(ws.records) > 0 {
-		popup.bulkSkip = ws.records[0].Record.Number - 1
 	}
 	ctx := popup.ctx
 	profile, generation := ws.profile, popup.generation
@@ -102,7 +87,7 @@ func (m *Model) handleQueryBulk(msg queryBulkMsg) tea.Cmd {
 		popup.lastErr = "bulk download failed: " + msg.Err.Error()
 		return m.queryStep(ws)
 	}
-	popup.bulkPath = msg.Path
+	ws.setBulkRecords(msg.Path)
 	popup.bulkOffset = 0
 	popup.bulkEOF = false
 	return m.queryStep(ws)

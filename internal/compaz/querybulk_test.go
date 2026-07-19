@@ -118,10 +118,11 @@ func TestQuerySwitchesToBulkDownloadWhenPagingIsSlow(t *testing.T) {
 	if popup.lines[14] != `   15 │ "N15"` {
 		t.Fatalf("line 15 = %q", popup.lines[14])
 	}
-	if popup.bulkPath == "" {
+	path := model.ws().bulkRecordsPath
+	if path == "" {
 		t.Fatal("bulk file not retained")
 	}
-	if _, err := os.Stat(popup.bulkPath); err != nil {
+	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("bulk file missing: %v", err)
 	}
 
@@ -135,14 +136,32 @@ func TestQuerySwitchesToBulkDownloadWhenPagingIsSlow(t *testing.T) {
 		t.Fatalf("re-run refetched: streams=%d pages=%d", len(browser.streamRequests), len(browser.recordRequests)-pagesBefore)
 	}
 
-	// Closing the popup removes the download.
-	path := model.query.bulkPath
+	// The download outlives the popup: close, reopen, and query again without
+	// any new host traffic.
 	executeQuery(t, model, applyMessage(t, model, keyPress(tea.KeyEscape, "")))
 	if model.query != nil {
 		t.Fatal("popup still open")
 	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("bulk file dropped with the popup: %v", err)
+	}
+	openQuery(t, model)
+	runQueryExpr(t, model, ".NAME")
+	if popup := model.query; popup.searched != 30 || popup.matches != 30 {
+		t.Fatalf("reopened run searched=%d matches=%d", popup.searched, popup.matches)
+	}
+	if len(browser.streamRequests) != 1 || len(browser.recordRequests) != pagesBefore {
+		t.Fatalf("reopened run refetched: streams=%d pages=%d", len(browser.streamRequests), len(browser.recordRequests)-pagesBefore)
+	}
+
+	// A manual refresh invalidates the cached download.
+	executeQuery(t, model, applyMessage(t, model, keyPress(tea.KeyEscape, "")))
+	executeCommand(t, model, model.refresh())
+	if model.ws().bulkRecordsPath != "" {
+		t.Fatal("refresh kept the stale bulk file")
+	}
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("bulk file not cleaned up: %v", err)
+		t.Fatalf("refresh did not delete the bulk file: %v", err)
 	}
 }
 
@@ -159,8 +178,8 @@ func TestQueryBulkDownloadFailureFallsBackToPaging(t *testing.T) {
 	if !popup.done || popup.searched != 30 || popup.matches != 30 {
 		t.Fatalf("paging fallback incomplete: done=%v searched=%d matches=%d", popup.done, popup.searched, popup.matches)
 	}
-	if popup.bulkPath != "" {
-		t.Fatalf("failed download left a path: %q", popup.bulkPath)
+	if model.ws().bulkRecordsPath != "" {
+		t.Fatalf("failed download left a path: %q", model.ws().bulkRecordsPath)
 	}
 	if !strings.Contains(popup.lastErr, "bulk download failed") {
 		t.Fatalf("lastErr = %q", popup.lastErr)
