@@ -4,9 +4,9 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"charm.land/bubbles/v2/spinner"
-	"charm.land/bubbles/v2/stopwatch"
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/Tannex/cq/internal/zosmf"
@@ -30,7 +30,7 @@ func executeQuery(t *testing.T, model *Model, command tea.Cmd) {
 			continue
 		}
 		switch message.(type) {
-		case spinner.TickMsg, stopwatch.TickMsg, stopwatch.StartStopMsg, stopwatch.ResetMsg, nil:
+		case spinner.TickMsg, nil:
 			continue
 		}
 		if next := applyMessage(t, model, message); next != nil {
@@ -107,7 +107,7 @@ func TestQueryStreamsResultsOverCachedRecords(t *testing.T) {
 	if popup.searched != 2 || popup.matches != 2 {
 		t.Fatalf("searched=%d matches=%d, want 2/2", popup.searched, popup.matches)
 	}
-	if len(popup.lines) != 2 || popup.lines[0] != `1 │ "ABC"` || popup.lines[1] != `2 │ "XYZ"` {
+	if len(popup.lines) != 2 || popup.lines[0] != `    1 │ "ABC"` || popup.lines[1] != `    2 │ "XYZ"` {
 		t.Fatalf("lines = %#v", popup.lines)
 	}
 }
@@ -170,7 +170,7 @@ func TestQueryLazyFetchContinuesToEndOfRecords(t *testing.T) {
 	if len(browser.recordRequests) <= fetchesBefore {
 		t.Fatal("no forward page was fetched for the search")
 	}
-	if len(popup.lines) != 1 || popup.lines[0] != `16 │ "ABC"` {
+	if len(popup.lines) != 1 || popup.lines[0] != `   16 │ "ABC"` {
 		t.Fatalf("lines = %#v", popup.lines)
 	}
 	if len(model.records) != 16 {
@@ -245,7 +245,7 @@ func TestQuerySkipsDecodeErrorRecords(t *testing.T) {
 	if popup.errored != 1 || popup.matches != 1 {
 		t.Fatalf("errored=%d matches=%d, want 1/1", popup.errored, popup.matches)
 	}
-	if len(popup.lines) != 1 || popup.lines[0] != `2 │ "ABC"` {
+	if len(popup.lines) != 1 || popup.lines[0] != `    2 │ "ABC"` {
 		t.Fatalf("lines = %#v", popup.lines)
 	}
 	if footer := model.queryFooter(); !strings.Contains(footer, "1 records skipped") {
@@ -288,5 +288,90 @@ func TestQueryKeyRouting(t *testing.T) {
 	applyMessage(t, model, keyPress(tea.KeyPgUp, ""))
 	if model.query.scroll != 0 {
 		t.Fatalf("pgup scroll = %d, want 0", model.query.scroll)
+	}
+}
+
+func TestQueryFallsBackToArrayMode(t *testing.T) {
+	model, _ := queryModel(t, singleRecordPage(
+		zosmf.Record{Number: 1, Data: []byte("XYZ")},
+		zosmf.Record{Number: 2, Data: []byte("ABC")},
+		zosmf.Record{Number: 3, Data: []byte("ABC")},
+	))
+	openQuery(t, model)
+	// map/unique need the whole data set as one array; per-record evaluation
+	// errors on every record with zero matches, triggering the fallback.
+	runQueryExpr(t, model, "map(.NAME) | unique")
+
+	popup := model.query
+	if !popup.done || popup.running {
+		t.Fatalf("search not finished: done=%v running=%v err=%q lastErr=%q", popup.done, popup.running, popup.err, popup.lastErr)
+	}
+	if !popup.arrayMode {
+		t.Fatal("array-mode fallback did not run")
+	}
+	if len(popup.lines) != 1 || popup.lines[0] != `["ABC","XYZ"]` {
+		t.Fatalf("lines = %#v", popup.lines)
+	}
+	if popup.errored != 0 || popup.lastErr != "" {
+		t.Fatalf("fallback left errors visible: errored=%d lastErr=%q", popup.errored, popup.lastErr)
+	}
+}
+
+func TestQueryStreamingStillWinsWhenItMatches(t *testing.T) {
+	model, _ := queryModel(t, singleRecordPage(
+		zosmf.Record{Number: 1, Data: []byte("ABC")},
+	))
+	openQuery(t, model)
+	runQueryExpr(t, model, ".NAME")
+	if model.query.arrayMode {
+		t.Fatal("array fallback ran despite streaming matches")
+	}
+}
+
+func TestNormalizeQueryExpressionSingleQuotes(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{`.NAME == 'ABC'`, `.NAME == "ABC"`},
+		{`select(.A=='x "y" \z')`, `select(.A=="x \"y\" \\z")`},
+		{`."CUST-NAME" | test("'")`, `."CUST-NAME" | test("'")`},
+		{`.A`, `.A`},
+	}
+	for _, test := range tests {
+		got, err := normalizeQueryExpression(test.in)
+		if err != nil || got != test.want {
+			t.Fatalf("normalize(%q) = %q, %v; want %q", test.in, got, err, test.want)
+		}
+	}
+	if _, err := normalizeQueryExpression(`.A == 'oops`); err == nil {
+		t.Fatal("unbalanced single quote not rejected")
+	}
+}
+
+func TestQuerySingleQuoteExpressionRuns(t *testing.T) {
+	model, _ := queryModel(t, singleRecordPage(
+		zosmf.Record{Number: 1, Data: []byte("ABC")},
+		zosmf.Record{Number: 2, Data: []byte("XYZ")},
+	))
+	openQuery(t, model)
+	runQueryExpr(t, model, `select(.NAME == 'ABC') | .NAME`)
+	popup := model.query
+	if popup.err != "" || popup.matches != 1 {
+		t.Fatalf("err=%q matches=%d", popup.err, popup.matches)
+	}
+}
+
+func TestFormatElapsedGranularity(t *testing.T) {
+	tests := []struct {
+		d    time.Duration
+		want string
+	}{
+		{123 * time.Millisecond, "123ms"},
+		{1400 * time.Millisecond, "1.40s"},
+		{12300 * time.Millisecond, "12.3s"},
+		{67 * time.Second, "1:07"},
+	}
+	for _, test := range tests {
+		if got := formatElapsed(test.d); got != test.want {
+			t.Fatalf("formatElapsed(%v) = %q, want %q", test.d, got, test.want)
+		}
 	}
 }

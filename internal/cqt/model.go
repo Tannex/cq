@@ -14,7 +14,6 @@ import (
 
 	"charm.land/bubbles/v2/help"
 	"charm.land/bubbles/v2/spinner"
-	"charm.land/bubbles/v2/stopwatch"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 
@@ -515,13 +514,6 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handleEditSaveResult(msg)
 	case queryEvalMsg:
 		return m, m.handleQueryEval(msg)
-	case stopwatch.TickMsg, stopwatch.StartStopMsg, stopwatch.ResetMsg:
-		if m.query == nil {
-			return m, nil
-		}
-		updated, command := m.query.watch.Update(msg)
-		m.query.watch = updated
-		return m, command
 	case spinner.TickMsg:
 		var commands []tea.Cmd
 		if m.query != nil && m.query.running {

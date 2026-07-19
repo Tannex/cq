@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/spinner"
-	"charm.land/bubbles/v2/stopwatch"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -27,6 +26,9 @@ const (
 	// queryRecordBudget bounds a single record's evaluation so a pathological
 	// expression cannot freeze the search.
 	queryRecordBudget = 250 * time.Millisecond
+	// queryArrayBudget bounds the one-shot whole-dataset evaluation used by
+	// array-mode fallback.
+	queryArrayBudget = 10 * time.Second
 )
 
 // queryPopup is the composited jq console opened from the records screen: a
@@ -48,6 +50,7 @@ type queryPopup struct {
 	done      bool
 	capped    bool
 	cancelled bool
+	arrayMode bool   // whole-dataset fallback ran after zero streaming matches
 	err       string // compile/setup error shown instead of the footer
 	lastErr   string // most recent per-record runtime error
 
@@ -55,8 +58,9 @@ type queryPopup struct {
 	ctx        context.Context
 	cancel     context.CancelFunc
 
-	spin  spinner.Model
-	watch stopwatch.Model
+	spin    spinner.Model
+	started time.Time
+	elapsed time.Duration
 }
 
 type queryEvalMsg struct {
@@ -68,6 +72,7 @@ type queryEvalMsg struct {
 	Evaluated  int
 	Halted     bool
 	Canceled   bool
+	Array      bool // result of the whole-dataset array fallback
 	LastError  string
 }
 
@@ -82,7 +87,6 @@ func newQueryPopup(width int) *queryPopup {
 	popup := &queryPopup{
 		input: input,
 		spin:  newStatusSpinner(),
-		watch: stopwatch.New(),
 	}
 	popup.setWidth(width)
 	return popup
@@ -92,15 +96,42 @@ func (p *queryPopup) setWidth(width int) {
 	p.input.SetWidth(max(8, min(68, width-12)))
 }
 
-// stopSearch cancels any in-flight evaluation and marks the search idle. The
-// bumped state (done/capped/cancelled/err) is the caller's responsibility.
+// stopSearch cancels any in-flight evaluation, freezes the elapsed clock, and
+// marks the search idle. The bumped state (done/capped/cancelled/err) is the
+// caller's responsibility.
 func (p *queryPopup) stopSearch() {
 	if p.cancel != nil {
 		p.cancel()
 	}
 	p.cancel = nil
 	p.ctx = nil
+	if p.running {
+		p.elapsed = time.Since(p.started)
+	}
 	p.running = false
+}
+
+// clock is the live or frozen elapsed search time.
+func (p *queryPopup) clock() time.Duration {
+	if p.running {
+		return time.Since(p.started)
+	}
+	return p.elapsed
+}
+
+// formatElapsed keeps sub-second searches meaningful: most complete in
+// milliseconds, where a m:ss clock would always read 0:00.
+func formatElapsed(d time.Duration) string {
+	switch {
+	case d < time.Second:
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	case d < 10*time.Second:
+		return fmt.Sprintf("%.2fs", d.Seconds())
+	case d < time.Minute:
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	default:
+		return fmt.Sprintf("%d:%02d", int(d.Minutes()), int(d.Seconds())%60)
+	}
 }
 
 func (p *queryPopup) scrollBy(delta int) {
@@ -131,7 +162,7 @@ func (m *Model) handleQueryKey(msg tea.KeyPressMsg, selected action) tea.Cmd {
 		if popup.running {
 			popup.stopSearch()
 			popup.cancelled = true
-			return popup.watch.Stop()
+			return nil
 		}
 		popup.stopSearch()
 		m.query = nil
@@ -142,14 +173,59 @@ func (m *Model) handleQueryKey(msg tea.KeyPressMsg, selected action) tea.Cmd {
 	case actionPageDown:
 		popup.scrollBy(max(1, m.visible))
 		return nil
-	case actionQuit:
-		m.cancelAll()
-		return tea.Quit
 	default:
 		updated, cmd := popup.input.Update(msg)
 		popup.input = updated
 		return cmd
 	}
+}
+
+// normalizeQueryExpression rewrites single-quoted strings to the double-quoted
+// form gojq understands. jq's grammar gives ' no other meaning, so the rewrite
+// is safe; content is taken literally with " and \ escaped. An unbalanced
+// quote is an error rather than a guess.
+func normalizeQueryExpression(expr string) (string, error) {
+	if !strings.ContainsRune(expr, '\'') {
+		return expr, nil
+	}
+	var sb strings.Builder
+	inDouble, inSingle, escaped := false, false, false
+	for _, r := range expr {
+		switch {
+		case inDouble:
+			sb.WriteRune(r)
+			if escaped {
+				escaped = false
+			} else if r == '\\' {
+				escaped = true
+			} else if r == '"' {
+				inDouble = false
+			}
+		case inSingle:
+			switch r {
+			case '\'':
+				sb.WriteByte('"')
+				inSingle = false
+			case '"', '\\':
+				sb.WriteByte('\\')
+				sb.WriteRune(r)
+			default:
+				sb.WriteRune(r)
+			}
+		case r == '\'':
+			sb.WriteByte('"')
+			inSingle = true
+		case r == '"':
+			sb.WriteRune(r)
+			inDouble = true
+		default:
+			sb.WriteRune(r)
+		}
+	}
+	if inSingle {
+		return "", errors.New("unbalanced single quote in expression")
+	}
+	return sb.String(), nil
 }
 
 // runQuery compiles the expression once and starts a fresh streaming search
@@ -166,6 +242,11 @@ func (m *Model) runQuery() tea.Cmd {
 		popup.err = "enter a jq expression"
 		return nil
 	}
+	expr, err := normalizeQueryExpression(expr)
+	if err != nil {
+		popup.err = err.Error()
+		return nil
+	}
 	compiled, err := query.Compile(expr)
 	if err != nil {
 		popup.err = err.Error()
@@ -178,10 +259,12 @@ func (m *Model) runQuery() tea.Cmd {
 	popup.matches, popup.errored, popup.searched, popup.next = 0, 0, 0, 0
 	popup.scroll = 0
 	popup.err, popup.lastErr = "", ""
-	popup.done, popup.capped, popup.cancelled = false, false, false
+	popup.done, popup.capped, popup.cancelled, popup.arrayMode = false, false, false, false
 	popup.running = true
+	popup.started = time.Now()
+	popup.elapsed = 0
 	popup.ctx, popup.cancel = context.WithCancel(context.Background())
-	return tea.Batch(popup.watch.Reset(), popup.watch.Start(), popup.spin.Tick, m.queryStep(ws))
+	return tea.Batch(popup.spin.Tick, m.queryStep(ws))
 }
 
 // queryStep advances the search: evaluate the next cached chunk in a command,
@@ -210,9 +293,73 @@ func (m *Model) queryStep(ws *workspace) tea.Cmd {
 		}
 		return m.startRecords(ws, pagePlan[int64]{Anchor: anchor, Direction: pageForward})
 	}
+	// Streaming pass exhausted every record. When it produced nothing but
+	// per-record errors, the expression likely wants the whole data set as one
+	// value (map, unique, group_by, ...) — fall back to array mode.
+	if popup.matches == 0 && popup.errored > 0 && !popup.arrayMode {
+		popup.arrayMode = true
+		popup.errored = 0
+		popup.lastErr = ""
+		return evalQueryArray(popup.ctx, popup.compiled, ws.overlay, ws.records, ws.profile, popup.generation)
+	}
 	popup.stopSearch()
 	popup.done = true
-	return popup.watch.Stop()
+	return nil
+}
+
+// evalQueryArray runs the expression once over every record's decoded value
+// collected into a single JSON array. It only runs after the streaming pass
+// has pulled the whole data set into the cache.
+func evalQueryArray(ctx context.Context, compiled *query.Query, ov *overlay, rows []recordRow, profile string, generation uint64) tea.Cmd {
+	return func() tea.Msg {
+		msg := queryEvalMsg{Profile: profile, Generation: generation, Array: true}
+		values := make([]any, 0, len(rows))
+		for _, row := range rows {
+			if ctx.Err() != nil {
+				msg.Canceled = true
+				return msg
+			}
+			decoded, err := ov.Decoder.DecodeDisplay(row.Record.Data)
+			if err != nil {
+				msg.Errors++
+				continue
+			}
+			encoded, err := decoded.JSON()
+			if err != nil {
+				msg.Errors++
+				msg.LastError = err.Error()
+				continue
+			}
+			value, err := query.FromJSON(encoded)
+			if err != nil {
+				msg.Errors++
+				msg.LastError = err.Error()
+				continue
+			}
+			values = append(values, value)
+		}
+		arrayCtx, cancelArray := context.WithTimeout(ctx, queryArrayBudget)
+		defer cancelArray()
+		err := compiled.RunContext(arrayCtx, values, func(out any) error {
+			msg.Matches++
+			if len(msg.Lines) < queryResultCap {
+				msg.Lines = append(msg.Lines, query.Marshal(out))
+			}
+			return nil
+		})
+		if err != nil {
+			var halt *query.Halt
+			switch {
+			case errors.As(err, &halt):
+				msg.Halted = true
+			case ctx.Err() != nil:
+				msg.Canceled = true
+			default:
+				msg.LastError = err.Error()
+			}
+		}
+		return msg
+	}
 }
 
 // evalQueryChunk decodes and evaluates one chunk of records off the UI loop.
@@ -248,7 +395,7 @@ func evalQueryChunk(ctx context.Context, compiled *query.Query, ov *overlay, row
 			err = compiled.RunContext(recordCtx, value, func(out any) error {
 				msg.Matches++
 				if len(msg.Lines) < lineRoom {
-					msg.Lines = append(msg.Lines, fmt.Sprintf("%d │ %s", raw.Number, query.Marshal(out)))
+					msg.Lines = append(msg.Lines, fmt.Sprintf("%5d │ %s", raw.Number, query.Marshal(out)))
 				}
 				return nil
 			})
@@ -296,15 +443,15 @@ func (m *Model) handleQueryEval(msg queryEvalMsg) tea.Cmd {
 	case msg.Canceled:
 		popup.stopSearch()
 		popup.cancelled = true
-		return popup.watch.Stop()
-	case msg.Halted:
+		return nil
+	case msg.Array, msg.Halted:
 		popup.stopSearch()
 		popup.done = true
-		return popup.watch.Stop()
+		return nil
 	case len(popup.lines) >= queryResultCap:
 		popup.stopSearch()
 		popup.capped = true
-		return popup.watch.Stop()
+		return nil
 	}
 	return m.queryStep(ws)
 }
@@ -319,13 +466,13 @@ func (m *Model) queryAfterFetch(ws *workspace, fetchErr error) tea.Cmd {
 	if fetchErr != nil {
 		popup.stopSearch()
 		popup.err = "search stopped: " + fetchErr.Error()
-		return popup.watch.Stop()
+		return nil
 	}
 	return m.queryStep(ws)
 }
 
 // queryFooter is the progress/result summary under the results pane, e.g.
-// "⠸ 0:07 searched 400 of 118+ records… — 12 matches".
+// "⠸ 1.42s searched 400 of 118+ records… — 12 matches".
 func (m *Model) queryFooter() string {
 	popup := m.query
 	ws := m.ws()
@@ -334,29 +481,73 @@ func (m *Model) queryFooter() string {
 	if ws.recordPage.more {
 		suffix = "+"
 	}
-	elapsed := popup.watch.Elapsed()
-	clock := fmt.Sprintf("%d:%02d", int(elapsed.Minutes()), int(elapsed.Seconds())%60)
+	clock := formatElapsed(popup.clock())
 	var state string
 	switch {
+	case popup.running && popup.arrayMode:
+		state = fmt.Sprintf("%s %s evaluating all %d records as one array…", popup.spin.View(), clock, total)
 	case popup.running:
 		state = fmt.Sprintf("%s %s searched %d of %d%s records…", popup.spin.View(), clock, popup.searched, total, suffix)
 	case popup.cancelled:
 		state = fmt.Sprintf("%s cancelled after %d of %d%s records", clock, popup.searched, total, suffix)
 	case popup.capped:
 		state = fmt.Sprintf("%s stopped at the %d-result cap after %d of %d%s records", clock, queryResultCap, popup.searched, total, suffix)
+	case popup.done && popup.arrayMode:
+		state = fmt.Sprintf("%s array mode: %d records as one input", clock, popup.searched)
 	case popup.done:
 		state = fmt.Sprintf("%s searched %d records", clock, popup.searched)
 	default:
 		return "enter runs the query over every record  esc closes"
 	}
-	state += fmt.Sprintf(" — %d matches", popup.matches)
+	if popup.arrayMode && !popup.running {
+		state += fmt.Sprintf(" — %d results", popup.matches)
+	} else {
+		state += fmt.Sprintf(" — %d matches", popup.matches)
+	}
 	if popup.errored > 0 {
 		state += fmt.Sprintf(", %d records skipped", popup.errored)
 	}
-	if popup.lastErr != "" {
-		state += "  last error: " + popup.lastErr
-	}
 	return state
+}
+
+// wrapPlain hard-wraps text at width, returning at most maxLines lines with
+// the final line truncated if the text is longer.
+func wrapPlain(text string, width, maxLines int) []string {
+	if width < 1 || maxLines < 1 {
+		return nil
+	}
+	runes := []rune(text)
+	var lines []string
+	for len(runes) > 0 && len(lines) < maxLines {
+		end := min(width, len(runes))
+		lines = append(lines, string(runes[:end]))
+		runes = runes[end:]
+	}
+	if len(runes) > 0 && len(lines) > 0 {
+		lines[len(lines)-1] = truncateStyled(lines[len(lines)-1]+"…", width)
+	}
+	return lines
+}
+
+// queryFooterLines renders the footer block: the state line plus the full
+// (wrapped, not truncated) text of the most recent error, per review feedback
+// that "last error: …" was unreadable when truncated to one line.
+func (m *Model) queryFooterLines(muted, danger lipgloss.Style, width int) []string {
+	popup := m.query
+	if popup.err != "" {
+		lines := make([]string, 0, 3)
+		for _, line := range wrapPlain("ERROR  "+popup.err, width, 3) {
+			lines = append(lines, danger.Render(truncateStyled(line, width)))
+		}
+		return lines
+	}
+	lines := []string{muted.Render(truncateStyled(m.queryFooter(), width))}
+	if popup.lastErr != "" && !popup.running {
+		for _, line := range wrapPlain("last error: "+popup.lastErr, width, 2) {
+			lines = append(lines, danger.Render(truncateStyled(line, width)))
+		}
+	}
+	return lines
 }
 
 // queryResultLines renders the scrolled results window at exactly rows lines.
@@ -381,21 +572,14 @@ func (m *Model) queryResultLines(body, muted lipgloss.Style, width, rows int) []
 	return lines
 }
 
-func (m *Model) queryFooterLine(muted, danger lipgloss.Style, width int) string {
-	popup := m.query
-	if popup.err != "" {
-		return danger.Render(truncateStyled("ERROR  "+popup.err, width))
-	}
-	return muted.Render(truncateStyled(m.queryFooter(), width))
-}
-
 // queryPanel is the tiny-terminal fallback: a full-area panel in the data
 // region, mirroring helpPanel.
 func (m *Model) queryPanel() string {
+	footer := m.queryFooterLines(consolePalette.muted, consolePalette.danger, m.width)
 	lines := []string{consolePalette.panel.Bold(true).Width(m.width).Render("  JQ QUERY  enter run  esc close")}
 	lines = append(lines, truncateStyled(m.query.input.View(), m.width))
-	lines = append(lines, m.queryResultLines(consolePalette.plain, consolePalette.muted, m.width, max(1, m.visible-2))...)
-	lines = append(lines, m.queryFooterLine(consolePalette.muted, consolePalette.danger, m.width))
+	lines = append(lines, m.queryResultLines(consolePalette.plain, consolePalette.muted, m.width, max(1, m.visible-1-len(footer)))...)
+	lines = append(lines, footer...)
 	capacity := m.visible + 1
 	lines = scrollWindow(lines, 0, capacity)
 	for len(lines) < capacity {
@@ -423,18 +607,21 @@ func (m *Model) overlayQuery(background string) string {
 	danger := consolePalette.danger.Inherit(consolePalette.popup)
 
 	title := accent.Render("JQ QUERY")
+	footer := m.queryFooterLines(muted, danger, innerWidth)
 	innerLines := []string{
 		fill.Render(strings.Repeat(" ", max(0, (innerWidth-lipgloss.Width(title))/2)) + title),
 		fill.Render(truncateStyled(m.query.input.View(), innerWidth)),
 		fill.Render(muted.Render(strings.Repeat("─", max(0, innerWidth)))),
 	}
-	for _, line := range m.queryResultLines(body, muted, innerWidth, max(1, contentHeight-2)) {
+	for _, line := range m.queryResultLines(body, muted, innerWidth, max(1, contentHeight-1-len(footer))) {
 		innerLines = append(innerLines, fill.Render(line))
 	}
-	for len(innerLines) < contentHeight+1 {
+	for len(innerLines) < contentHeight+2-len(footer) {
 		innerLines = append(innerLines, fill.Render(""))
 	}
-	innerLines = append(innerLines, fill.Render(m.queryFooterLine(muted, danger, innerWidth)))
+	for _, line := range footer {
+		innerLines = append(innerLines, fill.Render(line))
+	}
 
 	popupStyle := consolePalette.popup.
 		Border(lipgloss.RoundedBorder()).

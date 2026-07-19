@@ -277,8 +277,6 @@ func (k KeyMap) actionFor(msg tea.KeyPressMsg, ctx keyContext) action {
 			return actionPageUp
 		case key.Matches(msg, k.PageDown):
 			return actionPageDown
-		case key.Matches(msg, k.ForceQuit):
-			return actionQuit
 		default:
 			return actionNone
 		}
