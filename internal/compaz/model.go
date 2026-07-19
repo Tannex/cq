@@ -959,10 +959,18 @@ func (m *Model) switchProfile(delta int) tea.Cmd {
 	ws := m.ws()
 	m.syncInputsFromWorkspace()
 	m.helpVertical = 0
+	var command tea.Cmd
 	if !ws.sessionReady && ws.sessionCancel == nil {
-		return m.loadActiveSession()
+		command = m.loadActiveSession()
+	} else {
+		command = m.ensureActivePage()
 	}
-	return m.ensureActivePage()
+	// The tick loop stops once the outgoing workspace goes idle; restart it so
+	// the incoming workspace's RECALL indicators keep animating.
+	if ws.hasRecalls() {
+		command = tea.Batch(command, m.spinner.Tick)
+	}
+	return command
 }
 
 func (m *Model) clearOverlay() {
