@@ -27,6 +27,10 @@ type ListDataSetsRequest struct {
 	Prefix   string
 	Start    string
 	MaxItems int
+	// ExactName sends Prefix as dslevel without the implicit trailing
+	// wildcard, so one specific catalog entry can be checked even when its
+	// last qualifier is already eight characters or the name is 44 long.
+	ExactName bool
 }
 
 // ListMembersRequest describes one bounded member search. Start is sent using

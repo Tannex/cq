@@ -27,7 +27,12 @@ func (z *Client) ListDataSets(ctx context.Context, request ListDataSetsRequest) 
 	if err != nil {
 		return DataSetPage{}, err
 	}
-	prefix, err := normalizeDataSetPrefix(request.Prefix)
+	var prefix string
+	if request.ExactName {
+		prefix, err = normalizeDataSetName(request.Prefix)
+	} else {
+		prefix, err = normalizeDataSetPrefix(request.Prefix)
+	}
 	if err != nil {
 		return DataSetPage{}, err
 	}

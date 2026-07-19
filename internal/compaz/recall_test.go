@@ -88,6 +88,10 @@ func TestRecallKeyStartsRecallAndPollsUntilTheDataSetReturns(t *testing.T) {
 	if next == nil || !model.ws().recallPending("IBMUSER.MIGR") {
 		t.Fatal("still-migrated check should keep polling")
 	}
+	checkRequest := browser.dataSetRequests[len(browser.dataSetRequests)-1]
+	if !checkRequest.ExactName || checkRequest.Prefix != "IBMUSER.MIGR" || checkRequest.MaxItems != 1 {
+		t.Fatalf("watch request = %#v, want exact-name single-item lookup", checkRequest)
+	}
 
 	// The next poll finds the recalled data set on primary storage.
 	migrated = false
@@ -179,6 +183,51 @@ func TestRecallPollingGivesUpAfterTheAttemptCap(t *testing.T) {
 		t.Fatal("capped watch left the indicator pending")
 	}
 	if model.ws().status.Level != statusWarn || !strings.Contains(model.ws().status.Text, "still running") {
+		t.Fatalf("status = %#v", model.ws().status)
+	}
+}
+
+func TestRecallCapWarningIncludesTheLastCheckError(t *testing.T) {
+	browser := &fakeRecallBrowser{}
+	browser.listDataSets = func(context.Context, zosmf.ListDataSetsRequest) (zosmf.DataSetPage, error) {
+		return migratedDataSetPage(true), nil
+	}
+	model := readyModel(t, Options{Prefix: "IBMUSER"}, browser, "IBMUSER", "cp037", 100, 20)
+	applyMessage(t, model, recallResultMessage(t, model.handleKey(keyPress('R', "R"))))
+
+	failed := recallCheckMsg{DSN: "IBMUSER.MIGR", Attempt: 1, Err: errors.New("catalog is unavailable")}
+	if cmd := applyMessage(t, model, failed); cmd == nil {
+		t.Fatal("failed check should keep polling")
+	}
+	capped := recallCheckMsg{DSN: "IBMUSER.MIGR", Attempt: maxRecallPolls, Err: errors.New("catalog is unavailable")}
+	if cmd := applyMessage(t, model, capped); cmd != nil {
+		t.Fatal("capped watch should stop polling")
+	}
+	if model.ws().status.Level != statusWarn || !strings.Contains(model.ws().status.Text, "catalog is unavailable") {
+		t.Fatalf("status = %#v", model.ws().status)
+	}
+}
+
+func TestManualRefreshResolvesAPendingRecall(t *testing.T) {
+	migrated := true
+	browser := &fakeRecallBrowser{}
+	browser.listDataSets = func(context.Context, zosmf.ListDataSetsRequest) (zosmf.DataSetPage, error) {
+		return migratedDataSetPage(migrated), nil
+	}
+	model := readyModel(t, Options{Prefix: "IBMUSER"}, browser, "IBMUSER", "cp037", 100, 20)
+	applyMessage(t, model, recallResultMessage(t, model.handleKey(keyPress('R', "R"))))
+	if !model.ws().recallPending("IBMUSER.MIGR") {
+		t.Fatal("recall not marked pending")
+	}
+
+	// The recall completes on the host; the user refreshes before the
+	// watcher's next check fires.
+	migrated = false
+	executeCommand(t, model, model.handleKey(keyPress('r', "r")))
+	if model.ws().recallPending("IBMUSER.MIGR") {
+		t.Fatal("refresh did not resolve the pending recall")
+	}
+	if model.ws().status.Level != statusReady || !strings.Contains(model.ws().status.Text, "recalled IBMUSER.MIGR to VOL001") {
 		t.Fatalf("status = %#v", model.ws().status)
 	}
 }

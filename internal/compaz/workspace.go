@@ -35,7 +35,9 @@ type workspace struct {
 
 	// recalls tracks data sets with an HRECALL in flight, keyed by upper-case
 	// name, so the list can mark them and catalog polling knows when to stop.
-	recalls map[string]struct{}
+	// The value holds the most recent catalog-check error, surfaced if the
+	// watch gives up.
+	recalls map[string]string
 
 	records []recordRow
 	// rawLongest caches the widest rendered raw line across the cached
@@ -95,9 +97,19 @@ func (ws *workspace) recallPending(name string) bool {
 
 func (ws *workspace) markRecall(name string) {
 	if ws.recalls == nil {
-		ws.recalls = make(map[string]struct{})
+		ws.recalls = make(map[string]string)
 	}
-	ws.recalls[name] = struct{}{}
+	ws.recalls[name] = ""
+}
+
+func (ws *workspace) setRecallIssue(name, issue string) {
+	if ws.recallPending(name) {
+		ws.recalls[name] = issue
+	}
+}
+
+func (ws *workspace) recallIssue(name string) string {
+	return ws.recalls[name]
 }
 
 func (ws *workspace) clearRecall(name string) {

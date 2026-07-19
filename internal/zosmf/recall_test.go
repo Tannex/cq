@@ -61,6 +61,29 @@ func TestRecallDataSetRejectsInvalidName(t *testing.T) {
 	}
 }
 
+func TestListDataSetsExactNameOmitsTheImplicitWildcard(t *testing.T) {
+	// An eight-character last qualifier would become an invalid nine-character
+	// dslevel qualifier if the implicit trailing wildcard were appended.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("dslevel"); got != "IBMUSER.DATASET1" {
+			t.Errorf("dslevel = %q", got)
+		}
+		_, _ = io.WriteString(w, `{"items":[{"dsname":"IBMUSER.DATASET1","migr":"NO","vol":"VOL001"}],"returnedRows":1,"moreRows":false}`)
+	}))
+	defer server.Close()
+	client := New(sessionForServer(t, server), nil)
+
+	page, err := client.ListDataSets(context.Background(), ListDataSetsRequest{
+		Prefix: "IBMUSER.DATASET1", ExactName: true, MaxItems: 1,
+	})
+	if err != nil {
+		t.Fatalf("ListDataSets() error = %v", err)
+	}
+	if len(page.Items) != 1 || page.Items[0].Name != "IBMUSER.DATASET1" {
+		t.Fatalf("items = %#v", page.Items)
+	}
+}
+
 func TestIsMigrated(t *testing.T) {
 	cases := []struct {
 		name string
