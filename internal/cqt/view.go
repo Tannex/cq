@@ -288,8 +288,9 @@ func (m *Model) dialogView() string {
 		m.dialog.dsn.View(),
 		m.dialog.format.View(),
 		m.dialog.record.View(),
+		m.dialog.pattern.View(),
 	}
-	lines := make([]string, 0, len(fields)+2)
+	lines := make([]string, 0, len(fields)+3)
 	for i, field := range fields {
 		marker := "   "
 		if i == m.dialog.focus {
@@ -298,10 +299,13 @@ func (m *Model) dialogView() string {
 		lines = append(lines, marker+field)
 	}
 	lines = append(lines, "")
+	if m.dialog.note != "" {
+		lines = append(lines, "   "+consolePalette.cyan.Render("MAPPING  "+m.dialog.note))
+	}
 	if m.dialog.err != "" {
 		lines = append(lines, "   "+consolePalette.danger.Render("ERROR  "+m.dialog.err))
 	} else {
-		lines = append(lines, "   "+consolePalette.muted.Render("Enter apply (empty clears overlay)  Tab next  Esc cancel  errors keep prior overlay"))
+		lines = append(lines, "   "+consolePalette.muted.Render("Enter apply (empty clears overlay)  Ctrl+S apply+save mapping  Ctrl+R remove mapping  Tab next  Esc cancel"))
 	}
 	available := max(1, m.height-4)
 	body := lipgloss.Place(m.width, available, lipgloss.Left, lipgloss.Center, strings.Join(lines, "\n"), lipgloss.WithWhitespaceChars(" "))

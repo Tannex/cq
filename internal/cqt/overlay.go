@@ -285,12 +285,16 @@ func prettyRecordJSON(decoded record.DecodedRecord) string {
 }
 
 type copybookDialog struct {
-	local  textinput.Model
-	dsn    textinput.Model
-	format textinput.Model
-	record textinput.Model
-	focus  int
-	err    string
+	local   textinput.Model
+	dsn     textinput.Model
+	format  textinput.Model
+	record  textinput.Model
+	pattern textinput.Model
+	focus   int
+	err     string
+	// note names the persisted mapping the prefilled values came from, or the
+	// outcome of the latest mapping action.
+	note string
 }
 
 func newCopybookDialog(source CopybookSource) *copybookDialog {
@@ -306,10 +310,11 @@ func newCopybookDialog(source CopybookSource) *copybookDialog {
 		return input
 	}
 	dialog := &copybookDialog{
-		local:  newInput("LOCAL  ", "/path/to/CUSTOMER.cpy", 4096),
-		dsn:    newInput("DSN    ", "HLQ.COPYLIB(MEMBER)", 55),
-		format: newInput("FORMAT ", "auto | fixed | free", 5),
-		record: newInput("RECORD ", "optional 01-level name", 64),
+		local:   newInput("LOCAL  ", "/path/to/CUSTOMER.cpy", 4096),
+		dsn:     newInput("DSN    ", "HLQ.COPYLIB(MEMBER)", 55),
+		format:  newInput("FORMAT ", "auto | fixed | free", 5),
+		record:  newInput("RECORD ", "optional 01-level name", 64),
+		pattern: newInput("PATTERN", "DSN pattern to save mapping under (* any run, % one char)", 60),
 	}
 	dialog.local.SetValue(source.Local)
 	dialog.dsn.SetValue(source.DSN)
@@ -323,7 +328,7 @@ func newCopybookDialog(source CopybookSource) *copybookDialog {
 }
 
 func (d *copybookDialog) inputs() []*textinput.Model {
-	return []*textinput.Model{&d.local, &d.dsn, &d.format, &d.record}
+	return []*textinput.Model{&d.local, &d.dsn, &d.format, &d.record, &d.pattern}
 }
 
 func (d *copybookDialog) setWidth(width int) {

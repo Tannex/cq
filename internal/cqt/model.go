@@ -18,6 +18,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/Tannex/cq/internal/decode"
+	"github.com/Tannex/cq/internal/dsnmap"
 	"github.com/Tannex/cq/internal/record"
 	"github.com/Tannex/cq/internal/zosmf"
 )
@@ -46,12 +47,22 @@ type Session struct {
 	Encoding string
 }
 
+// MappingStore persists DSN → copybook mappings across sessions. A nil store
+// disables mapping persistence.
+type MappingStore interface {
+	Match(name string) (dsnmap.Mapping, bool)
+	Put(mapping dsnmap.Mapping) error
+	Remove(pattern string) (bool, error)
+	Touch(pattern string) error
+}
+
 // Dependencies provide test seams without weakening the production command's
 // read-only boundaries.
 type Dependencies struct {
 	LoadSession   func(ctx context.Context, profile string) (Session, error)
 	ListProfiles  func(context.Context) ([]string, error)
 	LoadFile      func(context.Context, string) ([]byte, error)
+	Mappings      MappingStore
 	DSNSearchPath []string
 	Timeout       time.Duration
 }
@@ -571,6 +582,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 				return nil
 			}
 			m.dialog = nil
+			ws.overlayMappedPattern = ""
 			return m.startOverlay(ws, source)
 		case actionCancel:
 			m.dialog = nil
@@ -579,6 +591,11 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 			return m.dialog.moveFocus(1)
 		case actionPreviousField:
 			return m.dialog.moveFocus(-1)
+		case actionSaveMapping:
+			return m.saveDialogMapping(ws)
+		case actionRemoveMapping:
+			m.removeDialogMapping(ws)
+			return nil
 		default:
 			return m.dialog.update(msg)
 		}
@@ -657,8 +674,7 @@ func (m *Model) handleAction(selected action) tea.Cmd {
 	case actionRefresh:
 		return m.refresh()
 	case actionCopybook:
-		m.dialog = newCopybookDialog(ws.overlaySource)
-		m.dialog.setWidth(m.width)
+		m.openCopybookDialog(ws)
 		return nil
 	case actionClearOverlay:
 		m.clearOverlay()
@@ -758,6 +774,7 @@ func (m *Model) clearOverlay() {
 	ws.overlay = nil
 	ws.overlaySource = CopybookSource{}
 	ws.overlayError = ""
+	ws.overlayMappedPattern = ""
 	ws.recordMode = ModeRaw
 	ws.horizontal = 0
 	ws.jsonVertical = 0
@@ -766,6 +783,121 @@ func (m *Model) clearOverlay() {
 		ws.records[i].Err = nil
 	}
 	ws.status = status{Level: statusReady, Text: "copybook overlay cleared"}
+}
+
+// openCopybookDialog opens the overlay dialog. When mappings are available it
+// prefills the values from a matched persisted mapping, marks where they came
+// from, and defaults the save pattern to the exact data set name.
+func (m *Model) openCopybookDialog(ws *workspace) {
+	source := ws.overlaySource
+	pattern := ws.matchName()
+	note := ""
+	if m.deps.Mappings != nil {
+		if ws.overlayMappedPattern != "" {
+			pattern = ws.overlayMappedPattern
+			note = "values from mapping " + ws.overlayMappedPattern
+		} else if source.empty() {
+			if mapping, ok := m.deps.Mappings.Match(ws.matchName()); ok {
+				source = mappingSource(mapping)
+				pattern = mapping.Pattern
+				note = "values from mapping " + mapping.Pattern
+			}
+		}
+	}
+	m.dialog = newCopybookDialog(source)
+	m.dialog.pattern.SetValue(pattern)
+	m.dialog.note = note
+	m.dialog.setWidth(m.width)
+}
+
+// saveDialogMapping persists the dialog's copybook source under its DSN
+// pattern and applies the overlay in the same action.
+func (m *Model) saveDialogMapping(ws *workspace) tea.Cmd {
+	if m.deps.Mappings == nil {
+		m.dialog.err = "mapping persistence is unavailable"
+		return nil
+	}
+	source := m.dialog.source()
+	if source.empty() {
+		m.dialog.err = "enter a copybook source before saving a mapping"
+		return nil
+	}
+	validated, _, err := source.validate()
+	if err != nil {
+		m.dialog.err = err.Error()
+		return nil
+	}
+	pattern := strings.ToUpper(strings.TrimSpace(m.dialog.pattern.Value()))
+	if pattern == "" {
+		m.dialog.err = "enter a DSN pattern before saving a mapping"
+		return nil
+	}
+	if err := m.deps.Mappings.Put(dsnmap.Mapping{
+		Pattern: pattern, Local: validated.Local, DSN: validated.DSN, Format: validated.Format, Record: validated.Record,
+	}); err != nil {
+		m.dialog.err = err.Error()
+		return nil
+	}
+	m.dialog = nil
+	ws.overlayMappedPattern = pattern
+	command := m.startOverlay(ws, validated)
+	ws.status = status{Level: statusLoading, Text: fmt.Sprintf("saved mapping %s; loading copybook overlay %s", pattern, validated.label())}
+	return command
+}
+
+// removeDialogMapping deletes the persisted mapping stored under the dialog's
+// exact pattern and keeps the dialog open.
+func (m *Model) removeDialogMapping(ws *workspace) {
+	if m.deps.Mappings == nil {
+		m.dialog.err = "mapping persistence is unavailable"
+		return
+	}
+	pattern := strings.ToUpper(strings.TrimSpace(m.dialog.pattern.Value()))
+	if pattern == "" {
+		m.dialog.err = "enter the mapping pattern to remove"
+		return
+	}
+	removed, err := m.deps.Mappings.Remove(pattern)
+	if err != nil {
+		m.dialog.err = err.Error()
+		return
+	}
+	if !removed {
+		m.dialog.err = "no mapping stored for " + pattern
+		return
+	}
+	m.dialog.err = ""
+	m.dialog.note = "removed mapping " + pattern
+	if ws.overlayMappedPattern == pattern {
+		ws.overlayMappedPattern = ""
+	}
+}
+
+// autoApplyMapping starts the overlay for a persisted mapping when a records
+// screen is entered with no overlay active. Explicit --copybook/--copybook-dsn
+// flags override persisted mappings, and a failed load degrades to the raw
+// view through the normal overlay error path.
+func (m *Model) autoApplyMapping(ws *workspace) tea.Cmd {
+	if m.deps.Mappings == nil || ws.overlay != nil || ws.overlayPending || !ws.overlaySource.empty() {
+		return nil
+	}
+	if !m.initialCopybookSource().empty() {
+		return nil
+	}
+	mapping, ok := m.deps.Mappings.Match(ws.matchName())
+	if !ok && ws.member != nil {
+		mapping, ok = m.deps.Mappings.Match(ws.dataSet.Name)
+	}
+	if !ok {
+		return nil
+	}
+	_ = m.deps.Mappings.Touch(mapping.Pattern)
+	ws.overlayMappedPattern = mapping.Pattern
+	return m.startOverlay(ws, mappingSource(mapping))
+}
+
+func mappingSource(mapping dsnmap.Mapping) CopybookSource {
+	return CopybookSource{Local: mapping.Local, DSN: mapping.DSN, Format: mapping.Format, Record: mapping.Record}
 }
 
 func (m *Model) focusedInput() *textinput.Model {
@@ -906,7 +1038,7 @@ func (m *Model) openSelection() tea.Cmd {
 			ws.dataSet = selected
 			ws.resetMemberState()
 			ws.screen = ScreenRecords
-			return m.startRecords(ws, ws.recordPage.initialPlan(0))
+			return tea.Batch(m.startRecords(ws, ws.recordPage.initialPlan(0)), m.autoApplyMapping(ws))
 		case "PO", "PO-E", "POE", "PDS", "PDSE":
 			ws.cancelBrowse()
 			ws.cancelDecode()
@@ -933,7 +1065,7 @@ func (m *Model) openSelection() tea.Cmd {
 		ws.member = &selected
 		ws.screen = ScreenRecords
 		ws.resetRecordState()
-		return m.startRecords(ws, ws.recordPage.initialPlan(0))
+		return tea.Batch(m.startRecords(ws, ws.recordPage.initialPlan(0)), m.autoApplyMapping(ws))
 	}
 	return nil
 }

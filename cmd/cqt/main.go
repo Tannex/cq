@@ -15,6 +15,7 @@ import (
 	"github.com/Tannex/cq/internal/appconfig"
 	"github.com/Tannex/cq/internal/buildinfo"
 	"github.com/Tannex/cq/internal/cqt"
+	"github.com/Tannex/cq/internal/dsnmap"
 	"github.com/Tannex/cq/internal/zosmf"
 	"github.com/Tannex/cq/internal/zowe"
 )
@@ -130,6 +131,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		DSNSearchPath: config.DSNSearchPath,
 		LoadSession:   loadSession,
 		ListProfiles:  listProfiles,
+		Mappings:      dsnmap.DefaultStore(nil),
 	}
 	if demoMode {
 		deps.LoadSession = loadDemoSession

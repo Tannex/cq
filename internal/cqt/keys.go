@@ -48,6 +48,8 @@ const (
 	actionCancel
 	actionNextField
 	actionPreviousField
+	actionSaveMapping
+	actionRemoveMapping
 	actionHelpUp
 	actionHelpDown
 	actionHelpPageUp
@@ -94,6 +96,8 @@ type KeyMap struct {
 	Cancel          key.Binding
 	NextField       key.Binding
 	PreviousField   key.Binding
+	SaveMapping     key.Binding
+	RemoveMapping   key.Binding
 	NextProfile     key.Binding
 	PreviousProfile key.Binding
 }
@@ -124,6 +128,8 @@ func DefaultKeyMap() KeyMap {
 		Cancel:          key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
 		NextField:       key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next field")),
 		PreviousField:   key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("shift+tab", "previous field")),
+		SaveMapping:     key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "apply+save mapping")),
+		RemoveMapping:   key.NewBinding(key.WithKeys("ctrl+r"), key.WithHelp("ctrl+r", "remove mapping")),
 		NextProfile:     key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next profile")),
 		PreviousProfile: key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("shift+tab", "previous profile")),
 	}
@@ -140,6 +146,10 @@ func (k KeyMap) actionFor(msg tea.KeyPressMsg, ctx keyContext) action {
 			return actionNextField
 		case key.Matches(msg, k.PreviousField):
 			return actionPreviousField
+		case key.Matches(msg, k.SaveMapping):
+			return actionSaveMapping
+		case key.Matches(msg, k.RemoveMapping):
+			return actionRemoveMapping
 		default:
 			return actionNone
 		}
@@ -232,7 +242,7 @@ func (k KeyMap) shortHelp(ctx keyContext, overlay bool) []key.Binding {
 		return []key.Binding{k.Up, k.Down, k.PageUp, k.PageDown, k.Back, k.Help}
 	}
 	if ctx.DialogOpen {
-		return []key.Binding{k.Accept, k.Cancel, k.NextField}
+		return []key.Binding{k.Accept, k.SaveMapping, k.RemoveMapping, k.Cancel, k.NextField}
 	}
 	if ctx.InputFocused {
 		return []key.Binding{k.Accept, k.Cancel}
