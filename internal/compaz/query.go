@@ -60,6 +60,17 @@ type queryPopup struct {
 	err       string // compile/setup error shown instead of the footer
 	lastErr   string // most recent per-record runtime error
 
+	// Bulk download state: once paging has run longer than
+	// queryBulkThreshold, the whole data set is pulled into bulkPath in one
+	// request and evaluation continues from that file. The file is kept for
+	// re-runs until the popup closes.
+	bulk       bool   // download decided for the current search
+	bulkFailed bool   // download failed; this search stays on paging
+	bulkPath   string // completed download
+	bulkOffset int64  // resume offset of the next file chunk
+	bulkEOF    bool   // file fully evaluated in the current pass
+	bulkSkip   int64  // leading frames outside the streaming scope
+
 	generation uint64
 	ctx        context.Context
 	cancel     context.CancelFunc
@@ -80,6 +91,9 @@ type queryEvalMsg struct {
 	Canceled   bool
 	Array      bool // result of the whole-dataset array fallback
 	LastError  string
+	FromFile   bool  // chunk came from the bulk download file
+	FileOffset int64 // resume offset for the next file chunk
+	FileEOF    bool  // the file has no frames past this chunk
 }
 
 func newQueryPopup(width int) *queryPopup {
@@ -319,6 +333,7 @@ func (m *Model) handleQueryKey(msg tea.KeyPressMsg, selected action) tea.Cmd {
 			return nil
 		}
 		popup.stopSearch()
+		popup.closeBulk()
 		m.query = nil
 		return nil
 	case actionUp:
@@ -430,6 +445,10 @@ func (m *Model) runQuery() tea.Cmd {
 	popup.scroll = 0
 	popup.err, popup.lastErr = "", ""
 	popup.done, popup.capped, popup.cancelled, popup.arrayMode = false, false, false, false
+	popup.bulk = popup.bulkPath != ""
+	popup.bulkFailed = false
+	popup.bulkOffset = 0
+	popup.bulkEOF = false
 	popup.running = true
 	popup.started = time.Now()
 	popup.elapsed = 0
@@ -439,37 +458,60 @@ func (m *Model) runQuery() tea.Cmd {
 
 // queryStep advances the search: evaluate the next cached chunk in a command,
 // fetch the next forward page through the normal browse machinery (sharing the
-// workspace cache the pager already tolerates growing), or finish.
+// workspace cache the pager already tolerates growing), continue from the bulk
+// download once one exists, or finish.
 func (m *Model) queryStep(ws *workspace) tea.Cmd {
 	popup := m.query
 	if popup == nil || !popup.running || ws != &m.workspace {
 		return nil
 	}
-	if popup.next < len(ws.records) {
-		end := min(len(ws.records), popup.next+queryChunkSize)
-		rows := make([]zosmf.Record, 0, end-popup.next)
-		for _, row := range ws.records[popup.next:end] {
-			rows = append(rows, row.Record)
+	if popup.bulkPath != "" {
+		if !popup.bulkEOF {
+			return evalQueryFileChunk(popup.ctx, popup.compiled, ws.overlay, popup.bulkPath,
+				popup.bulkOffset, popup.bulkSkip+int64(popup.next), queryChunkSize,
+				queryResultCap-len(popup.lines), ws.profile, popup.generation)
 		}
-		return evalQueryChunk(popup.ctx, popup.compiled, ws.overlay, rows, ws.profile, popup.generation, queryResultCap-len(popup.lines))
+	} else {
+		if popup.next < len(ws.records) {
+			end := min(len(ws.records), popup.next+queryChunkSize)
+			rows := make([]zosmf.Record, 0, end-popup.next)
+			for _, row := range ws.records[popup.next:end] {
+				rows = append(rows, row.Record)
+			}
+			return evalQueryChunk(popup.ctx, popup.compiled, ws.overlay, rows, ws.profile, popup.generation, queryResultCap-len(popup.lines))
+		}
+		if ws.recordPage.more {
+			// Long paging means many more round trips; download the whole data
+			// set once instead and finish the search locally.
+			if !popup.bulk && time.Since(popup.started) > queryBulkThreshold {
+				if streamer, ok := ws.browser.(zosmf.RecordStreamer); ok {
+					popup.bulk = true
+					return m.startQueryBulkDownload(ws, streamer)
+				}
+			}
+			if popup.bulk && !popup.bulkFailed {
+				return nil // handleQueryBulk continues when the download lands
+			}
+			if ws.browsePending != nil {
+				return nil // queryAfterFetch continues when the in-flight page lands
+			}
+			var anchor int64
+			if len(ws.records) > 0 {
+				anchor = ws.records[len(ws.records)-1].Record.Number
+			}
+			return m.startRecords(ws, pagePlan[int64]{Anchor: anchor, Direction: pageForward})
+		}
 	}
-	if ws.recordPage.more {
-		if ws.browsePending != nil {
-			return nil // queryAfterFetch continues when the in-flight page lands
-		}
-		var anchor int64
-		if len(ws.records) > 0 {
-			anchor = ws.records[len(ws.records)-1].Record.Number
-		}
-		return m.startRecords(ws, pagePlan[int64]{Anchor: anchor, Direction: pageForward})
-	}
-	// Streaming pass exhausted every record. When it produced nothing but
+	// The pass exhausted every record. When it produced nothing but
 	// per-record errors, the expression likely wants the whole data set as one
 	// value (map, unique, group_by, ...) — fall back to array mode.
 	if popup.matches == 0 && popup.errored > 0 && !popup.arrayMode {
 		popup.arrayMode = true
 		popup.errored = 0
 		popup.lastErr = ""
+		if popup.bulkPath != "" {
+			return evalQueryArrayFile(popup.ctx, popup.compiled, ws.overlay, popup.bulkPath, popup.bulkSkip, ws.profile, popup.generation)
+		}
 		return evalQueryArray(popup.ctx, popup.compiled, ws.overlay, ws.records, ws.profile, popup.generation)
 	}
 	popup.stopSearch()
@@ -489,46 +531,60 @@ func evalQueryArray(ctx context.Context, compiled *query.Query, ov *overlay, row
 				msg.Canceled = true
 				return msg
 			}
-			decoded, err := ov.Decoder.DecodeDisplay(row.Record.Data)
-			if err != nil {
-				msg.Errors++
-				continue
-			}
-			encoded, err := decoded.JSON()
-			if err != nil {
-				msg.Errors++
-				msg.LastError = err.Error()
-				continue
-			}
-			value, err := query.FromJSON(encoded)
-			if err != nil {
-				msg.Errors++
-				msg.LastError = err.Error()
-				continue
-			}
-			values = append(values, value)
-		}
-		arrayCtx, cancelArray := context.WithTimeout(ctx, queryArrayBudget)
-		defer cancelArray()
-		err := compiled.RunContext(arrayCtx, values, func(out any) error {
-			msg.Matches++
-			if len(msg.Lines) < queryResultCap {
-				msg.Lines = append(msg.Lines, query.Marshal(out))
-			}
-			return nil
-		})
-		if err != nil {
-			var halt *query.Halt
-			switch {
-			case errors.As(err, &halt):
-				msg.Halted = true
-			case ctx.Err() != nil:
-				msg.Canceled = true
-			default:
-				msg.LastError = err.Error()
+			if value, ok := decodeQueryValue(ov, row.Record.Data, &msg); ok {
+				values = append(values, value)
 			}
 		}
+		runQueryArray(ctx, compiled, values, &msg)
 		return msg
+	}
+}
+
+// decodeQueryValue turns raw record bytes into the jq input value, counting
+// decode failures on the message instead of failing the search.
+func decodeQueryValue(ov *overlay, data []byte, msg *queryEvalMsg) (any, bool) {
+	decoded, err := ov.Decoder.DecodeDisplay(data)
+	if err != nil {
+		msg.Errors++
+		return nil, false
+	}
+	encoded, err := decoded.JSON()
+	if err != nil {
+		msg.Errors++
+		msg.LastError = err.Error()
+		return nil, false
+	}
+	value, err := query.FromJSON(encoded)
+	if err != nil {
+		msg.Errors++
+		msg.LastError = err.Error()
+		return nil, false
+	}
+	return value, true
+}
+
+// runQueryArray runs the expression once over the collected values under the
+// array-mode budget, mapping halt/cancel/errors onto the message.
+func runQueryArray(ctx context.Context, compiled *query.Query, values []any, msg *queryEvalMsg) {
+	arrayCtx, cancelArray := context.WithTimeout(ctx, queryArrayBudget)
+	defer cancelArray()
+	err := compiled.RunContext(arrayCtx, values, func(out any) error {
+		msg.Matches++
+		if len(msg.Lines) < queryResultCap {
+			msg.Lines = append(msg.Lines, query.Marshal(out))
+		}
+		return nil
+	})
+	if err != nil {
+		var halt *query.Halt
+		switch {
+		case errors.As(err, &halt):
+			msg.Halted = true
+		case ctx.Err() != nil:
+			msg.Canceled = true
+		default:
+			msg.LastError = err.Error()
+		}
 	}
 }
 
@@ -538,58 +594,51 @@ func evalQueryArray(ctx context.Context, compiled *query.Query, ov *overlay, row
 func evalQueryChunk(ctx context.Context, compiled *query.Query, ov *overlay, rows []zosmf.Record, profile string, generation uint64, lineRoom int) tea.Cmd {
 	return func() tea.Msg {
 		msg := queryEvalMsg{Profile: profile, Generation: generation}
-		for _, raw := range rows {
+		evaluateRecords(ctx, compiled, ov, rows, lineRoom, &msg)
+		return msg
+	}
+}
+
+// evaluateRecords runs the expression over each record, accumulating results
+// on the message. It stops early on halt, cancellation, or the result cap.
+func evaluateRecords(ctx context.Context, compiled *query.Query, ov *overlay, rows []zosmf.Record, lineRoom int, msg *queryEvalMsg) {
+	for _, raw := range rows {
+		if ctx.Err() != nil {
+			msg.Canceled = true
+			return
+		}
+		msg.Evaluated++
+		value, ok := decodeQueryValue(ov, raw.Data, msg)
+		if !ok {
+			continue
+		}
+		recordCtx, cancelRecord := context.WithTimeout(ctx, queryRecordBudget)
+		err := compiled.RunContext(recordCtx, value, func(out any) error {
+			msg.Matches++
+			if len(msg.Lines) < lineRoom {
+				msg.Lines = append(msg.Lines, fmt.Sprintf("%5d │ %s", raw.Number, query.Marshal(out)))
+			}
+			return nil
+		})
+		cancelRecord()
+		if err != nil {
+			var halt *query.Halt
+			if errors.As(err, &halt) {
+				msg.Halted = true
+				return
+			}
 			if ctx.Err() != nil {
 				msg.Canceled = true
-				return msg
+				return
 			}
-			msg.Evaluated++
-			decoded, err := ov.Decoder.DecodeDisplay(raw.Data)
-			if err != nil {
-				msg.Errors++
-				continue
-			}
-			encoded, err := decoded.JSON()
-			if err != nil {
-				msg.Errors++
-				msg.LastError = err.Error()
-				continue
-			}
-			value, err := query.FromJSON(encoded)
-			if err != nil {
-				msg.Errors++
-				msg.LastError = err.Error()
-				continue
-			}
-			recordCtx, cancelRecord := context.WithTimeout(ctx, queryRecordBudget)
-			err = compiled.RunContext(recordCtx, value, func(out any) error {
-				msg.Matches++
-				if len(msg.Lines) < lineRoom {
-					msg.Lines = append(msg.Lines, fmt.Sprintf("%5d │ %s", raw.Number, query.Marshal(out)))
-				}
-				return nil
-			})
-			cancelRecord()
-			if err != nil {
-				var halt *query.Halt
-				if errors.As(err, &halt) {
-					msg.Halted = true
-					return msg
-				}
-				if ctx.Err() != nil {
-					msg.Canceled = true
-					return msg
-				}
-				msg.Errors++
-				msg.LastError = err.Error()
-			}
-			if len(msg.Lines) >= lineRoom {
-				// Result cap reached: stop mid-chunk so a match-heavy search
-				// does not keep evaluating records nobody will see.
-				return msg
-			}
+			msg.Errors++
+			msg.LastError = err.Error()
 		}
-		return msg
+		if len(msg.Lines) >= lineRoom {
+			// Result cap reached: stop mid-chunk so a match-heavy search
+			// does not keep evaluating records nobody will see.
+			return
+		}
 	}
 }
 
@@ -603,6 +652,10 @@ func (m *Model) handleQueryEval(msg queryEvalMsg) tea.Cmd {
 	popup.searched += msg.Evaluated
 	popup.matches += msg.Matches
 	popup.errored += msg.Errors
+	if msg.FromFile {
+		popup.bulkOffset = msg.FileOffset
+		popup.bulkEOF = popup.bulkEOF || msg.FileEOF
+	}
 	if msg.LastError != "" {
 		popup.lastErr = msg.LastError
 	}
@@ -656,6 +709,10 @@ func (m *Model) queryFooter() string {
 	switch {
 	case popup.running && popup.arrayMode:
 		state = fmt.Sprintf("%s %s evaluating all %d records as one array…", popup.spin.View(), clock, total)
+	case popup.running && popup.bulk && popup.bulkPath == "" && !popup.bulkFailed:
+		state = fmt.Sprintf("%s %s paging is slow — downloading the whole data set…", popup.spin.View(), clock)
+	case popup.running && popup.bulkPath != "":
+		state = fmt.Sprintf("%s %s searched %d downloaded records…", popup.spin.View(), clock, popup.searched)
 	case popup.running:
 		state = fmt.Sprintf("%s %s searched %d of %d%s records…", popup.spin.View(), clock, popup.searched, total, suffix)
 	case popup.cancelled:

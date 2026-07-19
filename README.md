@@ -258,6 +258,14 @@ found (404), its member name — from `DSN(MEMBER)` or a bare member-sized
 name — is searched through the same libraries, so mappings survive a copybook
 moving to another library.
 
+With an overlay active, `:` opens the jq query console over the records
+screen; `ctrl+space` completes field names with the quoting jq needs (dashes
+in COBOL names become `."CUST-TYPE"`). Queries stream through the bounded
+record pages; when that paging runs longer than ten seconds, the whole data
+set is downloaded once in a single record-mode request to a temporary file and
+the search finishes from there. The download is reused for re-runs and deleted
+when the console closes.
+
 A valid overlay persists while browsing data sets and members. If a replacement
 copybook fails to load or parse, the previous valid overlay remains active.
 Press `o` for raw versus overlay, `v` for flattened table versus pretty ordered

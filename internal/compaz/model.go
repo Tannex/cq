@@ -564,6 +564,8 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handleEditSaveResult(msg)
 	case queryEvalMsg:
 		return m, m.handleQueryEval(msg)
+	case queryBulkMsg:
+		return m, m.handleQueryBulk(msg)
 	case spinner.TickMsg:
 		var commands []tea.Cmd
 		if m.query != nil && m.query.running {
@@ -810,6 +812,10 @@ func (m *Model) handleAction(selected action) tea.Cmd {
 		return nil
 	case actionQuit:
 		m.flushMappingOps()
+		if m.query != nil {
+			m.query.stopSearch()
+			m.query.closeBulk()
+		}
 		m.cancelAll()
 		return tea.Quit
 	case actionHelp:
