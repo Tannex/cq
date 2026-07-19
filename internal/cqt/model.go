@@ -1335,6 +1335,8 @@ func (m *Model) refresh() tea.Cmd {
 		ws.cancelDecode()
 		ws.records = nil
 		ws.rawLongest = 0
+		ws.syntaxKind = sourcePlain
+		ws.syntaxSampled = 0
 		ws.recordPage.reset(m.visible, m.budget)
 		return m.startRecords(ws, plan)
 	}
