@@ -1,6 +1,6 @@
-// Package cqt implements the read-only z/OSMF operator console used by the
-// separate cqt executable.
-package cqt
+// Package compaz implements Compa/z, the z/OSMF operator console used by
+// the separate compaz executable (formerly cqt).
+package compaz
 
 import (
 	"context"
@@ -30,7 +30,7 @@ const (
 	mouseWheelStep        = 3
 )
 
-// Options are the approved cqt command-line settings.
+// Options are the approved compaz command-line settings.
 type Options struct {
 	Prefix      string
 	Copybook    string

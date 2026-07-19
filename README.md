@@ -7,9 +7,10 @@ Zowe configuration — into UTF-8 JSON. The output is plain JSON on stdout; a
 built-in jq (`-q`) covers most filtering and reshaping, and anything else can
 be piped into the real `jq`.
 
-The separate `cqt` executable is a read-only terminal browser for z/OSMF data
-sets, PDS/PDSE members, and bounded record windows. It can display raw records
-or apply the same COBOL copybook parser as a table or ordered JSON overlay.
+The separate **Compa/z** terminal browser (binary: `compaz`, formerly `cqt`)
+navigates z/OSMF data sets, PDS/PDSE members, and bounded record windows. It can
+display raw records or apply the same COBOL copybook parser as a table or
+ordered JSON overlay.
 
 ```console
 $ cq -c CUSTOMER.cpy                         # layout: offset/length of each field
@@ -24,19 +25,19 @@ $ cq -where DTAR107-SALE -c DTAR107.cbl -d sales.bin
 Download the archive for your platform from the
 [latest GitHub release](https://github.com/Tannex/cq/releases/latest). Existing
 `cq_VERSION_OS_ARCH` archives contain the `cq` CLI; separate
-`cqt_VERSION_OS_ARCH` archives contain the terminal browser. Both are available
+`compaz_VERSION_OS_ARCH` archives contain the terminal browser. Both are available
 for Linux, macOS, and Windows on amd64 and arm64. Extract the archive you need
-and place `cq`/`cqt` (or the corresponding `.exe` on Windows) on your `PATH`.
+and place `cq`/`compaz` (or the corresponding `.exe` on Windows) on your `PATH`.
 The attached `cq_VERSION_checksums.txt` covers both sets of release archives.
 
 Alternatively, install either executable from source with Go:
 
 ```console
 $ go install github.com/Tannex/cq@latest
-$ go install github.com/Tannex/cq/cmd/cqt@latest
+$ go install github.com/Tannex/cq/cmd/compaz@latest
 ```
 
-Confirm the installed versions with `cq --version` and `cqt --version`.
+Confirm the installed versions with `cq --version` and `compaz --version`.
 
 ## Usage
 
@@ -139,23 +140,27 @@ the raw bytes before any JSON is built, and combines with `-q` (filter
 first, query after). Conditions inside `OCCURS` tables aren't supported
 yet.
 
-## cqt — read-only z/OSMF browser
+## Compa/z — z/OSMF browser
 
-`cqt` uses the same Zowe team configuration, operating-system credential
+> **Formerly `cqt`:** the terminal browser was renamed in this release. The
+> binary is now `compaz`; flags, keys, and configuration are unchanged. Replace
+> `cqt` with `compaz` in scripts and PATH installs.
+
+`compaz` uses the same Zowe team configuration, operating-system credential
 entry, TLS settings, profile encoding, and `cq/config.json` file as `cq`. It
 does not have a separate credential or application configuration. Run
-`cq config` to create or edit the shared application config. Start `cqt` with
+`cq config` to create or edit the shared application config. Start `compaz` with
 no copybook for a raw browser, or provide an optional display copybook:
 
 ```console
-$ cqt
-$ cqt --prefix 'IBMUSER.*'
-$ cqt --prefix 'PROD.CUSTOMER.*' -c CUSTOMER.cpy --format fixed
-$ cqt --copybook-dsn 'HQ.COPYLIB(CUSTOMER)' --record CUSTOMER-RECORD
+$ compaz
+$ compaz --prefix 'IBMUSER.*'
+$ compaz --prefix 'PROD.CUSTOMER.*' -c CUSTOMER.cpy --format fixed
+$ compaz --copybook-dsn 'HQ.COPYLIB(CUSTOMER)' --record CUSTOMER-RECORD
 ```
 
 ```text
-cqt [--prefix PREFIX]
+compaz [--prefix PREFIX]
     [-c COPYBOOK | --copybook COPYBOOK | --copybook-dsn DSN[(MEMBER)]]
     [--format auto|fixed|free] [--record NAME] [--codepage CODEPAGE]
     [--read-only]
@@ -175,7 +180,7 @@ actionable warning and are not read. On the data set and member screens, `/`
 edits the prefix or member filter; short literal member filters are expanded as
 prefix patterns.
 
-### cqt keys
+### Compa/z keys
 
 | Key | Action |
 | --- | --- |
@@ -205,7 +210,7 @@ fields.
 
 ### Bounded 2× requests and screen cache
 
-For each terminal size, `cqt` calculates the data rows visible after the fixed
+For each terminal size, `compaz` calculates the data rows visible after the fixed
 title, search/breadcrumb, table header, status/detail, and help lines. The
 maximum size of **each individual z/OSMF request** is exactly
 `2 × visible rows`:
@@ -214,12 +219,12 @@ maximum size of **each individual z/OSMF request** is exactly
   maximum item/count value;
 - fetched rows are retained in memory for the lifetime of the current browse
   screen, so moving backward through previously visited data does not refetch;
-- when the selection enters the final visible page of cached rows, `cqt`
+- when the selection enters the final visible page of cached rows, `compaz`
   prefetches the next bounded request instead of waiting for the last row;
 - opening a child screen retains its parent cache; `Esc` releases the child
   cache when returning to the parent. Prefix/member-filter changes and `r`
   clear and restart the active cache; and
-- when the terminal is too small to have a positive row count, `cqt` cancels
+- when the terminal is too small to have a positive row count, `compaz` cancels
   pending row work, retains already cached rows, displays a resize instruction,
   and dispatches no row fetch. Restoring the terminal shows the cache
   immediately.
@@ -230,7 +235,7 @@ the cached range and the current per-request fetch budget. Its spinner occupies
 a permanently reserved cell, so loading transitions do not shift status text.
 
 Record browsing uses only z/OSMF record ranges. Unlike the `cq --data-dsn`
-streaming optimization, `cqt` never falls back to a whole-data-set download,
+streaming optimization, `compaz` never falls back to a whole-data-set download,
 because doing so would violate the request cap. Copybook source files are
 metadata for the display overlay and are not record-cache rows.
 
@@ -252,7 +257,7 @@ raw display.
 
 `cq` remains the strict batch/CLI decoder: malformed zoned, packed, or
 separate-sign data stops decoding with an error, and its established text
-semantics are unchanged. `cqt` uses an explicitly lenient display decoder so
+semantics are unchanged. `compaz` uses an explicitly lenient display decoder so
 the browser remains usable on imperfect operational data:
 
 - every text or edited `0x00` LOW-VALUE byte, including trailing bytes, is shown
@@ -278,7 +283,7 @@ discards, `Esc` keeps editing); a clean buffer closes immediately with `Esc`.
 Load libraries and other undefined-format content are not editable.
 
 Some terminals reserve `Ctrl-S` for flow control (XOFF); run `stty -ixon` to
-free it. Start `cqt --read-only` to disable edit mode entirely and restore the
+free it. Start `compaz --read-only` to disable edit mode entirely and restore the
 strictly read-only console guarantee. Browsing itself remains read-only: the
 z/OSMF browser interface exposes only list/read/fetch methods, and the write
 surface is a separate opt-in interface used exclusively by the editor. The
@@ -287,7 +292,7 @@ unchanged.
 
 ## Using Zowe
 
-Both `cq` and `cqt` connect directly to z/OSMF through the shared native Go
+Both `cq` and `compaz` connect directly to z/OSMF through the shared native Go
 transport; there is no Node.js or npm setup. They read the same Zowe team
 configuration and operating-system credential entry as Zowe CLI and Zowe
 Explorer. For example, `cq` can stream both sources directly:
@@ -323,7 +328,7 @@ credential-manager plug-ins, or client-certificate identities. Those
 configurations must be migrated to a supported Zowe team configuration before
 using DSN sources or the browser.
 
-`cq` and `cqt` are part of an independent project that is not affiliated with
+`cq` and `compaz` are part of an independent project that is not affiliated with
 or endorsed by The Linux Foundation or the Zowe project. Zowe® is a registered
 trademark of The Linux Foundation.
 
@@ -463,7 +468,7 @@ $ git push origin v1.2.3
 ```
 
 The release workflow reruns the tests, builds unchanged `cq_VERSION_OS_ARCH`
-archives and separate `cqt_VERSION_OS_ARCH` archives for all supported targets,
-embeds the same tag for both `cq --version` and `cqt --version`, generates one
+archives and separate `compaz_VERSION_OS_ARCH` archives for all supported targets,
+embeds the same tag for both `cq --version` and `compaz --version`, generates one
 SHA-256 checksum file covering both archive sets, creates release notes, and
 publishes the files on the repository's GitHub Releases page.

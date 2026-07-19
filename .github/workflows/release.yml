@@ -83,11 +83,11 @@ jobs:
 
           for target in "${targets[@]}"; do
             IFS=/ read -r goos goarch <<< "$target"
-            asset="cqt_${GITHUB_REF_NAME}_${goos}_${goarch}"
+            asset="compaz_${GITHUB_REF_NAME}_${goos}_${goarch}"
             package_dir="$RUNNER_TEMP/$asset"
-            binary="cqt"
+            binary="compaz"
             if [[ "$goos" == "windows" ]]; then
-              binary="cqt.exe"
+              binary="compaz.exe"
             fi
 
             mkdir -p "$package_dir"
@@ -96,7 +96,7 @@ jobs:
               -trimpath \
               -ldflags="-s -w -X github.com/Tannex/cq/internal/buildinfo.Version=$GITHUB_REF_NAME" \
               -o "$package_dir/$binary" \
-              ./cmd/cqt
+              ./cmd/compaz
             cp LICENSE README.md "$package_dir/"
 
             if [[ "$goos" == "windows" ]]; then
@@ -111,23 +111,23 @@ jobs:
 
           (
             cd dist
-            sha256sum cq_*.tar.gz cq_*.zip cqt_*.tar.gz cqt_*.zip \
+            sha256sum cq_*.tar.gz cq_*.zip compaz_*.tar.gz compaz_*.zip \
               > "cq_${GITHUB_REF_NAME}_checksums.txt"
           )
 
       - name: Verify embedded versions
         run: |
           cq_dir="$RUNNER_TEMP/version-check-cq"
-          cqt_dir="$RUNNER_TEMP/version-check-cqt"
-          mkdir -p "$cq_dir" "$cqt_dir"
+          compaz_dir="$RUNNER_TEMP/version-check-compaz"
+          mkdir -p "$cq_dir" "$compaz_dir"
           tar -xzf "dist/cq_${GITHUB_REF_NAME}_linux_amd64.tar.gz" \
             -C "$cq_dir" \
             --strip-components=1
-          tar -xzf "dist/cqt_${GITHUB_REF_NAME}_linux_amd64.tar.gz" \
-            -C "$cqt_dir" \
+          tar -xzf "dist/compaz_${GITHUB_REF_NAME}_linux_amd64.tar.gz" \
+            -C "$compaz_dir" \
             --strip-components=1
           test "$("$cq_dir/cq" --version)" = "cq $GITHUB_REF_NAME"
-          test "$("$cqt_dir/cqt" --version)" = "cqt $GITHUB_REF_NAME"
+          test "$("$compaz_dir/compaz" --version)" = "compaz $GITHUB_REF_NAME"
 
       - name: Publish GitHub release
         env:

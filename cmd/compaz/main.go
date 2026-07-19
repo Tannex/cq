@@ -1,4 +1,4 @@
-// cqt is the read-only z/OSMF data set browser for cq.
+// compaz is Compa/z, the z/OSMF data set browser for cq (formerly cqt).
 package main
 
 import (
@@ -14,7 +14,7 @@ import (
 
 	"github.com/Tannex/cq/internal/appconfig"
 	"github.com/Tannex/cq/internal/buildinfo"
-	"github.com/Tannex/cq/internal/cqt"
+	"github.com/Tannex/cq/internal/compaz"
 	"github.com/Tannex/cq/internal/dsnmap"
 	"github.com/Tannex/cq/internal/favorites"
 	"github.com/Tannex/cq/internal/zosmf"
@@ -32,21 +32,21 @@ type sessionLoadResult struct {
 	err     error
 }
 
-var runProgram = func(model *cqt.Model) error {
+var runProgram = func(model *compaz.Model) error {
 	_, err := tea.NewProgram(model).Run()
 	return err
 }
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
-		fmt.Fprintln(os.Stderr, "cqt:", err)
+		fmt.Fprintln(os.Stderr, "compaz:", err)
 		os.Exit(1)
 	}
 }
 
-func loadSession(ctx context.Context, profile string) (cqt.Session, error) {
+func loadSession(ctx context.Context, profile string) (compaz.Session, error) {
 	if err := ctx.Err(); err != nil {
-		return cqt.Session{}, err
+		return compaz.Session{}, err
 	}
 
 	results := make(chan sessionLoadResult, 1)
@@ -66,15 +66,15 @@ func loadSession(ctx context.Context, profile string) (cqt.Session, error) {
 		// Session loading is synchronous and cannot be interrupted. Its goroutine
 		// may remain blocked indefinitely, but cancellation must still release
 		// the UI.
-		return cqt.Session{}, ctx.Err()
+		return compaz.Session{}, ctx.Err()
 	case result := <-results:
 		if err := ctx.Err(); err != nil {
-			return cqt.Session{}, err
+			return compaz.Session{}, err
 		}
 		if result.err != nil {
-			return cqt.Session{}, result.err
+			return compaz.Session{}, result.err
 		}
-		return cqt.Session{
+		return compaz.Session{
 			Browser: zosmf.New(result.session, nil), User: result.session.User, Encoding: result.session.Encoding,
 		}, nil
 	}
@@ -88,9 +88,9 @@ func listProfiles(ctx context.Context) ([]string, error) {
 }
 
 func run(args []string, stdout, stderr io.Writer) error {
-	fs := flag.NewFlagSet("cqt", flag.ContinueOnError)
+	fs := flag.NewFlagSet("compaz", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	var options cqt.Options
+	var options compaz.Options
 	var showVersion bool
 	var demoMode bool
 	fs.StringVar(&options.Prefix, "prefix", "", "initial data set prefix or pattern")
@@ -104,9 +104,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 	fs.BoolVar(&showVersion, "version", false, "print version and exit")
 	fs.BoolVar(&demoMode, "demo", false, "run with offline fake data")
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "cqt — read-only z/OSMF data set browser")
+		fmt.Fprintln(fs.Output(), "Compa/z — z/OSMF data set browser (formerly cqt)")
 		fmt.Fprintln(fs.Output(), "")
-		fmt.Fprintln(fs.Output(), "usage: cqt [flags]")
+		fmt.Fprintln(fs.Output(), "usage: compaz [flags]")
 		fmt.Fprintln(fs.Output(), "")
 		fmt.Fprintln(fs.Output(), "flags:")
 		fs.PrintDefaults()
@@ -118,7 +118,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return fmt.Errorf("unexpected positional arguments: %v", fs.Args())
 	}
 	if showVersion {
-		_, err := fmt.Fprintf(stdout, "cqt %s\n", buildinfo.Reported())
+		_, err := fmt.Fprintf(stdout, "compaz %s\n", buildinfo.Reported())
 		return err
 	}
 	if demoMode && strings.TrimSpace(options.Prefix) == "" {
@@ -129,7 +129,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	deps := cqt.Dependencies{
+	deps := compaz.Dependencies{
 		DSNSearchPath: config.DSNSearchPath,
 		LoadSession:   loadSession,
 		ListProfiles:  listProfiles,
@@ -140,7 +140,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		deps.LoadSession = loadDemoSession
 		deps.ListProfiles = listDemoProfiles
 	}
-	model, err := cqt.NewModel(options, deps)
+	model, err := compaz.NewModel(options, deps)
 	if err != nil {
 		return err
 	}

@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/Tannex/cq/internal/buildinfo"
-	"github.com/Tannex/cq/internal/cqt"
+	"github.com/Tannex/cq/internal/compaz"
 	"github.com/Tannex/cq/internal/zosmf"
 	"github.com/Tannex/cq/internal/zowe"
 )
@@ -69,13 +69,13 @@ func TestLoadSessionMapsLoadedSession(t *testing.T) {
 	}
 }
 
-func TestRunPrintsCQTVersionWithoutStartingProgram(t *testing.T) {
+func TestRunPrintsCompazVersionWithoutStartingProgram(t *testing.T) {
 	originalVersion := buildinfo.Version
 	buildinfo.Version = "v2.3.4"
 	t.Cleanup(func() { buildinfo.Version = originalVersion })
 	originalRunner := runProgram
 	called := false
-	runProgram = func(*cqt.Model) error {
+	runProgram = func(*compaz.Model) error {
 		called = true
 		return nil
 	}
@@ -85,7 +85,7 @@ func TestRunPrintsCQTVersionWithoutStartingProgram(t *testing.T) {
 	if err := run([]string{"--version"}, &stdout, &stderr); err != nil {
 		t.Fatal(err)
 	}
-	if stdout.String() != "cqt v2.3.4\n" || stderr.Len() != 0 || called {
+	if stdout.String() != "compaz v2.3.4\n" || stderr.Len() != 0 || called {
 		t.Fatalf("stdout=%q stderr=%q called=%v", stdout.String(), stderr.String(), called)
 	}
 }
@@ -94,7 +94,7 @@ func TestRunSupportsApprovedFlagsAndAliases(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	originalRunner := runProgram
 	called := 0
-	runProgram = func(*cqt.Model) error {
+	runProgram = func(*compaz.Model) error {
 		called++
 		return nil
 	}
@@ -137,8 +137,8 @@ func TestRunRejectsInvalidFlagCombinationsAndPositionals(t *testing.T) {
 func TestRunDemoModeWiresModelWithoutError(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	originalRunner := runProgram
-	var model *cqt.Model
-	runProgram = func(m *cqt.Model) error {
+	var model *compaz.Model
+	runProgram = func(m *compaz.Model) error {
 		model = m
 		return nil
 	}
@@ -335,7 +335,7 @@ func TestDemoBrowserEditRoundTripWithConflict(t *testing.T) {
 func TestRunSupportsReadOnlyFlag(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	originalRunner := runProgram
-	runProgram = func(*cqt.Model) error { return nil }
+	runProgram = func(*compaz.Model) error { return nil }
 	t.Cleanup(func() { runProgram = originalRunner })
 
 	var stdout, stderr bytes.Buffer

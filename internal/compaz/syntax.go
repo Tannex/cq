@@ -1,4 +1,4 @@
-package cqt
+package compaz
 
 import (
 	"strings"
