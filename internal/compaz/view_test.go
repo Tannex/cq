@@ -28,8 +28,8 @@ func recordViewModel(t *testing.T) *Model {
 	model := &Model{
 		width:   80,
 		height:  13,
-		visible: VisibleRows(80, 13, false),
-		budget:  RowBudget(VisibleRows(80, 13, false)),
+		visible: VisibleRows(80, 13),
+		budget:  RowBudget(VisibleRows(80, 13)),
 		keys:    DefaultKeyMap(),
 		help:    helpModelForTest(),
 		spinner: newStatusSpinner(),
@@ -361,7 +361,7 @@ func TestHelpPopupOverlaysMainViewWithGroupedBindings(t *testing.T) {
 	model := recordViewModel(t)
 	// Use a taller terminal so every help section fits without truncation.
 	model.width, model.height = 80, 36
-	model.visible = VisibleRows(model.width, model.height, false)
+	model.visible = VisibleRows(model.width, model.height)
 	model.budget = RowBudget(model.visible)
 	model.recordPage.resize(model.visible, model.budget)
 	model.showHelp = true
@@ -480,7 +480,7 @@ func TestTinyLoadingEmptyErrorAndMappingViewsAreExplicit(t *testing.T) {
 	}
 
 	model.width, model.height = 80, 12
-	model.visible = VisibleRows(80, 12, false)
+	model.visible = VisibleRows(80, 12)
 	model.budget = RowBudget(model.visible)
 	model.recordPage.resize(model.visible, model.budget)
 	model.records = nil

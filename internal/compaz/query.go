@@ -785,12 +785,9 @@ func (m *Model) queryPanel() string {
 // refers to stay readable while typing.
 func (m *Model) overlayQuery(background string) string {
 	popupWidth := min(76, m.width-4)
-	// Rows above the popup: optional tab bar, title, search, rule, and the
-	// table header line; the status and help lines stay visible below.
+	// Rows above the popup: title, search, rule, and the table header line;
+	// the status and help lines stay visible below.
 	top := 4
-	if m.hasTabs() {
-		top++
-	}
 	popupHeight := m.height - top - 2
 	if popupHeight < 8 {
 		// Terminal too short to spare the chrome: fall back to centering.

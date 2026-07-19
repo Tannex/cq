@@ -1566,7 +1566,7 @@ func (m *Model) handleResize(width, height int) tea.Cmd {
 	ws := m.ws()
 	oldBudget := m.budget
 	m.width, m.height = width, height
-	m.visible = VisibleRows(width, height, m.hasTabs())
+	m.visible = VisibleRows(width, height)
 	m.budget = RowBudget(m.visible)
 	m.help.SetWidth(max(1, width))
 	m.prefixInput.SetWidth(max(8, width-10))

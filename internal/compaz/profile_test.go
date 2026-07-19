@@ -200,41 +200,27 @@ func TestProfileSessionErrorIsIsolated(t *testing.T) {
 	}
 }
 
-func TestTabBarRendersActiveAndInactiveProfiles(t *testing.T) {
+func TestStatusLineRendersActiveAndInactiveProfiles(t *testing.T) {
 	model := readyModelWithProfiles(t, Options{Prefix: "A*"}, &fakeBrowser{}, []string{"alpha", "beta", "gamma"})
-	view := model.View().Content
+	line := model.statusLine()
 	for _, profile := range []string{"alpha", "beta", "gamma"} {
-		if !strings.Contains(view, profile) {
-			t.Fatalf("tab bar missing profile %q: %q", profile, view)
+		if !strings.Contains(line, profile) {
+			t.Fatalf("status line missing profile %q: %q", profile, line)
 		}
 	}
 }
 
-func TestTabBarConsumesExactlyOneRow(t *testing.T) {
+func TestMultiProfileViewUsesNoExtraRow(t *testing.T) {
 	model := readyModelWithProfiles(t, Options{Prefix: "A*"}, &fakeBrowser{}, []string{"alpha", "beta"})
 	content := model.View().Content
 	lines := strings.Count(content, "\n") + 1
 	if lines != model.height {
 		t.Fatalf("tabbed view lines = %d, want terminal height %d", lines, model.height)
 	}
-	// Without the tab bar the same terminal would show one extra data row.
-	withoutTabs := VisibleRows(model.width, model.height, false)
-	withTabs := VisibleRows(model.width, model.height, true)
-	if withoutTabs != withTabs+1 {
-		t.Fatalf("tab bar did not consume one visible row: %d vs %d", withoutTabs, withTabs)
-	}
-}
-
-func TestTabBarTruncatesAndKeepsActiveVisible(t *testing.T) {
-	model := readyModelWithProfiles(t, Options{Prefix: "A*"}, &fakeBrowser{}, []string{"alpha", "beta", "gamma", "delta"})
-	model.width = 20
-	view := model.tabBar()
-	if !strings.Contains(view, "alpha") {
-		t.Fatalf("active profile not visible in narrow tab bar: %q", view)
-	}
-	// With only 20 columns at least one profile should be replaced by an ellipsis.
-	if !strings.Contains(view, "…") {
-		t.Fatalf("narrow tab bar did not truncate: %q", view)
+	// The profile strip lives in the status line, so multi-profile sessions
+	// keep the same data-row geometry as single-profile ones.
+	if model.visible != VisibleRows(model.width, model.height) {
+		t.Fatalf("visible = %d, want %d", model.visible, VisibleRows(model.width, model.height))
 	}
 }
 
