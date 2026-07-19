@@ -48,6 +48,8 @@ func (m *Model) View() tea.View {
 	}
 	if m.showHelp && m.width >= MinTerminalWidth && m.visible > 0 && m.mappingView == nil {
 		content = m.overlayHelp(content)
+	} else if m.favPopup != nil && m.width >= MinTerminalWidth && m.visible > 0 && m.mappingView == nil && !m.showHelp {
+		content = m.overlayFavorites(content)
 	}
 	view := tea.NewView(content)
 	view.AltScreen = true
@@ -75,6 +77,8 @@ func (m *Model) mainView() string {
 		// Tiny-terminal fallback: full-area help panel so every binding stays
 		// readable; the chrome row count (and therefore the row budget) is unchanged.
 		data = m.helpPanel()
+	} else if m.favPopup != nil && (m.width < MinTerminalWidth || m.visible <= 0) {
+		data = m.favoritesPanel()
 	}
 	lines = append(lines, m.titleLine(), m.searchLine(), data, m.statusLine(), m.helpLine())
 	return fitHeight(strings.Join(lines, "\n"), m.width, m.height)
@@ -505,8 +509,13 @@ var denseTableStyles = func() table.Styles {
 func (m *Model) dataSetTableView() string {
 	showVolume := m.width >= 76
 	showReferenced := m.width >= 92
+	showFavorites := m.deps.Favorites != nil
 	columnCount := 5
 	fixedWidths := 1 + 6 + 5 + 6
+	if showFavorites {
+		columnCount++
+		fixedWidths++
+	}
 	if showVolume {
 		columnCount++
 		fixedWidths += 8
@@ -516,13 +525,16 @@ func (m *Model) dataSetTableView() string {
 		fixedWidths += 10
 	}
 	nameWidth := max(18, m.width-fixedWidths-2*columnCount)
-	columns := []table.Column{
-		{Title: "", Width: 1},
-		{Title: "DATA SET NAME", Width: nameWidth},
-		{Title: "DSORG", Width: 6},
-		{Title: "RECFM", Width: 5},
-		{Title: "LRECL", Width: 6},
+	columns := []table.Column{{Title: "", Width: 1}}
+	if showFavorites {
+		columns = append(columns, table.Column{Title: "", Width: 1})
 	}
+	columns = append(columns,
+		table.Column{Title: "DATA SET NAME", Width: nameWidth},
+		table.Column{Title: "DSORG", Width: 6},
+		table.Column{Title: "RECFM", Width: 5},
+		table.Column{Title: "LRECL", Width: 6},
+	)
 	if showVolume {
 		columns = append(columns, table.Column{Title: "VOLUME", Width: 8})
 	}
@@ -537,7 +549,11 @@ func (m *Model) dataSetTableView() string {
 		if start+i == selected {
 			marker = ">"
 		}
-		row := table.Row{marker, dataSet.Name, dataSet.Organization, dataSet.RecordFormat, dataSet.RecordLength}
+		row := table.Row{marker}
+		if showFavorites {
+			row = append(row, m.favoriteMarker(dataSet.Name))
+		}
+		row = append(row, dataSet.Name, dataSet.Organization, dataSet.RecordFormat, dataSet.RecordLength)
 		if showVolume {
 			row = append(row, displayOr(dataSet.Volume, dataSet.Volumes))
 		}
@@ -982,7 +998,12 @@ func recordPositionStatus(number int64, count int, more bool, numberWidth int) s
 }
 
 func (m *Model) helpLine() string {
-	ctx := keyContext{Screen: m.screen, Mode: m.recordMode, InputFocused: m.inputFocused(), DialogOpen: m.mappingView != nil, DialogFormFocused: m.mappingView != nil && m.mappingView.form != nil, ShowHelp: m.showHelp, Tabs: m.hasTabs()}
+	ctx := keyContext{
+		Screen: m.screen, Mode: m.recordMode, InputFocused: m.inputFocused(),
+		DialogOpen: m.mappingView != nil, DialogFormFocused: m.mappingView != nil && m.mappingView.form != nil,
+		ShowHelp: m.showHelp, Tabs: m.hasTabs(),
+		FavoritesOpen: m.favPopup != nil, FavoritesInput: m.favPopup != nil && m.favPopup.editing,
+	}
 	line := m.help.ShortHelpView(m.keys.shortHelp(ctx, m.overlay != nil))
 	return consolePalette.muted.Width(m.width).Render(truncateStyled(" "+line, m.width))
 }

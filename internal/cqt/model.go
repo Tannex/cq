@@ -19,6 +19,7 @@ import (
 
 	"github.com/Tannex/cq/internal/decode"
 	"github.com/Tannex/cq/internal/dsnmap"
+	"github.com/Tannex/cq/internal/favorites"
 	"github.com/Tannex/cq/internal/record"
 	"github.com/Tannex/cq/internal/zosmf"
 )
@@ -80,6 +81,17 @@ type pendingMappingSave struct {
 	removeOld string
 }
 
+// FavoriteStore persists data set favorites across sessions. A nil store
+// disables favorites.
+type FavoriteStore interface {
+	Favorites() []favorites.Favorite
+	Matches(name string) bool
+	Toggle(name string) (bool, error)
+	SetNote(pattern, note string) error
+	Remove(pattern string) (bool, error)
+	Touch(pattern string) error
+}
+
 // Dependencies provide test seams without weakening the production command's
 // read-only boundaries.
 type Dependencies struct {
@@ -87,6 +99,7 @@ type Dependencies struct {
 	ListProfiles  func(context.Context) ([]string, error)
 	LoadFile      func(context.Context, string) ([]byte, error)
 	Mappings      MappingStore
+	Favorites     FavoriteStore
 	DSNSearchPath []string
 	Timeout       time.Duration
 }
@@ -200,6 +213,7 @@ type Model struct {
 	memberInput textinput.Model
 	locateInput textinput.Model
 	mappingView *mappingView
+	favPopup    *favoritesPopup
 
 	// mappingOps are background store writes awaiting the debounced flush;
 	// mappingSeq invalidates timers superseded by a newer queued op.
@@ -586,6 +600,10 @@ func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
 		m.helpVertical = max(0, m.helpVertical+delta)
 		return nil
 	}
+	if m.favPopup != nil {
+		m.favPopup.move(delta)
+		return nil
+	}
 	if m.scrollJSON(delta) {
 		return nil
 	}
@@ -610,8 +628,12 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		InputFocused: m.inputFocused(), DialogOpen: m.mappingView != nil,
 		DialogFormFocused: m.mappingView != nil && m.mappingView.form != nil,
 		ShowHelp:          m.showHelp, Tabs: m.hasTabs(),
+		FavoritesOpen: m.favPopup != nil, FavoritesInput: m.favPopup != nil && m.favPopup.editing,
 	}
 	selectedAction := m.keys.actionFor(msg, ctx)
+	if m.favPopup != nil {
+		return m.handleFavoritesKey(msg, selectedAction)
+	}
 	if view := m.mappingView; view != nil {
 		if view.form != nil {
 			switch selectedAction {
@@ -733,6 +755,12 @@ func (m *Model) handleAction(selected action) tea.Cmd {
 		return m.navigateBack()
 	case actionRefresh:
 		return m.refresh()
+	case actionToggleFavorite:
+		m.toggleFavorite()
+		return nil
+	case actionFavorites:
+		m.openFavoritesPopup()
+		return nil
 	case actionCopybook:
 		m.openMappingView(ws)
 		return nil
@@ -1290,6 +1318,9 @@ func (m *Model) handleResize(width, height int) tea.Cmd {
 	m.locateInput.SetWidth(max(8, min(24, width-10)))
 	if m.mappingView != nil {
 		m.mappingView.setWidth(width)
+	}
+	if m.favPopup != nil {
+		m.favPopup.setWidth(width)
 	}
 
 	ws.resizePagers(m.visible, m.budget)
