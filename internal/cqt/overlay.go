@@ -314,7 +314,7 @@ func newCopybookDialog(source CopybookSource) *copybookDialog {
 		dsn:     newInput("DSN    ", "HLQ.COPYLIB(MEMBER)", 55),
 		format:  newInput("FORMAT ", "auto | fixed | free", 5),
 		record:  newInput("RECORD ", "optional 01-level name", 64),
-		pattern: newInput("PATTERN", "DSN pattern to save mapping under (* any run, % one char)", 60),
+		pattern: newInput("PATTERN", "DSN pattern to save mapping under (* any run, % one char, /regex/)", 60),
 	}
 	dialog.local.SetValue(source.Local)
 	dialog.dsn.SetValue(source.DSN)

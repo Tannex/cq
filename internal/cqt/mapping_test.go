@@ -257,6 +257,37 @@ func TestDialogSaveValidatesSourceAndPattern(t *testing.T) {
 	if !strings.Contains(model.dialog.err, "pattern") {
 		t.Fatalf("empty-pattern save error = %q", model.dialog.err)
 	}
+
+	model.dialog.pattern.SetValue(`/HQ\.(/`)
+	if command := model.handleKey(ctrlKey('s')); command != nil {
+		t.Fatal("invalid-regex save returned a command")
+	}
+	if !strings.Contains(model.dialog.err, "invalid regex") {
+		t.Fatalf("invalid-regex save error = %q", model.dialog.err)
+	}
+}
+
+func TestDialogSavesRegexPatternWithoutUppercasing(t *testing.T) {
+	store := &fakeMappingStore{}
+	model := recordViewModel(t)
+	model.deps.Timeout = defaultRequestTimeout
+	model.deps.Mappings = store
+	model.deps.LoadFile = func(context.Context, string) ([]byte, error) {
+		return []byte("01 REC. 05 NAME PIC X(3).\n"), nil
+	}
+
+	model.handleAction(actionCopybook)
+	model.dialog.local.SetValue("cust.cpy")
+	model.dialog.format.SetValue("free")
+	model.dialog.pattern.SetValue(` /hq\.d\w+/ `)
+	executeCommand(t, model, model.handleKey(ctrlKey('s')))
+
+	if len(store.put) != 1 || store.put[0].Pattern != `/hq\.d\w+/` {
+		t.Fatalf("saved mappings = %#v", store.put)
+	}
+	if model.overlayMappedPattern != `/hq\.d\w+/` {
+		t.Fatalf("mapped pattern attribution = %q", model.overlayMappedPattern)
+	}
 }
 
 func TestDialogRemovesMappingAndStaysOpen(t *testing.T) {

@@ -194,3 +194,128 @@ func TestUnknownFieldsTolerated(t *testing.T) {
 		t.Fatalf("forward-compatible read failed: %+v ok=%v", mapping, ok)
 	}
 }
+
+func TestMatchPatternRegexDialect(t *testing.T) {
+	cases := []struct {
+		name, pattern string
+		want          bool
+	}{
+		{"PROD.CUSTOMER.G0042V00", `/PROD\.CUSTOMER\.G\d{4}V\d{2}/`, true},
+		{"prod.customer.g0042v00", `/PROD\.CUSTOMER\.G\d{4}V\d{2}/`, true},
+		{"PROD.CUSTOMER.G42V00", `/PROD\.CUSTOMER\.G\d{4}V\d{2}/`, false},
+		// Anchored: a substring match is not enough.
+		{"XPROD.CUSTOMER.G0042V00X", `/PROD\.CUSTOMER\.G\d{4}V\d{2}/`, false},
+		// User-supplied anchors are tolerated.
+		{"PROD.CUSTOMER.DATA", `/^PROD\..*$/`, true},
+		{"A.B(MEMBER)", `/A\.B\(MEM.*\)/`, true},
+		// Alternation spans the whole name thanks to anchoring.
+		{"TEST.CUSTOMER.DATA", `/(PROD|TEST)\.CUSTOMER\.DATA/`, true},
+		{"QA.CUSTOMER.DATA", `/(PROD|TEST)\.CUSTOMER\.DATA/`, false},
+		// Invalid regexes match nothing instead of panicking.
+		{"PROD.CUSTOMER.DATA", `/PROD\.(/`, false},
+	}
+	for _, tc := range cases {
+		if got := MatchPattern(tc.name, tc.pattern); got != tc.want {
+			t.Errorf("MatchPattern(%q, %q) = %v, want %v", tc.name, tc.pattern, got, tc.want)
+		}
+	}
+}
+
+func TestValidateAndNormalizePattern(t *testing.T) {
+	if err := ValidatePattern(`/PROD\.G\d{4}/`); err != nil {
+		t.Fatalf("valid regex rejected: %v", err)
+	}
+	if err := ValidatePattern(`/PROD\.(/`); err == nil {
+		t.Fatal("invalid regex accepted")
+	}
+	if err := ValidatePattern("prod.*"); err != nil {
+		t.Fatalf("wildcard pattern rejected: %v", err)
+	}
+	if got := NormalizePattern("  prod.customer.* "); got != "PROD.CUSTOMER.*" {
+		t.Fatalf("wildcard not upper-cased: %q", got)
+	}
+	// Regex patterns keep their case so escape classes like \d survive.
+	if got := NormalizePattern(` /prod\.g\d{4}/ `); got != `/prod\.g\d{4}/` {
+		t.Fatalf("regex pattern mangled: %q", got)
+	}
+}
+
+func TestPutRejectsInvalidRegexAndLoadSkipsIt(t *testing.T) {
+	store, path := testStore(t)
+	if err := store.Put(Mapping{Pattern: `/PROD\.(/`, Local: "/x.cpy"}); err == nil {
+		t.Fatal("Put accepted an invalid regex pattern")
+	}
+
+	// A state file edited by hand to contain a broken regex loads without the
+	// broken entry instead of failing or panicking.
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	broken := `{"mappings":[` +
+		`{"pattern":"/BAD\\.(/","local":"/bad.cpy"},` +
+		`{"pattern":"/PROD\\..*/","local":"/ok.cpy"}]}`
+	if err := os.WriteFile(path, []byte(broken), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var notes []string
+	reloaded := &Store{UserConfigDir: store.UserConfigDir, Diagnostic: func(format string, args ...any) {
+		notes = append(notes, format)
+	}}
+	mappings := reloaded.Mappings()
+	if len(mappings) != 1 || mappings[0].Pattern != `/PROD\..*/` {
+		t.Fatalf("broken regex not skipped on load: %+v", mappings)
+	}
+	if len(notes) == 0 {
+		t.Fatal("skipping a broken regex produced no diagnostic")
+	}
+	if _, ok := reloaded.Match("PROD.CUSTOMER.DATA"); !ok {
+		t.Fatal("valid regex mapping lost after reload")
+	}
+}
+
+func TestMatchPrecedenceAcrossAllThreeTiers(t *testing.T) {
+	store, _ := testStore(t)
+	for _, pattern := range []string{`/PROD\.CUSTOMER\..*/`, "PROD.CUSTOMER.*", "PROD.CUSTOMER.DATA"} {
+		if err := store.Put(Mapping{Pattern: pattern, Local: "/" + pattern}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if mapping, ok := store.Match("PROD.CUSTOMER.DATA"); !ok || mapping.Pattern != "PROD.CUSTOMER.DATA" {
+		t.Fatalf("exact should beat wildcard and regex: %+v ok=%v", mapping, ok)
+	}
+	if mapping, ok := store.Match("PROD.CUSTOMER.OLD"); !ok || mapping.Pattern != "PROD.CUSTOMER.*" {
+		t.Fatalf("wildcard should beat regex: %+v ok=%v", mapping, ok)
+	}
+	if _, err := store.Remove("PROD.CUSTOMER.*"); err != nil {
+		t.Fatal(err)
+	}
+	if mapping, ok := store.Match("PROD.CUSTOMER.OLD"); !ok || mapping.Pattern != `/PROD\.CUSTOMER\..*/` {
+		t.Fatalf("regex should match once wildcard removed: %+v ok=%v", mapping, ok)
+	}
+
+	// Among regexes: longest literal prefix, then lexicographic.
+	regexes, _ := testStore(t)
+	for _, pattern := range []string{`/PROD\..*/`, `/PROD\.CUSTOMER.*/`, `/PROD\.CUSTOMEQ.*/`} {
+		if err := regexes.Put(Mapping{Pattern: pattern, Local: "/" + pattern}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if mapping, ok := regexes.Match("PROD.CUSTOMER.DATA"); !ok || mapping.Pattern != `/PROD\.CUSTOMER.*/` {
+		t.Fatalf("regex specificity tie-break wrong: %+v ok=%v", mapping, ok)
+	}
+}
+
+func TestRegexPersistenceRoundTrip(t *testing.T) {
+	store, _ := testStore(t)
+	if err := store.Put(Mapping{Pattern: `/PROD\.CUST\.G\d{4}V\d{2}/`, Local: "/cust.cpy", Format: "fixed"}); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := &Store{UserConfigDir: store.UserConfigDir}
+	mapping, ok := reloaded.Match("PROD.CUST.G0042V00")
+	if !ok {
+		t.Fatal("regex mapping not found after reload")
+	}
+	if mapping.Pattern != `/PROD\.CUST\.G\d{4}V\d{2}/` || mapping.Local != "/cust.cpy" {
+		t.Fatalf("regex mapping mangled after reload: %+v", mapping)
+	}
+}

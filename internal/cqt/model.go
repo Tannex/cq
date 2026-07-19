@@ -827,9 +827,13 @@ func (m *Model) saveDialogMapping(ws *workspace) tea.Cmd {
 		m.dialog.err = err.Error()
 		return nil
 	}
-	pattern := strings.ToUpper(strings.TrimSpace(m.dialog.pattern.Value()))
+	pattern := dsnmap.NormalizePattern(m.dialog.pattern.Value())
 	if pattern == "" {
 		m.dialog.err = "enter a DSN pattern before saving a mapping"
+		return nil
+	}
+	if err := dsnmap.ValidatePattern(pattern); err != nil {
+		m.dialog.err = err.Error()
 		return nil
 	}
 	if err := m.deps.Mappings.Put(dsnmap.Mapping{
@@ -852,7 +856,7 @@ func (m *Model) removeDialogMapping(ws *workspace) {
 		m.dialog.err = "mapping persistence is unavailable"
 		return
 	}
-	pattern := strings.ToUpper(strings.TrimSpace(m.dialog.pattern.Value()))
+	pattern := dsnmap.NormalizePattern(m.dialog.pattern.Value())
 	if pattern == "" {
 		m.dialog.err = "enter the mapping pattern to remove"
 		return

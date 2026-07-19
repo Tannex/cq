@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -18,7 +20,9 @@ const StateFileName = "dsn-copybooks.json"
 
 // Mapping binds a DSN pattern to a copybook source. Pattern wildcards follow
 // the existing cq dialect: a trailing or embedded * matches any run of
-// characters and % matches exactly one character.
+// characters and % matches exactly one character. A pattern wrapped in
+// slashes (/…/) is instead an anchored, case-insensitive Go regular
+// expression, e.g. /PROD\.CUSTOMER\.G\d{4}V\d{2}/.
 type Mapping struct {
 	Pattern  string    `json:"pattern"`
 	Local    string    `json:"local,omitempty"`
@@ -103,8 +107,12 @@ func (s *Store) load() {
 	}
 	mappings := make([]Mapping, 0, len(state.Mappings))
 	for _, mapping := range state.Mappings {
-		mapping.Pattern = strings.ToUpper(strings.TrimSpace(mapping.Pattern))
+		mapping.Pattern = NormalizePattern(mapping.Pattern)
 		if mapping.Pattern == "" {
+			continue
+		}
+		if err := ValidatePattern(mapping.Pattern); err != nil {
+			s.logf("dsnmap: skipping mapping %q: %v", mapping.Pattern, err)
 			continue
 		}
 		mappings = append(mappings, mapping)
@@ -140,8 +148,9 @@ func (s *Store) Mappings() []Mapping {
 }
 
 // Match returns the mapping for a data set name. An exact pattern wins over
-// wildcards; among wildcard matches the longest literal prefix wins, with
-// lexicographic pattern order as the deterministic tie-breaker.
+// wildcards, and wildcards win over regexes; within a tier the longest
+// literal prefix wins, with lexicographic pattern order as the deterministic
+// tie-breaker.
 func (s *Store) Match(name string) (Mapping, bool) {
 	s.load()
 	name = strings.ToUpper(strings.TrimSpace(name))
@@ -167,9 +176,12 @@ func (s *Store) Match(name string) (Mapping, bool) {
 // replaced mapping is preserved.
 func (s *Store) Put(mapping Mapping) error {
 	s.load()
-	mapping.Pattern = strings.ToUpper(strings.TrimSpace(mapping.Pattern))
+	mapping.Pattern = NormalizePattern(mapping.Pattern)
 	if mapping.Pattern == "" {
 		return errors.New("mapping pattern must not be empty")
+	}
+	if err := ValidatePattern(mapping.Pattern); err != nil {
+		return err
 	}
 	now := s.now()
 	mapping.Created = now
@@ -193,7 +205,7 @@ func (s *Store) Put(mapping Mapping) error {
 // Remove deletes the mapping stored under the exact pattern.
 func (s *Store) Remove(pattern string) (bool, error) {
 	s.load()
-	pattern = strings.ToUpper(strings.TrimSpace(pattern))
+	pattern = NormalizePattern(pattern)
 	for i, existing := range s.mappings {
 		if existing.Pattern == pattern {
 			s.mappings = append(s.mappings[:i], s.mappings[i+1:]...)
@@ -207,7 +219,7 @@ func (s *Store) Remove(pattern string) (bool, error) {
 // only affect bookkeeping, so callers may ignore the error.
 func (s *Store) Touch(pattern string) error {
 	s.load()
-	pattern = strings.ToUpper(strings.TrimSpace(pattern))
+	pattern = NormalizePattern(pattern)
 	for i, existing := range s.mappings {
 		if existing.Pattern == pattern {
 			s.mappings[i].LastUsed = s.now()
@@ -224,12 +236,13 @@ func (s *Store) logf(format string, args ...any) {
 }
 
 // morePrecise reports whether pattern a beats pattern b: exact patterns beat
-// wildcards, longer literal prefixes beat shorter ones, and lexicographic
-// order breaks the remaining ties deterministically.
+// wildcards, wildcards beat regexes, longer literal prefixes beat shorter
+// ones within a tier, and lexicographic order breaks the remaining ties
+// deterministically.
 func morePrecise(a, b string) bool {
-	exactA, exactB := !strings.ContainsAny(a, "*%"), !strings.ContainsAny(b, "*%")
-	if exactA != exactB {
-		return exactA
+	tierA, tierB := patternTier(a), patternTier(b)
+	if tierA != tierB {
+		return tierA < tierB
 	}
 	prefixA, prefixB := len(literalPrefix(a)), len(literalPrefix(b))
 	if prefixA != prefixB {
@@ -238,20 +251,118 @@ func morePrecise(a, b string) bool {
 	return a < b
 }
 
+// patternTier ranks pattern kinds for precedence: exact < wildcard < regex.
+func patternTier(pattern string) int {
+	switch {
+	case IsRegexPattern(pattern):
+		return 2
+	case strings.ContainsAny(pattern, "*%"):
+		return 1
+	default:
+		return 0
+	}
+}
+
 func literalPrefix(pattern string) string {
+	if IsRegexPattern(pattern) {
+		return regexLiteralPrefix(pattern[1 : len(pattern)-1])
+	}
 	if i := strings.IndexAny(pattern, "*%"); i >= 0 {
 		return pattern[:i]
 	}
 	return pattern
 }
 
+// regexLiteralPrefix returns the leading run of a regex body with no special
+// meaning, used only to rank competing regex patterns by specificity. Escapes
+// of punctuation (\., \() count as one literal character; escapes of letters
+// or digits (\d, \w) are character classes and end the literal prefix.
+func regexLiteralPrefix(body string) string {
+	var prefix []byte
+	for i := 0; i < len(body); i++ {
+		c := body[i]
+		switch {
+		case c == '\\':
+			if i+1 >= len(body) || isAlphanumeric(body[i+1]) {
+				return string(prefix)
+			}
+			i++
+			prefix = append(prefix, body[i])
+		case strings.IndexByte(`.[]{}()*+?|^$`, c) >= 0:
+			return string(prefix)
+		default:
+			prefix = append(prefix, c)
+		}
+	}
+	return string(prefix)
+}
+
+func isAlphanumeric(c byte) bool {
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+}
+
+// IsRegexPattern reports whether a pattern selects the regex dialect by being
+// wrapped in slashes, e.g. /PROD\.CUST\d+/.
+func IsRegexPattern(pattern string) bool {
+	return len(pattern) >= 2 && strings.HasPrefix(pattern, "/") && strings.HasSuffix(pattern, "/")
+}
+
+// NormalizePattern trims a pattern and upper-cases the wildcard/exact
+// dialects. Regex patterns keep their case because upper-casing would corrupt
+// escape classes like \d; matching is case-insensitive either way.
+func NormalizePattern(pattern string) string {
+	pattern = strings.TrimSpace(pattern)
+	if IsRegexPattern(pattern) {
+		return pattern
+	}
+	return strings.ToUpper(pattern)
+}
+
+// ValidatePattern reports whether a pattern is usable: regex patterns must
+// compile, everything else is always valid.
+func ValidatePattern(pattern string) error {
+	pattern = strings.TrimSpace(pattern)
+	if !IsRegexPattern(pattern) {
+		return nil
+	}
+	_, err := compiledRegex(pattern)
+	return err
+}
+
+var (
+	regexCacheMu sync.Mutex
+	regexCache   = map[string]*regexp.Regexp{}
+)
+
+// compiledRegex compiles a /…/ pattern as an anchored, case-insensitive Go
+// regexp, caching compilations for hot paths that re-match every rendered row.
+func compiledRegex(pattern string) (*regexp.Regexp, error) {
+	regexCacheMu.Lock()
+	defer regexCacheMu.Unlock()
+	if re, ok := regexCache[pattern]; ok {
+		return re, nil
+	}
+	re, err := regexp.Compile("(?i)^(?:" + pattern[1:len(pattern)-1] + ")$")
+	if err != nil {
+		return nil, fmt.Errorf("invalid regex pattern %s: %w", pattern, err)
+	}
+	regexCache[pattern] = re
+	return re, nil
+}
+
 // MatchPattern reports whether a name matches a DSN pattern using cq's shared
-// wildcard dialect: * matches any run of characters, % matches exactly one
-// character, and an empty pattern or bare * matches everything. Matching is
-// case-insensitive.
+// dialect: * matches any run of characters, % matches exactly one character,
+// an empty pattern or bare * matches everything, and a /…/ pattern is an
+// anchored, case-insensitive regular expression (invalid regexes match
+// nothing). Matching is case-insensitive.
 func MatchPattern(name, pattern string) bool {
+	pattern = strings.TrimSpace(pattern)
+	if IsRegexPattern(pattern) {
+		re, err := compiledRegex(pattern)
+		return err == nil && re.MatchString(strings.TrimSpace(name))
+	}
 	name = strings.ToUpper(strings.TrimSpace(name))
-	pattern = strings.ToUpper(strings.TrimSpace(pattern))
+	pattern = strings.ToUpper(pattern)
 	if pattern == "" || pattern == "*" {
 		return true
 	}
