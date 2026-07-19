@@ -519,15 +519,7 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case recordsResultMsg:
 		if ws := m.targetWorkspace(msg.Meta.Profile); ws != nil {
-			// acceptBrowse is checked before handleRecordsResult clears the
-			// pending request, so a running query search only continues (or
-			// stops on error) for the page it was actually waiting on.
-			accepted := ws.acceptBrowse(msg.Meta, m.budget, ws.screen)
-			command := m.handleRecordsResult(ws, msg)
-			if accepted {
-				command = tea.Batch(command, m.queryAfterFetch(ws, msg.Err))
-			}
-			return m, command
+			return m, m.handleRecordsResult(ws, msg)
 		}
 	case overlayResultMsg:
 		if ws := m.targetWorkspace(msg.Profile); ws != nil {

@@ -47,17 +47,10 @@ func recordsPage(from, to int, more bool) zosmf.RecordPage {
 	return page
 }
 
-func instantBulkThreshold(t *testing.T) {
-	t.Helper()
-	previous := queryBulkThreshold
-	queryBulkThreshold = 0
-	t.Cleanup(func() { queryBulkThreshold = previous })
-}
-
 func bulkQueryModel(t *testing.T, browser *fakeStreamBrowser) *Model {
 	t.Helper()
 	// The 90×13 geometry gives a 14-row budget: page one holds records 1-14
-	// with more rows, so the search must go past the cache.
+	// with more rows, so the query needs the download to see everything.
 	browser.readRecords = func(_ context.Context, request zosmf.ReadRecordsRequest) (zosmf.RecordPage, error) {
 		if request.Start == 0 {
 			return recordsPage(1, 14, true), nil
@@ -87,8 +80,7 @@ func bulkQueryModel(t *testing.T, browser *fakeStreamBrowser) *Model {
 	return model
 }
 
-func TestQuerySwitchesToBulkDownloadWhenPagingIsSlow(t *testing.T) {
-	instantBulkThreshold(t)
+func TestQueryDownloadsTheDataSetOnceAndReusesIt(t *testing.T) {
 	browser := &fakeStreamBrowser{stream: func(_ context.Context, dsn string) (io.ReadCloser, error) {
 		if dsn != "A.CUSTOMER.DATA" {
 			return nil, errors.New("unexpected target " + dsn)
@@ -98,25 +90,23 @@ func TestQuerySwitchesToBulkDownloadWhenPagingIsSlow(t *testing.T) {
 	model := bulkQueryModel(t, browser)
 	pagesBefore := len(browser.recordRequests)
 	openQuery(t, model)
-	runQueryExpr(t, model, ".NAME")
+	runQueryExpr(t, model, ".[].NAME")
 
 	popup := model.query
 	if !popup.done || popup.running {
-		t.Fatalf("search not finished: done=%v running=%v err=%q lastErr=%q", popup.done, popup.running, popup.err, popup.lastErr)
+		t.Fatalf("query not finished: done=%v running=%v err=%q lastErr=%q", popup.done, popup.running, popup.err, popup.lastErr)
 	}
 	if len(browser.streamRequests) != 1 {
 		t.Fatalf("stream requests = %v, want one bulk download", browser.streamRequests)
 	}
 	if len(browser.recordRequests) != pagesBefore {
-		t.Fatalf("paging continued despite the bulk download: %d new fetches", len(browser.recordRequests)-pagesBefore)
+		t.Fatalf("query paged despite the bulk download: %d new fetches", len(browser.recordRequests)-pagesBefore)
 	}
 	if popup.searched != 30 || popup.matches != 30 {
 		t.Fatalf("searched=%d matches=%d, want 30/30", popup.searched, popup.matches)
 	}
-	// Streaming covered records 1-14 from the cache; the file continues
-	// seamlessly at 15 with correct numbering.
-	if popup.lines[14] != `   15 │ "N15"` {
-		t.Fatalf("line 15 = %q", popup.lines[14])
+	if popup.lines[0] != `"N01"` || popup.lines[29] != `"N30"` {
+		t.Fatalf("lines = %#v", popup.lines)
 	}
 	path := model.ws().bulkRecordsPath
 	if path == "" {
@@ -126,11 +116,10 @@ func TestQuerySwitchesToBulkDownloadWhenPagingIsSlow(t *testing.T) {
 		t.Fatalf("bulk file missing: %v", err)
 	}
 
-	// A re-run evaluates entirely from the retained file: no new download, no
-	// new page fetches, full coverage from record one.
-	runQueryExpr(t, model, ".NAME")
-	if popup := model.query; popup.searched != 30 || popup.matches != 30 || popup.lines[0] != `    1 │ "N01"` {
-		t.Fatalf("re-run searched=%d matches=%d first=%q", popup.searched, popup.matches, popup.lines[0])
+	// A re-run evaluates entirely from the retained file: no new download.
+	runQueryExpr(t, model, ".[].NAME")
+	if popup := model.query; popup.searched != 30 || popup.matches != 30 {
+		t.Fatalf("re-run searched=%d matches=%d", popup.searched, popup.matches)
 	}
 	if len(browser.streamRequests) != 1 || len(browser.recordRequests) != pagesBefore {
 		t.Fatalf("re-run refetched: streams=%d pages=%d", len(browser.streamRequests), len(browser.recordRequests)-pagesBefore)
@@ -146,7 +135,7 @@ func TestQuerySwitchesToBulkDownloadWhenPagingIsSlow(t *testing.T) {
 		t.Fatalf("bulk file dropped with the popup: %v", err)
 	}
 	openQuery(t, model)
-	runQueryExpr(t, model, ".NAME")
+	runQueryExpr(t, model, ".[].NAME")
 	if popup := model.query; popup.searched != 30 || popup.matches != 30 {
 		t.Fatalf("reopened run searched=%d matches=%d", popup.searched, popup.matches)
 	}
@@ -165,45 +154,27 @@ func TestQuerySwitchesToBulkDownloadWhenPagingIsSlow(t *testing.T) {
 	}
 }
 
-func TestQueryBulkDownloadFailureFallsBackToPaging(t *testing.T) {
-	instantBulkThreshold(t)
+func TestQueryDownloadFailureStopsTheQuery(t *testing.T) {
 	browser := &fakeStreamBrowser{stream: func(context.Context, string) (io.ReadCloser, error) {
 		return nil, errors.New("record mode without a range is rejected")
 	}}
 	model := bulkQueryModel(t, browser)
+	pagesBefore := len(browser.recordRequests)
 	openQuery(t, model)
-	runQueryExpr(t, model, ".NAME")
+	runQueryExpr(t, model, ".[].NAME")
 
 	popup := model.query
-	if !popup.done || popup.searched != 30 || popup.matches != 30 {
-		t.Fatalf("paging fallback incomplete: done=%v searched=%d matches=%d", popup.done, popup.searched, popup.matches)
+	if popup.running || popup.done {
+		t.Fatalf("failed download left the query running: running=%v done=%v", popup.running, popup.done)
+	}
+	if !strings.Contains(popup.err, "download failed") {
+		t.Fatalf("err = %q", popup.err)
 	}
 	if model.ws().bulkRecordsPath != "" {
 		t.Fatalf("failed download left a path: %q", model.ws().bulkRecordsPath)
 	}
-	if !strings.Contains(popup.lastErr, "bulk download failed") {
-		t.Fatalf("lastErr = %q", popup.lastErr)
-	}
-}
-
-func TestQueryBulkArrayFallbackUsesTheDownloadedFile(t *testing.T) {
-	instantBulkThreshold(t)
-	browser := &fakeStreamBrowser{stream: func(context.Context, string) (io.ReadCloser, error) {
-		return io.NopCloser(bytes.NewReader(framedRecords(1, 30))), nil
-	}}
-	model := bulkQueryModel(t, browser)
-	openQuery(t, model)
-	// Errors on every single record, so the fallback must evaluate the whole
-	// data set as one array — sourced from the downloaded file.
-	runQueryExpr(t, model, "map(.NAME) | length")
-
-	popup := model.query
-	if !popup.done || !popup.arrayMode {
-		t.Fatalf("array fallback did not run: done=%v array=%v lastErr=%q", popup.done, popup.arrayMode, popup.lastErr)
-	}
-	// All 30 downloaded records form the array input.
-	if len(popup.lines) != 1 || popup.lines[0] != "30" {
-		t.Fatalf("lines = %#v", popup.lines)
+	if len(browser.recordRequests) != pagesBefore {
+		t.Fatal("failed download fell back to paging")
 	}
 }
 
