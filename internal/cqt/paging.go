@@ -7,8 +7,8 @@ import (
 
 const (
 	// The row budget is computed after the fixed title, search/breadcrumb,
-	// table header, status/detail, and help lines.
-	fixedChromeRows        = 5
+	// chrome rule, table header, status/detail, and help lines.
+	fixedChromeRows        = 6
 	fixedChromeRowsWithTab = fixedChromeRows + 1
 	MinTerminalWidth       = 52
 )

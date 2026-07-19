@@ -27,9 +27,9 @@ func recordViewModel(t *testing.T) *Model {
 	}
 	model := &Model{
 		width:   80,
-		height:  12,
-		visible: VisibleRows(80, 12, false),
-		budget:  RowBudget(VisibleRows(80, 12, false)),
+		height:  13,
+		visible: VisibleRows(80, 13, false),
+		budget:  RowBudget(VisibleRows(80, 13, false)),
 		keys:    DefaultKeyMap(),
 		help:    helpModelForTest(),
 		spinner: newStatusSpinner(),

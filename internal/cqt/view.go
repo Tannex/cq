@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/Tannex/cq/internal/decode"
+	"github.com/Tannex/cq/internal/layout"
 	"github.com/Tannex/cq/internal/record"
 )
 
@@ -86,8 +87,14 @@ func (m *Model) mainView() string {
 	} else if m.query != nil && (m.width < MinTerminalWidth || m.visible <= 0) {
 		data = m.queryPanel()
 	}
-	lines = append(lines, m.titleLine(), m.searchLine(), data, m.statusLine(), m.helpLine())
+	lines = append(lines, m.titleLine(), m.searchLine(), m.chromeRule(), data, m.statusLine(), m.helpLine())
 	return fitHeight(strings.Join(lines, "\n"), m.width, m.height)
+}
+
+// chromeRule is the bordered filler line separating the meta rows (tabs,
+// title, search) from the data area, echoing the │ gutter language.
+func (m *Model) chromeRule() string {
+	return consolePalette.muted.Render(strings.Repeat("─", max(0, m.width)))
 }
 
 // tabBar renders the profile tab strip. The active tab is always visible;
@@ -512,6 +519,66 @@ var denseTableStyles = func() table.Styles {
 	return styles
 }()
 
+// emptyCellMark stands in for blank data cells so they read as "empty" rather
+// than rendering as invisible nothing.
+const emptyCellMark = "·"
+
+// styledCell tints a data cell before it is handed to the table row. Cells on
+// the cursor row stay untinted so the Selected row style renders uniformly
+// readable; the table truncates with ANSI-aware truncation, so pre-styled
+// strings survive narrow terminals.
+func styledCell(text string, style lipgloss.Style, onCursor bool) string {
+	if text == "" {
+		if onCursor {
+			return emptyCellMark
+		}
+		return consolePalette.muted.Render(emptyCellMark)
+	}
+	if onCursor {
+		return text
+	}
+	return style.Render(text)
+}
+
+// rightAligned pads numeric cell text to the column width so digits line up;
+// alignment happens before styling so the padding itself stays untinted.
+func rightAligned(text string, width int) string {
+	if text == "" {
+		return "" // keep empty cells empty so styledCell shows the placeholder
+	}
+	if pad := width - ansi.StringWidth(text); pad > 0 {
+		return strings.Repeat(" ", pad) + text
+	}
+	return text
+}
+
+// organizationStyle tints DSORG values so PO and PS libraries are
+// distinguishable at a glance, echoing the status-chip color language.
+func organizationStyle(organization string) lipgloss.Style {
+	switch {
+	case strings.HasPrefix(organization, "PO"):
+		return consolePalette.cyan
+	case strings.HasPrefix(organization, "PS"):
+		return consolePalette.green
+	default:
+		return consolePalette.plain
+	}
+}
+
+// kindCellStyle maps a copybook column kind to its cell tint and whether the
+// column holds numbers that should be right-aligned. Numerics get one subtle
+// tone; edited fields (display-formatted numbers and dates) render dimmed.
+func kindCellStyle(kind layout.Kind) (style lipgloss.Style, alignRight bool) {
+	switch kind {
+	case layout.KindZoned, layout.KindPacked, layout.KindBinary, layout.KindFloat:
+		return consolePalette.cyan, true
+	case layout.KindEdited:
+		return consolePalette.muted, true
+	default:
+		return consolePalette.plain, false
+	}
+}
+
 func (m *Model) dataSetTableView() string {
 	showVolume := m.width >= 76
 	showReferenced := m.width >= 92
@@ -551,20 +618,26 @@ func (m *Model) dataSetTableView() string {
 	rows := make([]table.Row, end-start)
 	selected := m.datasetPage.selectedIndex()
 	for i, dataSet := range m.datasets[start:end] {
+		onCursor := start+i == selected
 		marker := " "
-		if start+i == selected {
+		if onCursor {
 			marker = ">"
 		}
 		row := table.Row{marker}
 		if showFavorites {
 			row = append(row, m.favoriteMarker(dataSet.Name))
 		}
-		row = append(row, dataSet.Name, dataSet.Organization, dataSet.RecordFormat, dataSet.RecordLength)
+		row = append(row,
+			styledCell(dataSet.Name, consolePalette.plain, onCursor),
+			styledCell(dataSet.Organization, organizationStyle(dataSet.Organization), onCursor),
+			styledCell(dataSet.RecordFormat, consolePalette.plain, onCursor),
+			styledCell(rightAligned(dataSet.RecordLength, 6), consolePalette.plain, onCursor),
+		)
 		if showVolume {
-			row = append(row, displayOr(dataSet.Volume, dataSet.Volumes))
+			row = append(row, styledCell(displayOr(dataSet.Volume, dataSet.Volumes), consolePalette.muted, onCursor))
 		}
 		if showReferenced {
-			row = append(row, dataSet.ReferenceDate)
+			row = append(row, styledCell(dataSet.ReferenceDate, consolePalette.muted, onCursor))
 		}
 		rows[i] = row
 	}
@@ -591,16 +664,24 @@ func (m *Model) memberTableView() string {
 	rows := make([]table.Row, end-start)
 	selected := m.memberPage.selectedIndex()
 	for i, member := range m.members[start:end] {
+		onCursor := start+i == selected
 		marker := " "
-		if start+i == selected {
+		if onCursor {
 			marker = ">"
 		}
-		row := table.Row{marker, member.Name, strconv.Itoa(member.Version), strconv.Itoa(member.Modification), strconv.Itoa(member.CurrentRecords)}
+		row := table.Row{
+			marker,
+			styledCell(member.Name, consolePalette.plain, onCursor),
+			styledCell(rightAligned(strconv.Itoa(member.Version), 4), consolePalette.plain, onCursor),
+			styledCell(rightAligned(strconv.Itoa(member.Modification), 4), consolePalette.plain, onCursor),
+			styledCell(rightAligned(strconv.Itoa(member.CurrentRecords), 8), consolePalette.plain, onCursor),
+		}
 		if showUser {
-			row = append(row, member.User)
+			row = append(row, styledCell(member.User, consolePalette.plain, onCursor))
 		}
 		if showDate {
-			row = append(row, member.ModifiedDate+" "+member.ModifiedTime)
+			modified := strings.TrimSpace(member.ModifiedDate + " " + member.ModifiedTime)
+			row = append(row, styledCell(modified, consolePalette.muted, onCursor))
 		}
 		rows[i] = row
 	}
@@ -720,17 +801,20 @@ func (m *Model) recordTableView() string {
 	selected := m.recordPage.selectedIndex()
 	rows := make([]table.Row, end-start)
 	for i, row := range m.records[start:end] {
+		onCursor := start+i == selected
 		marker := " "
-		if start+i == selected {
+		if onCursor {
 			marker = ">"
 		}
 		tableRow := table.Row{fmt.Sprintf("%s %0*d │", marker, numberWidth, row.Record.Number)}
 		if row.Err != nil || row.Decoded == nil {
 			raw := decode.DisplayBytes(row.Record.Data, m.charmap)
+			style := consolePalette.plain
 			if row.Err != nil {
 				raw = "! " + raw
+				style = consolePalette.danger
 			}
-			tableRow = append(tableRow, raw)
+			tableRow = append(tableRow, styledCell(raw, style, onCursor))
 			for len(tableRow) < len(columns) {
 				tableRow = append(tableRow, "")
 			}
@@ -743,10 +827,16 @@ func (m *Model) recordTableView() string {
 			if ok {
 				cell = compactValue(value)
 			}
+			style, alignRight := kindCellStyle(column.Kind)
 			if _, bad := diagnosticForColumn(row.Decoded.Diagnostics, column.Path); bad {
+				// The danger tint marks the offending cell; the `! ` prefix
+				// stays so the signal survives on the untinted cursor row.
 				cell = "! " + cell
+				style = consolePalette.danger
+			} else if alignRight {
+				cell = rightAligned(cell, column.Width)
 			}
-			tableRow = append(tableRow, cell)
+			tableRow = append(tableRow, styledCell(cell, style, onCursor))
 		}
 		rows[i] = tableRow
 	}

@@ -224,7 +224,7 @@ func TestModelEndToEndBrowsesSequentialAndPartitionedDataSets(t *testing.T) {
 		Protocol: u.Scheme, Host: host, Port: port,
 		User: "IBMUSER", Password: "secret", RejectUnauthorized: true,
 	}, nil)
-	model := readyModel(t, Options{Prefix: "A*", Codepage: "latin1"}, browser, "IBMUSER", "", 90, 10)
+	model := readyModel(t, Options{Prefix: "A*", Codepage: "latin1"}, browser, "IBMUSER", "", 90, 11)
 	if model.budget != 10 || len(model.datasets) != 2 {
 		t.Fatalf("initial bounded data set window: budget=%d rows=%d", model.budget, len(model.datasets))
 	}
@@ -270,7 +270,7 @@ func TestModelDefersRowsUntilSafeTerminalAndUsesExactBudget(t *testing.T) {
 		t.Fatalf("tiny state requests=%d budget=%d", len(browser.dataSetRequests), model.budget)
 	}
 
-	command := applyMessage(t, model, tea.WindowSizeMsg{Width: 90, Height: 15})
+	command := applyMessage(t, model, tea.WindowSizeMsg{Width: 90, Height: 16})
 	if command == nil {
 		t.Fatal("safe resize did not dispatch initial data set request")
 	}
@@ -289,7 +289,7 @@ func TestModelDefersRowsUntilSafeTerminalAndUsesExactBudget(t *testing.T) {
 
 func TestTokenOnlySessionFocusesPrefixWithoutAutomaticQuery(t *testing.T) {
 	browser := &fakeBrowser{}
-	model := readyModel(t, Options{}, browser, "", "cp037", 90, 15)
+	model := readyModel(t, Options{}, browser, "", "cp037", 90, 16)
 	if len(browser.dataSetRequests) != 0 {
 		t.Fatalf("token-only session queried without a prefix: %#v", browser.dataSetRequests)
 	}
@@ -445,7 +445,7 @@ func TestMemberCacheSurvivesChildRecordsAndClearsOnBackToDataSets(t *testing.T) 
 			return zosmf.RecordPage{Records: []zosmf.Record{{Number: 1, Data: []byte("X")}}}, nil
 		},
 	}
-	model := readyModel(t, Options{Prefix: "A*", Codepage: "latin1"}, browser, "A", "", 90, 15)
+	model := readyModel(t, Options{Prefix: "A*", Codepage: "latin1"}, browser, "A", "", 90, 16)
 	executeCommand(t, model, model.openSelection())
 	memberRequests := len(browser.memberRequests)
 	executeCommand(t, model, model.openSelection())
@@ -478,7 +478,7 @@ func TestMemberPrefixSearchAndNavigationToRecords(t *testing.T) {
 			return zosmf.RecordPage{Records: []zosmf.Record{{Number: 1, Data: []byte("X")}}, Start: request.Start}, nil
 		},
 	}
-	model := readyModel(t, Options{Prefix: "HQ.*", Codepage: "latin1"}, browser, "HQ", "", 90, 15)
+	model := readyModel(t, Options{Prefix: "HQ.*", Codepage: "latin1"}, browser, "HQ", "", 90, 16)
 	executeCommand(t, model, model.openSelection())
 
 	model.memberInput.Focus()
@@ -514,7 +514,7 @@ func TestLocateCachedRecordSelectsItWithoutFetching(t *testing.T) {
 			return zosmf.RecordPage{Records: []zosmf.Record{{Number: 10}, {Number: 20}, {Number: 30}}}, nil
 		},
 	}
-	model := readyModel(t, Options{Prefix: "HQ.*"}, browser, "HQ", "", 90, 15)
+	model := readyModel(t, Options{Prefix: "HQ.*"}, browser, "HQ", "", 90, 16)
 	executeCommand(t, model, model.openSelection())
 	before := len(browser.recordRequests)
 	model.jsonVertical = 4
@@ -548,7 +548,7 @@ func TestLocateUncachedRecordFetchesFromRequestedAnchor(t *testing.T) {
 			return zosmf.RecordPage{Records: []zosmf.Record{{Number: number}}}, nil
 		},
 	}
-	model := readyModel(t, Options{Prefix: "HQ.*"}, browser, "HQ", "", 90, 15)
+	model := readyModel(t, Options{Prefix: "HQ.*"}, browser, "HQ", "", 90, 16)
 	executeCommand(t, model, model.openSelection())
 	model.locateInput.Focus()
 	model.locateInput.SetValue("900")
@@ -594,7 +594,7 @@ func TestStaleBrowseResultIsRejectedAfterPrefixGenerationChanges(t *testing.T) {
 		name := strings.TrimSuffix(request.Prefix, "*") + ".RESULT"
 		return zosmf.DataSetPage{Items: []zosmf.DataSet{{Name: name}}}, nil
 	}
-	model := readyModel(t, Options{Prefix: "A*"}, browser, "A", "", 90, 15)
+	model := readyModel(t, Options{Prefix: "A*"}, browser, "A", "", 90, 16)
 	if model.datasets[0].Name != "A.RESULT" {
 		t.Fatalf("initial data = %#v", model.datasets)
 	}
@@ -630,12 +630,12 @@ func TestResizeUsesNewExactBudgetAndRejectsOldPendingResult(t *testing.T) {
 		}
 		return zosmf.DataSetPage{Items: items, MoreRows: true}, nil
 	}}
-	model := readyModel(t, Options{Prefix: "A.*"}, browser, "A", "", 90, 10)
+	model := readyModel(t, Options{Prefix: "A.*"}, browser, "A", "", 90, 11)
 	if model.budget != 10 || browser.dataSetRequests[0].MaxItems != 10 {
 		t.Fatalf("initial budget=%d requests=%#v", model.budget, browser.dataSetRequests)
 	}
 
-	growCommand := applyMessage(t, model, tea.WindowSizeMsg{Width: 90, Height: 15})
+	growCommand := applyMessage(t, model, tea.WindowSizeMsg{Width: 90, Height: 16})
 	if growCommand == nil || model.budget != 20 {
 		t.Fatalf("grow command=%v budget=%d", growCommand, model.budget)
 	}
@@ -651,7 +651,7 @@ func TestResizeUsesNewExactBudgetAndRejectsOldPendingResult(t *testing.T) {
 	if pending == nil || mBrowseBudget(model) != 20 {
 		t.Fatalf("bottom prefetch command=%v pending budget=%d", pending, mBrowseBudget(model))
 	}
-	shrinkCommand := applyMessage(t, model, tea.WindowSizeMsg{Width: 90, Height: 9})
+	shrinkCommand := applyMessage(t, model, tea.WindowSizeMsg{Width: 90, Height: 10})
 	if shrinkCommand == nil || model.budget != 8 || mBrowseBudget(model) != 8 {
 		t.Fatalf("shrink replacement=%v budget=%d pending=%d", shrinkCommand, model.budget, mBrowseBudget(model))
 	}
@@ -683,10 +683,10 @@ func TestResizeShrinkPreservesStatusAndRetainedRowsWithoutFetching(t *testing.T)
 		}
 		return zosmf.DataSetPage{Items: items, MoreRows: true}, nil
 	}}
-	model := readyModel(t, Options{Prefix: "A*"}, browser, "A", "", 90, 15)
+	model := readyModel(t, Options{Prefix: "A*"}, browser, "A", "", 90, 16)
 	before := len(browser.dataSetRequests)
 	beforeStatus := model.status
-	if command := applyMessage(t, model, tea.WindowSizeMsg{Width: 90, Height: 10}); command != nil {
+	if command := applyMessage(t, model, tea.WindowSizeMsg{Width: 90, Height: 11}); command != nil {
 		t.Fatal("shrink dispatched a request")
 	}
 	if len(browser.dataSetRequests) != before || len(model.datasets) != 20 {
@@ -724,7 +724,7 @@ func TestModelBoundsOverReturnedRowsFromInjectedBrowser(t *testing.T) {
 		browser := &fakeBrowser{listDataSets: func(_ context.Context, request zosmf.ListDataSetsRequest) (zosmf.DataSetPage, error) {
 			return zosmf.DataSetPage{Items: makeDataSets(request.MaxItems+3, "PS")}, nil
 		}}
-		model := readyModel(t, Options{Prefix: "A*"}, browser, "A", "", 90, 10)
+		model := readyModel(t, Options{Prefix: "A*"}, browser, "A", "", 90, 11)
 		if len(model.datasets) != model.budget || !model.datasetPage.more {
 			t.Fatalf("data set window=%d budget=%d more=%v", len(model.datasets), model.budget, model.datasetPage.more)
 		}
@@ -739,7 +739,7 @@ func TestModelBoundsOverReturnedRowsFromInjectedBrowser(t *testing.T) {
 				return zosmf.MemberPage{Items: makeMembers(request.MaxItems + 3)}, nil
 			},
 		}
-		model := readyModel(t, Options{Prefix: "A*"}, browser, "A", "", 90, 10)
+		model := readyModel(t, Options{Prefix: "A*"}, browser, "A", "", 90, 11)
 		executeCommand(t, model, model.openSelection())
 		if len(model.members) != model.budget || !model.memberPage.more {
 			t.Fatalf("member window=%d budget=%d more=%v", len(model.members), model.budget, model.memberPage.more)
@@ -755,7 +755,7 @@ func TestModelBoundsOverReturnedRowsFromInjectedBrowser(t *testing.T) {
 				return zosmf.RecordPage{Records: makeRecords(request.MaxItems + 3)}, nil
 			},
 		}
-		model := readyModel(t, Options{Prefix: "A*", Codepage: "latin1"}, browser, "A", "", 90, 10)
+		model := readyModel(t, Options{Prefix: "A*", Codepage: "latin1"}, browser, "A", "", 90, 11)
 		executeCommand(t, model, model.openSelection())
 		if len(model.records) != model.budget || !model.recordPage.more {
 			t.Fatalf("record window=%d budget=%d more=%v", len(model.records), model.budget, model.recordPage.more)
@@ -999,7 +999,7 @@ func TestOverlayCompletionPreservesPendingBrowseStatus(t *testing.T) {
 
 func TestPresentationTogglesReuseDecodedValuesWithoutRefetch(t *testing.T) {
 	browser := &fakeBrowser{}
-	model := readyModel(t, Options{Prefix: "A*", Codepage: "latin1"}, browser, "A", "", 90, 15)
+	model := readyModel(t, Options{Prefix: "A*", Codepage: "latin1"}, browser, "A", "", 90, 16)
 	model.screen = ScreenRecords
 	model.dataSet = zosmf.DataSet{Name: "A.DATA", Organization: "PS"}
 	decoded := record.DecodedRecord{Value: record.Object{{Name: "FIELD", Value: "VALUE"}}}
@@ -1052,7 +1052,7 @@ func TestPresentationTogglesReuseDecodedValuesWithoutRefetch(t *testing.T) {
 
 func TestFocusedModelInputSuppressesQuitAndFunctionKeys(t *testing.T) {
 	browser := &fakeBrowser{}
-	model := readyModel(t, Options{}, browser, "", "", 90, 15)
+	model := readyModel(t, Options{}, browser, "", "", 90, 16)
 	if !model.prefixInput.Focused() {
 		t.Fatal("test requires focused prefix input")
 	}
@@ -1113,7 +1113,7 @@ func TestSessionErrorAndEmptyResultStates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	applyMessage(t, model, tea.WindowSizeMsg{Width: 90, Height: 15})
+	applyMessage(t, model, tea.WindowSizeMsg{Width: 90, Height: 16})
 	executeCommand(t, model, model.Init())
 	if model.status.Level != statusError || model.status.Text != "profile missing" {
 		t.Fatalf("session error status = %#v", model.status)
@@ -1122,7 +1122,7 @@ func TestSessionErrorAndEmptyResultStates(t *testing.T) {
 		t.Fatalf("error view missing state label: %q", model.View().Content)
 	}
 
-	empty := readyModel(t, Options{Prefix: "A*"}, &fakeBrowser{}, "A", "", 90, 15)
+	empty := readyModel(t, Options{Prefix: "A*"}, &fakeBrowser{}, "A", "", 90, 16)
 	if empty.status.Level != statusEmpty || !strings.Contains(empty.View().Content, "EMPTY") {
 		t.Fatalf("empty state status=%#v view=%q", empty.status, empty.View().Content)
 	}

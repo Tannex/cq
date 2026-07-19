@@ -62,7 +62,7 @@ func queryModel(t *testing.T, pages map[int64]zosmf.RecordPage) (*Model, *fakeBr
 	if err != nil {
 		t.Fatal(err)
 	}
-	applyMessage(t, model, tea.WindowSizeMsg{Width: 90, Height: 12})
+	applyMessage(t, model, tea.WindowSizeMsg{Width: 90, Height: 13})
 	executeCommand(t, model, model.Init())
 	executeCommand(t, model, model.openSelection())
 	if model.screen != ScreenRecords {
