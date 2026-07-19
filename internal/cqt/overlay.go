@@ -65,6 +65,7 @@ type fieldColumn struct {
 	Path  string
 	Parts []string
 	Width int
+	Kind  layout.Kind
 }
 
 type overlay struct {
@@ -171,7 +172,13 @@ func overlayColumns(rec *layout.Record) []fieldColumn {
 				path = prefix + "." + child.Name
 			}
 			if child.Occurs > 0 || child.Kind != layout.KindGroup {
-				columns = append(columns, fieldColumn{Path: path, Parts: strings.Split(path, "."), Width: columnWidth(path, child)})
+				kind := child.Kind
+				if child.Occurs > 0 {
+					// Arrays render as compact JSON regardless of element
+					// kind, so style them like groups, not numbers.
+					kind = layout.KindGroup
+				}
+				columns = append(columns, fieldColumn{Path: path, Parts: strings.Split(path, "."), Width: columnWidth(path, child), Kind: kind})
 				continue
 			}
 			walk(child, path)

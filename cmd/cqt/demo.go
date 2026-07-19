@@ -316,10 +316,12 @@ func demoName(index int) string {
 	return name + strings.Repeat(" ", 20-len(name))
 }
 
+// demoCopybook mixes field kinds (zoned numeric, text, numeric-edited) so the
+// copybook table's type-aware styling is fully exercised in demo mode.
 const demoCopybook = `       01  CUSTOMER-REC.
-           05  CUST-ID      PIC X(6).
+           05  CUST-ID      PIC 9(6).
            05  CUST-NAME    PIC X(20).
-           05  CUST-AMOUNT  PIC X(9).
+           05  CUST-AMOUNT  PIC ZZZZZ9.99.
            05  CUST-DATE    PIC X(10).
            05  FILLER       PIC X(35).`
 
