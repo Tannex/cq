@@ -655,17 +655,15 @@ func (m *Model) queryFooter() string {
 	var state string
 	switch {
 	case popup.running && popup.arrayMode:
-		state = fmt.Sprintf("%s %s evaluating all %d records as one array…", popup.spin.View(), clock, total)
+		state = fmt.Sprintf("%s %s evaluating…", popup.spin.View(), clock)
 	case popup.running:
 		state = fmt.Sprintf("%s %s searched %d of %d%s records…", popup.spin.View(), clock, popup.searched, total, suffix)
 	case popup.cancelled:
 		state = fmt.Sprintf("%s cancelled after %d of %d%s records", clock, popup.searched, total, suffix)
 	case popup.capped:
 		state = fmt.Sprintf("%s stopped at the %d-result cap after %d of %d%s records", clock, queryResultCap, popup.searched, total, suffix)
-	case popup.done && popup.arrayMode:
-		state = fmt.Sprintf("%s array mode: %d records as one input", clock, popup.searched)
 	case popup.done:
-		state = fmt.Sprintf("%s searched %d records", clock, popup.searched)
+		state = clock
 	default:
 		return "enter runs the query over every record  esc closes"
 	}

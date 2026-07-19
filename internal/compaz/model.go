@@ -1795,11 +1795,10 @@ func (m *Model) handleRecordsResult(ws *workspace, msg recordsResultMsg) tea.Cmd
 	if ws.recordPage.selectedKey() != selected {
 		ws.jsonVertical = 0
 	}
+	ws.statusForCount(len(ws.records), "records")
 	if len(ws.records) == 0 {
-		ws.status = status{Level: statusEmpty, Text: "no records returned"}
 		return nil
 	}
-	ws.status = status{Level: statusReady, Text: fmt.Sprintf("%d records", len(ws.records))}
 	if ws != &m.workspace {
 		return nil
 	}
@@ -1982,7 +1981,8 @@ func (m *Model) startDecode(ws *workspace) tea.Cmd {
 	ws.decodeCancel = cancel
 	overlay := ws.overlay
 	identity := ws.recordIdentity()
-	ws.status = status{Level: statusLoading, Text: fmt.Sprintf("decoding %d records with %s", len(records), overlay.Record.Name)}
+	// effectiveStatus reports the transient "decoding records" state while
+	// decodePending is set; ws.status keeps its post-fetch value.
 	return m.loadingCommand(func() tea.Msg {
 		rows := make([]decodedRow, 0, len(records))
 		for _, raw := range records {
@@ -2031,24 +2031,6 @@ func (m *Model) handleDecodeResult(ws *workspace, msg decodeResultMsg) tea.Cmd {
 	var nextDecode tea.Cmd
 	if ws.browsePending == nil {
 		nextDecode = m.startDecode(ws)
-	}
-	if nextDecode == nil && ws.browsePending == nil {
-		diagnostics := 0
-		structural := 0
-		for _, row := range ws.records {
-			if row.Err != nil {
-				structural++
-				continue
-			}
-			if row.Decoded != nil {
-				diagnostics += len(row.Decoded.Diagnostics)
-			}
-		}
-		if diagnostics > 0 || structural > 0 {
-			ws.status = status{Level: statusWarn, Text: fmt.Sprintf("decoded %d records; %d field diagnostics, %d row errors", len(ws.records), diagnostics, structural)}
-		} else {
-			ws.status = status{Level: statusReady, Text: fmt.Sprintf("decoded %d records with %s", len(ws.records), ws.overlay.Record.Name)}
-		}
 	}
 	return tea.Batch(nextDecode, m.maybePrefetch(ws))
 }

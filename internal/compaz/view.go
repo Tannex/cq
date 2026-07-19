@@ -929,13 +929,7 @@ func (m *Model) statusLine() string {
 		indicator = consolePalette.amber.Render(m.spinner.View())
 	}
 	label := m.renderStatusLabel(level)
-	right := m.windowStatus()
-	if strip := m.profileStrip(); strip != "" {
-		if right != "" {
-			right += "  "
-		}
-		right += strip
-	}
+	right := m.profileStrip()
 
 	const minWidthForPosition = 40
 	if m.width < minWidthForPosition || right == "" {
@@ -1028,57 +1022,6 @@ func selectedDiagnostic(diagnostics []record.Diagnostic, overlay *overlay, horiz
 		}
 	}
 	return diagnostics[0]
-}
-
-func (m *Model) windowStatus() string {
-	switch m.screen {
-	case ScreenDataSets:
-		if len(m.datasets) == 0 {
-			return ""
-		}
-		count := len(m.datasets)
-		if m.datasetTotal != nil {
-			count = *m.datasetTotal
-		}
-		return positionStatus("row", m.datasetPage.selectedIndex()+1, count, m.datasetPage.more)
-	case ScreenMembers:
-		if len(m.members) == 0 {
-			return ""
-		}
-		count := len(m.members)
-		if m.memberTotal != nil {
-			count = *m.memberTotal
-		}
-		return positionStatus("row", m.memberPage.selectedIndex()+1, count, m.memberPage.more)
-	case ScreenRecords:
-		if len(m.records) == 0 {
-			return ""
-		}
-		selected := m.recordPage.selectedIndex()
-		var number int64
-		if selected >= 0 && selected < len(m.records) {
-			number = m.records[selected].Record.Number
-		}
-		return recordPositionStatus(number, len(m.records), m.recordPage.more, m.recordNumberWidth())
-	default:
-		return ""
-	}
-}
-
-func positionStatus(label string, selected, count int, more bool) string {
-	suffix := ""
-	if more {
-		suffix = "+"
-	}
-	return fmt.Sprintf("%s %d of %d%s", label, selected, count, suffix)
-}
-
-func recordPositionStatus(number int64, count int, more bool, numberWidth int) string {
-	suffix := ""
-	if more {
-		suffix = "+"
-	}
-	return fmt.Sprintf("record %0*d of %d%s", numberWidth, number, count, suffix)
 }
 
 func (m *Model) helpLine() string {
