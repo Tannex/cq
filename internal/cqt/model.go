@@ -628,7 +628,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		InputFocused: m.inputFocused(), DialogOpen: m.mappingView != nil,
 		DialogFormFocused: m.mappingView != nil && m.mappingView.form != nil,
 		ShowHelp:          m.showHelp, Tabs: m.hasTabs(),
-		FavoritesOpen:     m.favPopup != nil, FavoritesInput: m.favPopup != nil && m.favPopup.editing,
+		FavoritesOpen: m.favPopup != nil, FavoritesInput: m.favPopup != nil && m.favPopup.editing,
 	}
 	selectedAction := m.keys.actionFor(msg, ctx)
 	if m.favPopup != nil {

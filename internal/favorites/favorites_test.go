@@ -162,3 +162,34 @@ func TestSetNoteRequiresExistingFavorite(t *testing.T) {
 		t.Fatal("note stored for missing favorite")
 	}
 }
+
+func TestRegexFavoritesSurviveLoadAndMatch(t *testing.T) {
+	store, path := testStore(t)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	state := `{"favorites":[` +
+		`{"pattern":"/prod\\.g\\d{4}v\\d{2}/","note":"generations"},` +
+		`{"pattern":"/BAD\\.(/","note":"broken"}]}`
+	if err := os.WriteFile(path, []byte(state), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	favorites := store.Favorites()
+	if len(favorites) != 1 {
+		t.Fatalf("broken regex favorite not skipped: %+v", favorites)
+	}
+	// Case is preserved so escape classes like \d keep their meaning.
+	if favorites[0].Pattern != `/prod\.g\d{4}v\d{2}/` {
+		t.Fatalf("regex favorite mangled on load: %q", favorites[0].Pattern)
+	}
+	if !favorites[0].Wildcard() {
+		t.Fatal("regex favorite not treated as a pattern entry")
+	}
+	if !store.Matches("PROD.G0042V00") {
+		t.Fatal("regex favorite did not mark a matching data set")
+	}
+	if store.Matches("PROD.G42V00") {
+		t.Fatal("regex favorite matched a non-conforming data set")
+	}
+}

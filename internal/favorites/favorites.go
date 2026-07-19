@@ -20,7 +20,8 @@ const StateFileName = "favorites.json"
 
 // Favorite marks a data set name or DSN pattern. Pattern wildcards follow the
 // shared cq dialect implemented by dsnmap.MatchPattern: * matches any run of
-// characters and % matches exactly one character.
+// characters, % matches exactly one character, and a /…/ pattern is an
+// anchored, case-insensitive regular expression.
 type Favorite struct {
 	Pattern  string    `json:"pattern"`
 	Note     string    `json:"note,omitempty"`
@@ -30,7 +31,7 @@ type Favorite struct {
 
 // Wildcard reports whether the favorite is a pattern rather than an exact name.
 func (f Favorite) Wildcard() bool {
-	return strings.ContainsAny(f.Pattern, "*%")
+	return strings.ContainsAny(f.Pattern, "*%") || dsnmap.IsRegexPattern(f.Pattern)
 }
 
 type stateFile struct {
@@ -107,8 +108,12 @@ func (s *Store) load() {
 	}
 	favorites := make([]Favorite, 0, len(state.Favorites))
 	for _, favorite := range state.Favorites {
-		favorite.Pattern = strings.ToUpper(strings.TrimSpace(favorite.Pattern))
+		favorite.Pattern = dsnmap.NormalizePattern(favorite.Pattern)
 		if favorite.Pattern == "" {
+			continue
+		}
+		if err := dsnmap.ValidatePattern(favorite.Pattern); err != nil {
+			s.logf("favorites: skipping favorite %q: %v", favorite.Pattern, err)
 			continue
 		}
 		favorites = append(favorites, favorite)
@@ -203,7 +208,7 @@ func (s *Store) Toggle(name string) (bool, error) {
 // SetNote stores the note on the favorite kept under the exact pattern.
 func (s *Store) SetNote(pattern, note string) error {
 	s.load()
-	pattern = strings.ToUpper(strings.TrimSpace(pattern))
+	pattern = dsnmap.NormalizePattern(pattern)
 	for i, favorite := range s.favorites {
 		if favorite.Pattern == pattern {
 			s.favorites[i].Note = strings.TrimSpace(note)
@@ -216,7 +221,7 @@ func (s *Store) SetNote(pattern, note string) error {
 // Remove deletes the favorite stored under the exact pattern.
 func (s *Store) Remove(pattern string) (bool, error) {
 	s.load()
-	pattern = strings.ToUpper(strings.TrimSpace(pattern))
+	pattern = dsnmap.NormalizePattern(pattern)
 	for i, favorite := range s.favorites {
 		if favorite.Pattern == pattern {
 			s.favorites = append(s.favorites[:i], s.favorites[i+1:]...)
@@ -230,7 +235,7 @@ func (s *Store) Remove(pattern string) (bool, error) {
 // only affect bookkeeping, so callers may ignore the error.
 func (s *Store) Touch(pattern string) error {
 	s.load()
-	pattern = strings.ToUpper(strings.TrimSpace(pattern))
+	pattern = dsnmap.NormalizePattern(pattern)
 	for i, favorite := range s.favorites {
 		if favorite.Pattern == pattern {
 			s.favorites[i].LastUsed = s.now()
