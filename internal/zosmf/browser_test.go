@@ -91,7 +91,7 @@ func TestListDataSetsSendsExactBoundedRequestAndParsesPage(t *testing.T) {
 	client := New(session, nil)
 
 	page, err := client.ListDataSets(context.Background(), ListDataSetsRequest{
-		Prefix: " ibmuser. ", Start: "ibmuser.a", MaxItems: 2,
+		Prefix: " ibmuser.* ", Start: "ibmuser.a", MaxItems: 2,
 	})
 	if err != nil {
 		t.Fatalf("ListDataSets() error = %v", err)

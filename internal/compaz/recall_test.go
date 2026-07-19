@@ -89,7 +89,7 @@ func TestRecallKeyStartsRecallAndPollsUntilTheDataSetReturns(t *testing.T) {
 		t.Fatal("still-migrated check should keep polling")
 	}
 	checkRequest := browser.dataSetRequests[len(browser.dataSetRequests)-1]
-	if !checkRequest.ExactName || checkRequest.Prefix != "IBMUSER.MIGR" || checkRequest.MaxItems != 1 {
+	if checkRequest.Prefix != "IBMUSER.MIGR" || checkRequest.MaxItems != 1 {
 		t.Fatalf("watch request = %#v, want exact-name single-item lookup", checkRequest)
 	}
 

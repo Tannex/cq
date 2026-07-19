@@ -61,9 +61,10 @@ func TestRecallDataSetRejectsInvalidName(t *testing.T) {
 	}
 }
 
-func TestListDataSetsExactNameOmitsTheImplicitWildcard(t *testing.T) {
-	// An eight-character last qualifier would become an invalid nine-character
-	// dslevel qualifier if the implicit trailing wildcard were appended.
+func TestListDataSetsSendsWildcardFreePrefixAsExactName(t *testing.T) {
+	// No implicit wildcard may be appended: an eight-character last qualifier
+	// would become an invalid nine-character dslevel qualifier, and the recall
+	// watcher depends on exact-name lookups.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.URL.Query().Get("dslevel"); got != "IBMUSER.DATASET1" {
 			t.Errorf("dslevel = %q", got)
@@ -74,7 +75,7 @@ func TestListDataSetsExactNameOmitsTheImplicitWildcard(t *testing.T) {
 	client := New(sessionForServer(t, server), nil)
 
 	page, err := client.ListDataSets(context.Background(), ListDataSetsRequest{
-		Prefix: "IBMUSER.DATASET1", ExactName: true, MaxItems: 1,
+		Prefix: "IBMUSER.DATASET1", MaxItems: 1,
 	})
 	if err != nil {
 		t.Fatalf("ListDataSets() error = %v", err)

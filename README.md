@@ -173,8 +173,9 @@ A copybook is optional, but local and DSN copybook sources are mutually
 exclusive. Codepage precedence is an explicit `--codepage`, the selected Zowe
 profile's `encoding`, then `cp037`. The default data set search is
 `<Zowe user>.*`; a token-only profile with no user opens with the prefix input
-focused and sends no automatic query. A literal prefix without `*` or `%` is
-treated as a prefix search by appending `*`.
+focused and sends no automatic query. Wildcards are never added implicitly:
+spell out `*` or `%` for a prefix search, while a plain data set name looks up
+exactly that catalog entry.
 
 The data set screen keeps unsupported organizations visible. Enter opens PS,
 PS-L (large-format sequential), or SEQ data sets directly as records and opens

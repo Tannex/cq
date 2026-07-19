@@ -1474,10 +1474,7 @@ func (m *Model) handleRecallPoll(ws *workspace, msg recallPollMsg) tea.Cmd {
 	}
 	browser := ws.browser
 	ctx, cancel := context.WithTimeout(context.Background(), m.deps.Timeout)
-	// ExactName keeps the dslevel valid for names the implicit trailing
-	// wildcard would break: eight-character last qualifiers and 44-character
-	// names.
-	request := zosmf.ListDataSetsRequest{Prefix: msg.DSN, ExactName: true, MaxItems: 1}
+	request := zosmf.ListDataSetsRequest{Prefix: msg.DSN, MaxItems: 1}
 	return func() tea.Msg {
 		defer cancel()
 		page, err := browser.ListDataSets(ctx, request)
