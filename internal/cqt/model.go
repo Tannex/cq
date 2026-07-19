@@ -218,6 +218,7 @@ type Model struct {
 	mappingView *mappingView
 	favPopup    *favoritesPopup
 	editor      *editorState
+	query       *queryPopup
 
 	editGeneration uint64
 	editCancel     context.CancelFunc
@@ -480,7 +481,15 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case recordsResultMsg:
 		if ws := m.targetWorkspace(msg.Meta.Profile); ws != nil {
-			return m, m.handleRecordsResult(ws, msg)
+			// acceptBrowse is checked before handleRecordsResult clears the
+			// pending request, so a running query search only continues (or
+			// stops on error) for the page it was actually waiting on.
+			accepted := ws.acceptBrowse(msg.Meta, m.budget, ws.screen)
+			command := m.handleRecordsResult(ws, msg)
+			if accepted {
+				command = tea.Batch(command, m.queryAfterFetch(ws, msg.Err))
+			}
+			return m, command
 		}
 	case overlayResultMsg:
 		if ws := m.targetWorkspace(msg.Profile); ws != nil {
@@ -503,14 +512,21 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handleEditFetchResult(msg)
 	case editSaveResultMsg:
 		return m, m.handleEditSaveResult(msg)
+	case queryEvalMsg:
+		return m, m.handleQueryEval(msg)
 	case spinner.TickMsg:
-		level, _ := m.effectiveStatus()
-		if level != statusLoading {
-			return m, nil
+		var commands []tea.Cmd
+		if m.query != nil && m.query.running {
+			updated, command := m.query.spin.Update(msg)
+			m.query.spin = updated
+			commands = append(commands, command)
 		}
-		updated, command := m.spinner.Update(msg)
-		m.spinner = updated
-		return m, command
+		if level, _ := m.effectiveStatus(); level == statusLoading {
+			updated, command := m.spinner.Update(msg)
+			m.spinner = updated
+			commands = append(commands, command)
+		}
+		return m, tea.Batch(commands...)
 	case tea.KeyPressMsg:
 		return m, m.handleKey(msg)
 	case tea.MouseWheelMsg:
@@ -591,6 +607,15 @@ func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
 		m.editor.area = updated
 		return cmd
 	}
+	if m.query != nil {
+		switch msg.Button {
+		case tea.MouseWheelUp:
+			m.query.scrollBy(-mouseWheelStep)
+		case tea.MouseWheelDown:
+			m.query.scrollBy(mouseWheelStep)
+		}
+		return nil
+	}
 	if view := m.mappingView; view != nil {
 		if view.form == nil {
 			switch msg.Button {
@@ -650,6 +675,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		ShowHelp:          m.showHelp, Tabs: m.hasTabs(),
 		FavoritesOpen: m.favPopup != nil, FavoritesInput: m.favPopup != nil && m.favPopup.editing,
 		EditorOpen: m.editor != nil, EditorConfirm: m.editor != nil && m.editor.confirmDiscard,
+		QueryOpen: m.query != nil,
 	}
 	selectedAction := m.keys.actionFor(msg, ctx)
 	if m.editor != nil {
@@ -657,6 +683,9 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	}
 	if m.favPopup != nil {
 		return m.handleFavoritesKey(msg, selectedAction)
+	}
+	if m.query != nil {
+		return m.handleQueryKey(msg, selectedAction)
 	}
 	if view := m.mappingView; view != nil {
 		if view.form != nil {
@@ -787,6 +816,8 @@ func (m *Model) handleAction(selected action) tea.Cmd {
 		return nil
 	case actionEdit:
 		return m.beginEdit()
+	case actionQuery:
+		return m.openQueryPopup()
 	case actionCopybook:
 		m.openMappingView(ws)
 		return nil
@@ -1348,6 +1379,9 @@ func (m *Model) handleResize(width, height int) tea.Cmd {
 	if m.favPopup != nil {
 		m.favPopup.setWidth(width)
 	}
+	if m.query != nil {
+		m.query.setWidth(width)
+	}
 	m.resizeEditor()
 
 	ws.resizePagers(m.visible, m.budget)
@@ -1819,4 +1853,7 @@ func (m *Model) cancelAll() {
 		ws.cancelAll()
 	}
 	m.cancelEdit()
+	if m.query != nil {
+		m.query.stopSearch()
+	}
 }

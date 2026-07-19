@@ -52,6 +52,8 @@ func (m *Model) View() tea.View {
 		content = m.overlayHelp(content)
 	} else if m.favPopup != nil && m.width >= MinTerminalWidth && m.visible > 0 && m.mappingView == nil && !m.showHelp {
 		content = m.overlayFavorites(content)
+	} else if m.query != nil && m.width >= MinTerminalWidth && m.visible > 0 && m.mappingView == nil && !m.showHelp {
+		content = m.overlayQuery(content)
 	}
 	view := tea.NewView(content)
 	view.AltScreen = true
@@ -81,6 +83,8 @@ func (m *Model) mainView() string {
 		data = m.helpPanel()
 	} else if m.favPopup != nil && (m.width < MinTerminalWidth || m.visible <= 0) {
 		data = m.favoritesPanel()
+	} else if m.query != nil && (m.width < MinTerminalWidth || m.visible <= 0) {
+		data = m.queryPanel()
 	}
 	lines = append(lines, m.titleLine(), m.searchLine(), data, m.statusLine(), m.helpLine())
 	return fitHeight(strings.Join(lines, "\n"), m.width, m.height)
@@ -1006,6 +1010,7 @@ func (m *Model) helpLine() string {
 		ShowHelp: m.showHelp, Tabs: m.hasTabs(),
 		FavoritesOpen: m.favPopup != nil, FavoritesInput: m.favPopup != nil && m.favPopup.editing,
 		EditorOpen: m.editor != nil, EditorConfirm: m.editor != nil && m.editor.confirmDiscard,
+		QueryOpen: m.query != nil,
 	}
 	line := m.help.ShortHelpView(m.keys.shortHelp(ctx, m.overlay != nil))
 	return consolePalette.muted.Width(m.width).Render(truncateStyled(" "+line, m.width))

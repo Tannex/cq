@@ -56,6 +56,7 @@ const (
 	actionFavoriteNote
 	actionFavoriteRemove
 	actionEdit
+	actionQuery
 	actionSaveEdit
 	actionReloadEdit
 	actionDiscardEdit
@@ -83,6 +84,7 @@ type keyContext struct {
 	FavoritesInput    bool
 	EditorOpen        bool
 	EditorConfirm     bool
+	QueryOpen         bool
 }
 
 // KeyMap is the single source of truth for application, input, dialog, and
@@ -120,6 +122,7 @@ type KeyMap struct {
 	FavoriteNote    key.Binding
 	FavoriteRemove  key.Binding
 	Edit            key.Binding
+	Query           key.Binding
 	SaveEdit        key.Binding
 	ReloadEdit      key.Binding
 	DiscardEdit     key.Binding
@@ -161,6 +164,7 @@ func DefaultKeyMap() KeyMap {
 		FavoriteNote:    key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "edit note")),
 		FavoriteRemove:  key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "remove favorite")),
 		Edit:            key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit")),
+		Query:           key.NewBinding(key.WithKeys(":"), key.WithHelp(":", "jq query")),
 		SaveEdit:        key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "save")),
 		ReloadEdit:      key.NewBinding(key.WithKeys("ctrl+r"), key.WithHelp("ctrl+r", "reload from host")),
 		DiscardEdit:     key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "discard changes")),
@@ -263,6 +267,20 @@ func (k KeyMap) actionFor(msg tea.KeyPressMsg, ctx keyContext) action {
 			return actionNone
 		}
 	}
+	if ctx.QueryOpen {
+		switch {
+		case key.Matches(msg, k.Accept):
+			return actionAccept
+		case key.Matches(msg, k.Cancel):
+			return actionCancel
+		case key.Matches(msg, k.PageUp):
+			return actionPageUp
+		case key.Matches(msg, k.PageDown):
+			return actionPageDown
+		default:
+			return actionNone
+		}
+	}
 	if ctx.ShowHelp {
 		switch {
 		case key.Matches(msg, k.Up):
@@ -315,6 +333,8 @@ func (k KeyMap) actionFor(msg tea.KeyPressMsg, ctx keyContext) action {
 		return actionFavorites
 	case key.Matches(msg, k.Edit) && ctx.Screen != ScreenRecords:
 		return actionEdit
+	case key.Matches(msg, k.Query) && ctx.Screen == ScreenRecords:
+		return actionQuery
 	case key.Matches(msg, k.Copybook) && ctx.Screen == ScreenRecords:
 		return actionCopybook
 	case key.Matches(msg, k.ClearOverlay) && ctx.Screen == ScreenRecords:
@@ -352,6 +372,13 @@ func (k KeyMap) shortHelp(ctx keyContext, overlay bool) []key.Binding {
 	if ctx.ShowHelp {
 		return []key.Binding{k.Up, k.Down, k.PageUp, k.PageDown, k.Back, k.Help}
 	}
+	if ctx.QueryOpen {
+		run := k.Accept
+		run.SetHelp("enter", "run query")
+		cancel := k.Cancel
+		cancel.SetHelp("esc", "cancel/close")
+		return []key.Binding{run, k.PageUp, k.PageDown, cancel}
+	}
 	if ctx.DialogOpen {
 		if ctx.DialogFormFocused {
 			apply := k.Accept
@@ -379,7 +406,7 @@ func (k KeyMap) shortHelp(ctx keyContext, overlay bool) []key.Binding {
 	} else {
 		bindings = append(bindings, k.Locate, k.WideLeft, k.WideRight, k.Copybook)
 		if overlay {
-			bindings = append(bindings, k.ToggleOverlay, k.ToggleView, k.ClearOverlay)
+			bindings = append(bindings, k.Query, k.ToggleOverlay, k.ToggleView, k.ClearOverlay)
 		}
 	}
 	if ctx.Tabs {
@@ -394,7 +421,7 @@ type helpGroup struct {
 }
 
 func (k KeyMap) fullHelp(ctx keyContext, overlay bool) []helpGroup {
-	if ctx.DialogOpen || ctx.InputFocused {
+	if ctx.DialogOpen || ctx.InputFocused || ctx.QueryOpen {
 		return []helpGroup{{Name: "KEYS", Bindings: k.shortHelp(ctx, overlay)}}
 	}
 	pageUp, pageDown := k.PageUp, k.PageDown
@@ -409,7 +436,7 @@ func (k KeyMap) fullHelp(ctx keyContext, overlay bool) []helpGroup {
 	} else if ctx.Screen != ScreenRecords {
 		actions = append(actions, k.Search, k.Edit)
 	} else {
-		actions = append(actions, k.Locate, k.WideLeft, k.WideRight, k.Copybook)
+		actions = append(actions, k.Locate, k.WideLeft, k.WideRight, k.Copybook, k.Query)
 		if overlay {
 			actions = append(actions, k.ToggleOverlay, k.ToggleView, k.Diagnostics, k.ClearOverlay)
 		}
