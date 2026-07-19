@@ -57,10 +57,9 @@ var consolePalette = struct {
 	panel:     lipgloss.NewStyle().Background(ayu.panelBg).Foreground(ayu.fg),
 	header:    lipgloss.NewStyle().Background(ayu.headerBg).Foreground(ayu.fgBright).Bold(true),
 	activeTab: lipgloss.NewStyle().Background(ayu.headerBg).Foreground(ayu.accent).Bold(true),
-	// popup deliberately paints no background: the data area renders on the
-	// terminal default, and any explicit fill only matches when the terminal
-	// happens to use ayu's editor background. Popups are distinguished by
-	// border and title styling alone.
+	// popup paints no background of its own: View pins the terminal default
+	// to ayu.bg, so an unstyled fill matches the data area by construction.
+	// Popups are distinguished by border and title styling alone.
 	popup:       lipgloss.NewStyle().Foreground(ayu.fgBright),
 	popupBorder: lipgloss.NewStyle().Foreground(ayu.accent),
 	cyan:        lipgloss.NewStyle().Foreground(ayu.tag),
@@ -96,6 +95,12 @@ func (m *Model) View() tea.View {
 	view.AltScreen = true
 	view.MouseMode = tea.MouseModeCellMotion
 	view.WindowTitle = "Compa/z — z/OSMF data sets"
+	// Pin the terminal's default colors to the palette so every cell the app
+	// does not style explicitly still renders on ayu instead of whatever the
+	// host terminal uses; individually styling each region proved impossible
+	// to keep complete (see the garish-defaults tui-shot captures).
+	view.BackgroundColor = ayu.bg
+	view.ForegroundColor = ayu.fg
 	return view
 }
 

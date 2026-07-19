@@ -210,6 +210,17 @@ func TestStyledCellsSurviveNarrowTruncation(t *testing.T) {
 	}
 }
 
+// The app renders many cells without an explicit background; pinning the
+// terminal defaults is what keeps them on the palette instead of bleeding the
+// host terminal's colors through (the garish-defaults tui-shot check).
+func TestViewPinsTerminalDefaultColors(t *testing.T) {
+	model := recordViewModel(t)
+	view := model.View()
+	if view.BackgroundColor != ayu.bg || view.ForegroundColor != ayu.fg {
+		t.Fatalf("view colors = %v/%v, want pinned to ayu bg/fg", view.BackgroundColor, view.ForegroundColor)
+	}
+}
+
 func TestChromeRuleSeparatesMetaRowsFromData(t *testing.T) {
 	model := recordViewModel(t)
 	model.records = []recordRow{{Record: zosmf.Record{Number: 1, Data: []byte("VALUE")}}}
