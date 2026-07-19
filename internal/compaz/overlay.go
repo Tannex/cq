@@ -86,6 +86,7 @@ func buildOverlay(ctx context.Context, source CopybookSource, codepage string, b
 		return nil, err
 	}
 
+	resolver := dsncopy.New(searchPaths, browser, nil)
 	var raw []byte
 	if source.Local != "" {
 		if loadFile == nil {
@@ -96,7 +97,9 @@ func buildOverlay(ctx context.Context, source CopybookSource, codepage string, b
 		if browser == nil {
 			return nil, errors.New("z/OSMF session is not ready")
 		}
-		raw, err = browser.FetchText(ctx, source.DSN)
+		var text string
+		text, err = resolver.FetchPrimary(ctx, source.DSN)
+		raw = []byte(text)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("load copybook %s: %w", source.label(), err)
@@ -105,7 +108,6 @@ func buildOverlay(ctx context.Context, source CopybookSource, codepage string, b
 		return nil, err
 	}
 
-	resolver := dsncopy.New(searchPaths, browser, nil)
 	resolve := func(member string) (string, error) {
 		if browser == nil {
 			return "", fmt.Errorf("COPY %s requires a z/OSMF session and dsnSearchPath", member)

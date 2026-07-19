@@ -5,8 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
+
+	"github.com/Tannex/cq/internal/zosmf"
 )
 
 // maxConcurrentFetches bounds the remote data set reads a resolver has in flight.
@@ -46,6 +49,50 @@ func New(searchPaths []string, fetcher Fetcher, diagnostic Diagnostic) *Resolver
 		slots:       make(chan struct{}, maxConcurrentFetches),
 		cache:       make(map[string]copyResult),
 	}
+}
+
+// FetchPrimary retrieves the copybook at dsn. When z/OSMF reports it missing
+// (404) and the name carries a member — DSN(MEMBER) or a bare member name —
+// that member is re-resolved through the same search chain nested COPY
+// members use, so a copybook moves libraries without breaking saved mappings.
+func (r *Resolver) FetchPrimary(ctx context.Context, dsn string) (string, error) {
+	text, err := r.fetcher.FetchText(ctx, dsn)
+	if err == nil {
+		return string(text), nil
+	}
+	var httpErr *zosmf.HTTPError
+	if !errors.As(err, &httpErr) || httpErr.StatusCode != http.StatusNotFound {
+		return "", err
+	}
+	member, ok := fallbackMember(dsn)
+	if !ok || len(r.searchPaths) == 0 {
+		return "", err
+	}
+	r.logf("copybook %s: not found; trying dsnSearchPath for member %s", dsn, member)
+	text2, chainErr := r.ResolveContext(ctx, member)
+	if chainErr != nil {
+		return "", fmt.Errorf("%w; %v", err, chainErr)
+	}
+	return text2, nil
+}
+
+// fallbackMember extracts the member name a not-found copybook DSN can be
+// re-searched by: the MEMBER of a DSN(MEMBER) reference, or a bare
+// member-sized name with no qualifiers.
+func fallbackMember(dsn string) (string, bool) {
+	dsn = strings.ToUpper(strings.TrimSpace(dsn))
+	if open := strings.IndexByte(dsn, '('); open >= 0 && strings.HasSuffix(dsn, ")") {
+		member := dsn[open+1 : len(dsn)-1]
+		return member, validMemberName(member)
+	}
+	if !strings.Contains(dsn, ".") && validMemberName(dsn) {
+		return dsn, true
+	}
+	return "", false
+}
+
+func validMemberName(member string) bool {
+	return member != "" && len(member) <= 8 && !strings.ContainsAny(member, ".()*% ")
 }
 
 // Resolve implements the context-free callback used by copybook.ParseWithCopies.

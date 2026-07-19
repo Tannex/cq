@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/Tannex/cq/internal/record"
+	"github.com/Tannex/cq/internal/zosmf"
 )
 
 func TestBuildOverlayUsesLocalSourceAndExistingDSNCopyResolver(t *testing.T) {
@@ -68,6 +69,27 @@ func TestBuildOverlayUsesDSNSourceAndRecordSelection(t *testing.T) {
 	}
 	if built.Source.DSN != "HLQ.COPYLIB(RECS)" || built.Record.Name != "SECOND" || built.Record.MaxLength != 2 {
 		t.Fatalf("DSN overlay source=%#v record=%#v", built.Source, built.Record)
+	}
+}
+
+func TestBuildOverlayFallsBackToSearchChainWhenDSNIs404(t *testing.T) {
+	browser := &fakeBrowser{fetchText: func(_ context.Context, dsn string) ([]byte, error) {
+		if dsn == "SEARCH.COPYLIB(CUST)" {
+			return []byte("01 REC.\n 05 NAME PIC X(3).\n"), nil
+		}
+		return nil, &zosmf.HTTPError{StatusCode: 404, Resource: dsn}
+	}}
+	built, err := buildOverlay(context.Background(), CopybookSource{
+		DSN: "GONE.COPYLIB(CUST)", Format: "free",
+	}, "latin1", browser, nil, []string{"SEARCH.COPYLIB"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if built.Record.Name != "REC" {
+		t.Fatalf("record = %#v", built.Record)
+	}
+	if browser.fetchRequests[0] != "GONE.COPYLIB(CUST)" {
+		t.Fatalf("first fetch = %q, want the original DSN", browser.fetchRequests[0])
 	}
 }
 
