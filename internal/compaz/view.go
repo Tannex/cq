@@ -1034,7 +1034,7 @@ func (m *Model) helpLine() string {
 		Screen: m.screen, Mode: m.recordMode, InputFocused: m.inputFocused(),
 		DialogOpen: m.mappingView != nil, DialogFormFocused: m.mappingView != nil && m.mappingView.form != nil,
 		ShowHelp: m.showHelp, Tabs: m.hasTabs(),
-		FavoritesOpen: m.favPopup != nil, FavoritesInput: m.favPopup != nil && m.favPopup.editing,
+		FavoritesOpen: m.favPopup != nil, FavoritesInput: m.favPopup != nil && m.favPopup.inputActive(),
 		EditorOpen: m.editor != nil, EditorConfirm: m.editor != nil && m.editor.confirmDiscard,
 		QueryOpen: m.query != nil,
 	}

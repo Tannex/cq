@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/Tannex/cq/internal/dsnmap"
 	"github.com/Tannex/cq/internal/favorites"
 	"github.com/Tannex/cq/internal/zosmf"
 )
@@ -22,7 +23,12 @@ type favoritesPopup struct {
 	selected int
 	note     textinput.Model
 	editing  bool
-	err      string
+	// pattern is the add/edit input for favorite patterns; adding
+	// distinguishes a new favorite from renaming the selected one.
+	pattern        textinput.Model
+	patternEditing bool
+	adding         bool
+	err            string
 }
 
 func newFavoritesPopup(entries []favorites.Favorite, width int) *favoritesPopup {
@@ -33,13 +39,27 @@ func newFavoritesPopup(entries []favorites.Favorite, width int) *favoritesPopup 
 	styles := note.Styles()
 	styles.Cursor.Blink = false
 	note.SetStyles(styles)
-	popup := &favoritesPopup{entries: entries, note: note}
+	pattern := textinput.New()
+	pattern.Prompt = "PATTERN  "
+	pattern.Placeholder = `name, wildcard (*, %), or /regex/`
+	pattern.CharLimit = 120
+	patternStyles := pattern.Styles()
+	patternStyles.Cursor.Blink = false
+	pattern.SetStyles(patternStyles)
+	popup := &favoritesPopup{entries: entries, note: note, pattern: pattern}
 	popup.setWidth(width)
 	return popup
 }
 
 func (p *favoritesPopup) setWidth(width int) {
 	p.note.SetWidth(max(8, min(60, width-14)))
+	p.pattern.SetWidth(max(8, min(60, width-16)))
+}
+
+// inputActive reports whether a text input owns the keyboard, so printable
+// keys reach it instead of the list bindings.
+func (p *favoritesPopup) inputActive() bool {
+	return p.editing || p.patternEditing
 }
 
 func (p *favoritesPopup) selectedEntry() (favorites.Favorite, bool) {
@@ -106,12 +126,22 @@ func (m *Model) handleFavoritesKey(msg tea.KeyPressMsg, selected action) tea.Cmd
 		popup.move(1)
 		return nil
 	case actionAccept:
+		if popup.patternEditing {
+			m.saveFavoritePattern()
+			return nil
+		}
 		if popup.editing {
 			m.saveFavoriteNote()
 			return nil
 		}
 		return m.jumpToFavorite()
 	case actionCancel:
+		if popup.patternEditing {
+			popup.patternEditing = false
+			popup.pattern.Blur()
+			popup.err = ""
+			return nil
+		}
 		if popup.editing {
 			popup.editing = false
 			popup.note.Blur()
@@ -122,6 +152,10 @@ func (m *Model) handleFavoritesKey(msg tea.KeyPressMsg, selected action) tea.Cmd
 		return nil
 	case actionFavoriteNote:
 		return m.beginFavoriteNote()
+	case actionFavoriteAdd:
+		return m.beginFavoritePattern(true)
+	case actionFavoriteEdit:
+		return m.beginFavoritePattern(false)
 	case actionFavoriteRemove:
 		m.removePopupFavorite()
 		return nil
@@ -129,6 +163,11 @@ func (m *Model) handleFavoritesKey(msg tea.KeyPressMsg, selected action) tea.Cmd
 		m.cancelAll()
 		return tea.Quit
 	default:
+		if popup.patternEditing {
+			updated, cmd := popup.pattern.Update(msg)
+			popup.pattern = updated
+			return cmd
+		}
 		if popup.editing {
 			updated, cmd := popup.note.Update(msg)
 			popup.note = updated
@@ -136,6 +175,62 @@ func (m *Model) handleFavoritesKey(msg tea.KeyPressMsg, selected action) tea.Cmd
 		}
 		return nil
 	}
+}
+
+// beginFavoritePattern opens the pattern input: empty for a new favorite,
+// prefilled with the selected pattern for a rename.
+func (m *Model) beginFavoritePattern(adding bool) tea.Cmd {
+	popup := m.favPopup
+	value := ""
+	if !adding {
+		entry, ok := popup.selectedEntry()
+		if !ok {
+			return nil
+		}
+		value = entry.Pattern
+	}
+	popup.patternEditing = true
+	popup.adding = adding
+	popup.err = ""
+	popup.pattern.SetValue(value)
+	popup.pattern.CursorEnd()
+	return popup.pattern.Focus()
+}
+
+// saveFavoritePattern validates and persists the typed pattern, then
+// re-snapshots the store so ordering and normalization match what was saved.
+// Validation errors keep the input open with the error shown inline.
+func (m *Model) saveFavoritePattern() {
+	popup := m.favPopup
+	typed := strings.TrimSpace(popup.pattern.Value())
+	pattern := dsnmap.NormalizePattern(typed)
+	var err error
+	if popup.adding {
+		err = m.deps.Favorites.Add(typed)
+	} else {
+		entry, ok := popup.selectedEntry()
+		if !ok {
+			popup.patternEditing = false
+			popup.pattern.Blur()
+			return
+		}
+		err = m.deps.Favorites.Rename(entry.Pattern, typed)
+	}
+	if err != nil {
+		popup.err = err.Error()
+		return
+	}
+	popup.entries = m.deps.Favorites.Favorites()
+	for i, entry := range popup.entries {
+		if entry.Pattern == pattern {
+			popup.selected = i
+			break
+		}
+	}
+	popup.move(0)
+	popup.patternEditing = false
+	popup.pattern.Blur()
+	popup.err = ""
 }
 
 func (m *Model) beginFavoriteNote() tea.Cmd {
@@ -233,10 +328,19 @@ func (m *Model) favoriteMarker(name string) string {
 // every cell carries the popup background (see helpContent).
 func (m *Model) favoritesContent(accent, body, muted lipgloss.Style, width int) []string {
 	popup := m.favPopup
-	if len(popup.entries) == 0 {
-		return []string{muted.Render("no favorites yet — press f on a data set")}
-	}
 	var lines []string
+	if popup.patternEditing && popup.adding {
+		lines = append(lines, truncateStyled(popup.pattern.View(), width))
+	}
+	if len(popup.entries) == 0 {
+		if popup.err != "" {
+			lines = append(lines, "", body.Render(truncateStyled("ERROR  "+popup.err, width)))
+		}
+		if len(lines) > 0 {
+			return lines
+		}
+		return []string{muted.Render("no favorites yet — press f on a data set or a to add a pattern")}
+	}
 	for i, entry := range popup.entries {
 		marker := " "
 		if i == popup.selected {
@@ -251,6 +355,10 @@ func (m *Model) favoritesContent(accent, body, muted lipgloss.Style, width int) 
 			lines = append(lines, accent.Render(truncateStyled(line, width)))
 		} else {
 			lines = append(lines, body.Render(truncateStyled(line, width)))
+		}
+		if i == popup.selected && popup.patternEditing && !popup.adding {
+			lines = append(lines, truncateStyled("      "+popup.pattern.View(), width))
+			continue
 		}
 		if i == popup.selected && popup.editing {
 			lines = append(lines, truncateStyled("      "+popup.note.View(), width))
@@ -269,7 +377,7 @@ func (m *Model) favoritesContent(accent, body, muted lipgloss.Style, width int) 
 // favoritesPanel is the tiny-terminal fallback: a full-area panel in the data
 // region, mirroring helpPanel.
 func (m *Model) favoritesPanel() string {
-	lines := []string{consolePalette.panel.Bold(true).Width(m.width).Render("  FAVORITES  enter jump  n note  x remove  esc close")}
+	lines := []string{consolePalette.panel.Bold(true).Width(m.width).Render("  FAVORITES  enter jump  a add  e edit  n note  x remove  esc close")}
 	lines = append(lines, m.favoritesContent(consolePalette.selected, consolePalette.plain, consolePalette.muted, m.width)...)
 	capacity := m.visible + 1
 	offset := max(0, len(lines)-capacity)
@@ -315,7 +423,7 @@ func (m *Model) overlayFavorites(background string) string {
 	for len(innerLines) < contentHeight+1 {
 		innerLines = append(innerLines, fill.Render(""))
 	}
-	footer := muted.Render("enter jump  n note  x remove  esc close")
+	footer := muted.Render("enter jump  a add  e edit  n note  x remove  esc close")
 	innerLines = append(innerLines, fill.Render(strings.Repeat(" ", max(0, (innerWidth-lipgloss.Width(footer))/2))+footer))
 
 	popupStyle := consolePalette.popup.

@@ -58,6 +58,8 @@ const (
 	actionQueryCopy
 	actionFavoriteNote
 	actionFavoriteRemove
+	actionFavoriteAdd
+	actionFavoriteEdit
 	actionEdit
 	actionQuery
 	actionSaveEdit
@@ -125,6 +127,8 @@ type KeyMap struct {
 	Recall          key.Binding
 	FavoriteNote    key.Binding
 	FavoriteRemove  key.Binding
+	FavoriteAdd     key.Binding
+	FavoriteEdit    key.Binding
 	Edit            key.Binding
 	Query           key.Binding
 	QueryComplete   key.Binding
@@ -170,6 +174,8 @@ func DefaultKeyMap() KeyMap {
 		Recall:         key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "recall migrated")),
 		FavoriteNote:   key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "edit note")),
 		FavoriteRemove: key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "remove favorite")),
+		FavoriteAdd:    key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "add pattern")),
+		FavoriteEdit:   key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit pattern")),
 		Edit:           key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit")),
 		Query:          key.NewBinding(key.WithKeys(":"), key.WithHelp(":", "jq query")),
 		// Legacy terminals report ctrl+space as the NUL byte, which decodes
@@ -274,6 +280,10 @@ func (k KeyMap) actionFor(msg tea.KeyPressMsg, ctx keyContext) action {
 			return actionFavoriteNote
 		case key.Matches(msg, k.FavoriteRemove):
 			return actionFavoriteRemove
+		case key.Matches(msg, k.FavoriteAdd):
+			return actionFavoriteAdd
+		case key.Matches(msg, k.FavoriteEdit):
+			return actionFavoriteEdit
 		case key.Matches(msg, k.Quit):
 			return actionQuit
 		default:
@@ -420,7 +430,7 @@ func (k KeyMap) shortHelp(ctx keyContext, overlay bool) []key.Binding {
 		if ctx.FavoritesInput {
 			return []key.Binding{k.Accept, k.Cancel}
 		}
-		return []key.Binding{k.Up, k.Down, k.Accept, k.FavoriteNote, k.FavoriteRemove, k.Cancel}
+		return []key.Binding{k.Up, k.Down, k.Accept, k.FavoriteAdd, k.FavoriteEdit, k.FavoriteNote, k.FavoriteRemove, k.Cancel}
 	}
 	if ctx.InputFocused {
 		return []key.Binding{k.Accept, k.Cancel}

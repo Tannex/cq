@@ -193,3 +193,62 @@ func TestRegexFavoritesSurviveLoadAndMatch(t *testing.T) {
 		t.Fatal("regex favorite matched a non-conforming data set")
 	}
 }
+
+func TestAddStoresPatternsAndRejectsDuplicatesAndBadRegex(t *testing.T) {
+	store, _ := testStore(t)
+	if err := store.Add(" prod.cust.* "); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Add(`/^x\d+/`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Add("PROD.CUST.*"); err == nil {
+		t.Fatal("duplicate pattern accepted")
+	}
+	if err := store.Add("/bad(/"); err == nil {
+		t.Fatal("invalid regex accepted")
+	}
+	if err := store.Add("  "); err == nil {
+		t.Fatal("empty pattern accepted")
+	}
+	favorites := store.Favorites()
+	if len(favorites) != 2 {
+		t.Fatalf("favorites = %#v", favorites)
+	}
+	// Wildcards normalize to upper case; regexes keep their case.
+	reloaded := &Store{UserConfigDir: store.UserConfigDir}
+	patterns := []string{reloaded.Favorites()[0].Pattern, reloaded.Favorites()[1].Pattern}
+	if patterns[0] != `/^x\d+/` && patterns[1] != `/^x\d+/` {
+		t.Fatalf("regex case not preserved: %#v", patterns)
+	}
+	if patterns[0] != "PROD.CUST.*" && patterns[1] != "PROD.CUST.*" {
+		t.Fatalf("wildcard not upper-cased: %#v", patterns)
+	}
+}
+
+func TestRenamePreservesNoteAndTimestamps(t *testing.T) {
+	store, _ := testStore(t)
+	if err := store.Add("A.ONE"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetNote("A.ONE", "keep"); err != nil {
+		t.Fatal(err)
+	}
+	created := store.Favorites()[0].Created
+	if err := store.Rename("A.ONE", "a.one.*"); err != nil {
+		t.Fatal(err)
+	}
+	favorite := store.Favorites()[0]
+	if favorite.Pattern != "A.ONE.*" || favorite.Note != "keep" || !favorite.Created.Equal(created) {
+		t.Fatalf("renamed favorite = %#v", favorite)
+	}
+	if err := store.Rename("MISSING", "X"); err == nil {
+		t.Fatal("rename of a missing favorite accepted")
+	}
+	if err := store.Add("B.TWO"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Rename("B.TWO", "A.ONE.*"); err == nil {
+		t.Fatal("rename onto an existing pattern accepted")
+	}
+}

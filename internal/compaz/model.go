@@ -108,6 +108,8 @@ type FavoriteStore interface {
 	Favorites() []favorites.Favorite
 	Matches(name string) bool
 	Toggle(name string) (bool, error)
+	Add(pattern string) error
+	Rename(oldPattern, newPattern string) error
 	SetNote(pattern, note string) error
 	Remove(pattern string) (bool, error)
 	Touch(pattern string) error
@@ -734,7 +736,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		InputFocused: m.inputFocused(), DialogOpen: m.mappingView != nil,
 		DialogFormFocused: m.mappingView != nil && m.mappingView.form != nil,
 		ShowHelp:          m.showHelp, Tabs: m.hasTabs(),
-		FavoritesOpen: m.favPopup != nil, FavoritesInput: m.favPopup != nil && m.favPopup.editing,
+		FavoritesOpen: m.favPopup != nil, FavoritesInput: m.favPopup != nil && m.favPopup.inputActive(),
 		EditorOpen: m.editor != nil, EditorConfirm: m.editor != nil && m.editor.confirmDiscard,
 		QueryOpen: m.query != nil,
 	}
