@@ -444,21 +444,24 @@ func (m *Model) runQuery() tea.Cmd {
 		popup.err = queryNeedsOverlay
 		return nil
 	}
-	expr := strings.TrimSpace(popup.input.Value())
-	if expr == "" {
+	typed := strings.TrimSpace(popup.input.Value())
+	if typed == "" {
 		popup.err = "enter a jq expression"
 		return nil
 	}
-	expr, err := normalizeQueryExpression(expr)
+	expr, err := normalizeQueryExpression(typed)
 	if err != nil {
 		popup.err = err.Error()
+		m.recordQuery(typed, false)
 		return nil
 	}
 	compiled, err := query.Compile(expr)
 	if err != nil {
 		popup.err = err.Error()
+		m.recordQuery(typed, false)
 		return nil
 	}
+	m.recordQuery(typed, true)
 	popup.stopSearch()
 	popup.comp = nil
 	popup.generation++
@@ -473,6 +476,14 @@ func (m *Model) runQuery() tea.Cmd {
 	popup.elapsed = 0
 	popup.ctx, popup.cancel = context.WithCancel(context.Background())
 	return tea.Batch(popup.spin.Tick, m.queryStep(ws))
+}
+
+// recordQuery tracks an executed expression — as typed, before quote
+// normalization — with its compile outcome for the local usage log.
+func (m *Model) recordQuery(expr string, ok bool) {
+	if m.deps.Events != nil {
+		m.deps.Events.RecordQuery(expr, ok)
+	}
 }
 
 // queryStep advances the search: evaluate the next cached chunk in a command,
