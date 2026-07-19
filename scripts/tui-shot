@@ -14,6 +14,13 @@
 # Examples:
 #   scripts/tui-shot -o artifacts/main.png -- ./compaz --demo
 #   scripts/tui-shot -t artifacts/help.txt -k "?" -- ./compaz --demo
+#
+# PNG captures run in a terminal with DELIBERATELY garish default colors
+# (bright pink background, green foreground). The application must look right
+# on any terminal, so everything it does not style explicitly shows up pink or
+# green in screenshots — that is the point. When a capture looks wrong, fix
+# the styling in the application, never by changing these colors to something
+# that hides the problem.
 
 set -euo pipefail
 
@@ -82,10 +89,12 @@ if [ "$shot" != "-" ]; then
   shot="$(realpath "$shot")"
   xvfb-run -a -s '-screen 0 2400x1200x24' \
     sh -c '
+      # Garish defaults on purpose: anything the app leaves unstyled must be
+      # visible in review. Fix findings in the app, not by muting these.
       LC_ALL=C.UTF-8 LANG=C.UTF-8 xterm \
         -geometry "${3}x${4}+0+0" -tn xterm-direct -u8 \
         -fa "Iosevka Nerd Font" -fs 12 \
-        -bg "#0B0E14" -fg "#BFBDB6" -b 0 -bw 0 \
+        -bg "#FF2EB5" -fg "#00C853" -b 0 -bw 0 \
         -e tmux -S "$5" attach-session -t "$1" &
       terminal_pid=$!
       sleep 1.2
