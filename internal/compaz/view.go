@@ -26,17 +26,13 @@ const hScrollStep = 8
 // Ayu values (selection, comment, status-chip fills) are pre-blended onto the
 // editor background because terminal cells cannot layer translucent color.
 var ayu = struct {
-	bg, panelBg, popupBg, headerBg, selectionBg color.Color
-	fg, fgBright, uiFg                          color.Color
-	accent, tag, str, fn, markup, comment       color.Color
-	successBg, warnBg, dangerBg, infoBg         color.Color
+	bg, panelBg, headerBg, selectionBg    color.Color
+	fg, fgBright, uiFg                    color.Color
+	accent, tag, str, fn, markup, comment color.Color
+	successBg, warnBg, dangerBg, infoBg   color.Color
 }{
-	bg:      lipgloss.Color("#0B0E14"), // editor.bg
-	panelBg: lipgloss.Color("#141821"), // ui.panel.bg
-	// popupBg matches the main background: an elevated popup fill bled
-	// outside the rounded border glyphs, so popups are distinguished by
-	// border and title styling only.
-	popupBg:     lipgloss.Color("#0B0E14"),
+	bg:          lipgloss.Color("#0B0E14"), // editor.bg
+	panelBg:     lipgloss.Color("#141821"), // ui.panel.bg
 	headerBg:    lipgloss.Color("#15283E"), // selection tint over bg
 	selectionBg: lipgloss.Color("#18324F"), // editor.selection.active over bg
 	fg:          lipgloss.Color("#BFBDB6"), // editor.fg
@@ -57,11 +53,15 @@ var ayu = struct {
 var consolePalette = struct {
 	navy, panel, header, activeTab, popup, popupBorder, cyan, green, amber, danger, muted, bright, selected, plain lipgloss.Style
 }{
-	navy:        lipgloss.NewStyle().Background(ayu.bg).Foreground(ayu.fgBright),
-	panel:       lipgloss.NewStyle().Background(ayu.panelBg).Foreground(ayu.fg),
-	header:      lipgloss.NewStyle().Background(ayu.headerBg).Foreground(ayu.fgBright).Bold(true),
-	activeTab:   lipgloss.NewStyle().Background(ayu.headerBg).Foreground(ayu.accent).Bold(true),
-	popup:       lipgloss.NewStyle().Background(ayu.popupBg).Foreground(ayu.fgBright),
+	navy:      lipgloss.NewStyle().Background(ayu.bg).Foreground(ayu.fgBright),
+	panel:     lipgloss.NewStyle().Background(ayu.panelBg).Foreground(ayu.fg),
+	header:    lipgloss.NewStyle().Background(ayu.headerBg).Foreground(ayu.fgBright).Bold(true),
+	activeTab: lipgloss.NewStyle().Background(ayu.headerBg).Foreground(ayu.accent).Bold(true),
+	// popup deliberately paints no background: the data area renders on the
+	// terminal default, and any explicit fill only matches when the terminal
+	// happens to use ayu's editor background. Popups are distinguished by
+	// border and title styling alone.
+	popup:       lipgloss.NewStyle().Foreground(ayu.fgBright),
 	popupBorder: lipgloss.NewStyle().Foreground(ayu.accent),
 	cyan:        lipgloss.NewStyle().Foreground(ayu.tag),
 	green:       lipgloss.NewStyle().Foreground(ayu.str),
