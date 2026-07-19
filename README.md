@@ -149,6 +149,9 @@ yet.
 > binary is now `compaz`; flags, keys, and configuration are unchanged. Replace
 > `cqt` with `compaz` in scripts and PATH installs.
 
+The interface uses the [Ayu Dark](https://github.com/ayu-theme/ayu-colors)
+color scheme (MIT license).
+
 `compaz` uses the same Zowe team configuration, operating-system credential
 entry, TLS settings, profile encoding, and `cq/config.json` file as `cq`. It
 does not have a separate credential or application configuration. Run
