@@ -5,13 +5,39 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/Tannex/cq/internal/decode"
 	"github.com/Tannex/cq/internal/zosmf"
 )
+
+// textCharmap converts z/OSMF text-mode payloads, which arrive and are written
+// back as ISO 8859-1 regardless of the data set's EBCDIC codepage (the host
+// converts on the wire). The session charmap only describes raw record bytes.
+var textCharmap = func() *decode.Charmap {
+	cm, err := decode.Codepage("latin1")
+	if err != nil {
+		panic(err)
+	}
+	return cm
+}()
+
+// editorMaxLines caps the buffer at five-digit line numbers. It also sizes the
+// textarea's wrap cache and fixes the line-number gutter at five columns.
+const editorMaxLines = 99999
+
+// editorFlushInterval batches key-repeat navigation. The textarea re-renders
+// its entire buffer on every update, which is slower than the terminal's key
+// repeat rate on large members; queued repeats would keep scrolling after the
+// key is released. Navigation keys are therefore accumulated and applied in
+// one batch per interval, costing a single re-render.
+const editorFlushInterval = 12 * time.Millisecond
+
+type editorNavFlushMsg struct{}
 
 // editTarget identifies the data set or member being edited together with the
 // geometry needed to validate a write-back.
@@ -57,6 +83,10 @@ type editorState struct {
 	pendingSave    string
 	saving         bool
 	confirmDiscard bool
+	// pendingNav holds coalesced navigation keys awaiting the next flush
+	// tick; navQueued is true while a flush message is in flight.
+	pendingNav []tea.KeyPressMsg
+	navQueued  bool
 }
 
 func (e *editorState) dirty() bool {
@@ -179,7 +209,7 @@ func (m *Model) startEditFetch(ws *workspace, editor zosmf.TextEditor, target ed
 		content, err := editor.ReadText(ctx, target.label())
 		return editFetchResultMsg{
 			Profile: profile, Generation: generation, Target: target,
-			Text: string(content.Text), ETag: content.ETag, Err: err,
+			Text: decode.Text(content.Text, textCharmap), ETag: content.ETag, Err: err,
 		}
 	})
 }
@@ -198,7 +228,7 @@ func (m *Model) handleEditFetchResult(msg editFetchResultMsg) tea.Cmd {
 	area.Prompt = ""
 	area.ShowLineNumbers = true
 	area.CharLimit = 0
-	area.MaxHeight = 0
+	area.MaxHeight = editorMaxLines
 	area.SetWidth(max(1, m.width))
 	area.SetHeight(m.editorBodyHeight())
 	styles := area.Styles()
@@ -256,18 +286,72 @@ func (m *Model) handleEditorKey(msg tea.KeyPressMsg, selected action) tea.Cmd {
 	case actionDiscardEdit:
 		m.closeEditor("discarded changes to " + editor.target.label())
 		return nil
-	case actionQuit:
-		m.cancelAll()
-		return tea.Quit
 	default:
 		if editor.confirmDiscard {
 			editor.confirmDiscard = false
 			m.ws().status = status{Level: statusReady, Text: "editing " + editor.target.label()}
 			return nil
 		}
+		if isEditorNavKey(msg) {
+			editor.pendingNav = append(editor.pendingNav, msg)
+			if editor.navQueued {
+				return nil
+			}
+			editor.navQueued = true
+			return tea.Tick(editorFlushInterval, func(time.Time) tea.Msg { return editorNavFlushMsg{} })
+		}
+		editor.flushNav()
 		updated, cmd := editor.area.Update(msg)
 		editor.area = updated
 		return cmd
+	}
+}
+
+// isEditorNavKey reports whether the key is a repeat-prone cursor movement
+// that may be coalesced without changing buffer content.
+func isEditorNavKey(msg tea.KeyPressMsg) bool {
+	if msg.Mod != 0 {
+		return false
+	}
+	switch msg.Code {
+	case tea.KeyUp, tea.KeyDown, tea.KeyPgUp, tea.KeyPgDown:
+		return true
+	default:
+		return false
+	}
+}
+
+// flushNav applies the coalesced navigation keys. All but the last move the
+// cursor through the textarea's exported cursor methods, which skip the full
+// buffer re-render; the last goes through Update so the viewport repositions
+// exactly as an individual keypress would.
+func (e *editorState) flushNav() {
+	e.navQueued = false
+	if len(e.pendingNav) == 0 {
+		return
+	}
+	pending := e.pendingNav
+	e.pendingNav = nil
+	for _, msg := range pending[:len(pending)-1] {
+		switch msg.Code {
+		case tea.KeyUp:
+			e.area.CursorUp()
+		case tea.KeyDown:
+			e.area.CursorDown()
+		case tea.KeyPgUp:
+			e.area.PageUp()
+		case tea.KeyPgDown:
+			e.area.PageDown()
+		}
+	}
+	updated, _ := e.area.Update(pending[len(pending)-1])
+	e.area = updated
+}
+
+// handleEditorNavFlush is the tick handler for coalesced navigation.
+func (m *Model) handleEditorNavFlush() {
+	if m.editor != nil {
+		m.editor.flushNav()
 	}
 }
 
@@ -285,12 +369,16 @@ func (m *Model) startEditSave() tea.Cmd {
 	if editor.saving {
 		return nil
 	}
+	value := editor.area.Value()
+	encoded, err := decode.EncodeText(value, textCharmap)
+	if err != nil {
+		ws.status = status{Level: statusError, Text: "not saved: " + err.Error()}
+		return nil
+	}
 	if limit := editor.target.lineLimit(); limit > 0 {
-		for i, line := range strings.Split(editor.area.Value(), "\n") {
-			if len(line) > limit {
-				ws.status = status{Level: statusError, Text: fmt.Sprintf("not saved: line %d is %d characters, longer than LRECL %d", i+1, len(line), limit)}
-				return nil
-			}
+		if line, length, over := firstLineOver(encoded, limit); over {
+			ws.status = status{Level: statusError, Text: fmt.Sprintf("not saved: line %d is %d characters, longer than LRECL %d", line, length, limit)}
+			return nil
 		}
 	}
 	remote, ok := ws.textEditor()
@@ -304,18 +392,41 @@ func (m *Model) startEditSave() tea.Cmd {
 	ctx, cancel := context.WithTimeout(context.Background(), m.deps.Timeout)
 	m.editCancel = cancel
 	editor.saving = true
-	editor.pendingSave = editor.area.Value()
-	body := editor.pendingSave
-	if body != "" {
-		body += "\n"
+	editor.pendingSave = value
+	body := encoded
+	if len(body) > 0 {
+		body = append(body, '\n')
 	}
-	request := zosmf.WriteTextRequest{Target: editor.target.label(), Body: []byte(body), ETag: editor.etag}
+	request := zosmf.WriteTextRequest{Target: editor.target.label(), Body: body, ETag: editor.etag}
 	profile := ws.profile
 	ws.status = status{Level: statusLoading, Text: "saving " + editor.target.label()}
 	return m.loadingCommand(func() tea.Msg {
 		etag, err := remote.WriteText(ctx, request)
 		return editSaveResultMsg{Profile: profile, Generation: generation, ETag: etag, Err: err}
 	})
+}
+
+// firstLineOver scans encoded text for the first newline-delimited line whose
+// host byte length exceeds limit, returning its 1-based number and full
+// length. Lengths are measured after encoding so multi-byte UTF-8 input
+// counts as it will be stored.
+func firstLineOver(encoded []byte, limit int) (line, length int, over bool) {
+	number, current := 1, 0
+	for _, b := range encoded {
+		if b == '\n' {
+			if current > limit {
+				return number, current, true
+			}
+			number++
+			current = 0
+			continue
+		}
+		current++
+	}
+	if current > limit {
+		return number, current, true
+	}
+	return 0, 0, false
 }
 
 func (m *Model) handleEditSaveResult(msg editSaveResultMsg) tea.Cmd {

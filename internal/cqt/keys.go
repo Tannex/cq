@@ -123,7 +123,6 @@ type KeyMap struct {
 	SaveEdit        key.Binding
 	ReloadEdit      key.Binding
 	DiscardEdit     key.Binding
-	ForceQuit       key.Binding
 	NextProfile     key.Binding
 	PreviousProfile key.Binding
 }
@@ -165,7 +164,6 @@ func DefaultKeyMap() KeyMap {
 		SaveEdit:        key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "save")),
 		ReloadEdit:      key.NewBinding(key.WithKeys("ctrl+r"), key.WithHelp("ctrl+r", "reload from host")),
 		DiscardEdit:     key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "discard changes")),
-		ForceQuit:       key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit")),
 		NextProfile:     key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next profile")),
 		PreviousProfile: key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("shift+tab", "previous profile")),
 	}
@@ -187,8 +185,6 @@ func (k KeyMap) actionFor(msg tea.KeyPressMsg, ctx keyContext) action {
 			return actionReloadEdit
 		case key.Matches(msg, k.Cancel):
 			return actionCancel
-		case key.Matches(msg, k.ForceQuit):
-			return actionQuit
 		default:
 			return actionNone
 		}
@@ -351,7 +347,7 @@ func (k KeyMap) shortHelp(ctx keyContext, overlay bool) []key.Binding {
 		if ctx.EditorConfirm {
 			return []key.Binding{k.DiscardEdit, k.Cancel}
 		}
-		return []key.Binding{k.SaveEdit, k.ReloadEdit, k.Cancel, k.ForceQuit}
+		return []key.Binding{k.SaveEdit, k.ReloadEdit, k.Cancel}
 	}
 	if ctx.ShowHelp {
 		return []key.Binding{k.Up, k.Down, k.PageUp, k.PageDown, k.Back, k.Help}

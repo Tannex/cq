@@ -255,7 +255,7 @@ func TestDirtyExitRequiresConfirmationAndCleanExitIsImmediate(t *testing.T) {
 	}
 }
 
-func TestEditorRoutesQToBufferAndCtrlCQuits(t *testing.T) {
+func TestEditorRoutesQToBufferAndCtrlCDoesNotQuit(t *testing.T) {
 	model, _ := editorModel(t, Options{})
 	executeCommand(t, model, model.handleKey(keyPress('e', "e")))
 
@@ -265,12 +265,82 @@ func TestEditorRoutesQToBufferAndCtrlCQuits(t *testing.T) {
 	if !strings.HasPrefix(model.editor.area.Value(), "q") {
 		t.Fatalf("q not typed into buffer: %q", model.editor.area.Value())
 	}
-	command := model.handleKey(ctrlKey('c'))
-	if command == nil {
-		t.Fatal("ctrl+c did not quit")
+	if command := model.handleKey(ctrlKey('c')); command != nil {
+		if _, quits := command().(tea.QuitMsg); quits {
+			t.Fatal("ctrl+c quit from inside the editor")
+		}
 	}
-	if _, ok := command().(tea.QuitMsg); !ok {
-		t.Fatalf("ctrl+c command = %T", command())
+	if model.editor == nil {
+		t.Fatal("ctrl+c closed the editor")
+	}
+}
+
+func TestEditorDecodesAndEncodesLatin1Text(t *testing.T) {
+	model, browser := editorModel(t, Options{})
+	browser.texts["A.CONTROL.CARDS"] = "S\xc6RLIG\n\xd8L \xc5R\n" // latin1 ÆØÅ bytes
+	executeCommand(t, model, model.handleKey(keyPress('e', "e")))
+
+	if got := model.editor.area.Value(); got != "SÆRLIG\nØL ÅR" {
+		t.Fatalf("decoded buffer = %q", got)
+	}
+	executeCommand(t, model, model.handleKey(ctrlKey('s')))
+	if len(browser.writes) != 1 {
+		t.Fatalf("writes = %d", len(browser.writes))
+	}
+	if got := string(browser.writes[0].Body); got != "S\xc6RLIG\n\xd8L \xc5R\n" {
+		t.Fatalf("encoded body = %q", got)
+	}
+}
+
+func TestSaveMeasuresRecordLengthInEncodedBytes(t *testing.T) {
+	model, browser := editorModel(t, Options{})
+	// Ten latin1 characters fit LRECL 10 exactly even though the UTF-8
+	// buffer holds more bytes.
+	browser.texts["A.CONTROL.CARDS"] = "\xc6\xd8\xc5\xc6\xd8\xc5\xc6\xd8\xc5\xc6\n"
+	executeCommand(t, model, model.handleKey(keyPress('e', "e")))
+	executeCommand(t, model, model.handleKey(ctrlKey('s')))
+	if len(browser.writes) != 1 {
+		t.Fatalf("ten-character line rejected: %v", model.status)
+	}
+}
+
+func TestEditorCoalescesHeldNavigationKeys(t *testing.T) {
+	model, _ := editorModel(t, Options{})
+	executeCommand(t, model, model.handleKey(keyPress('e', "e")))
+	editor := model.editor
+
+	down := tea.KeyPressMsg(tea.Key{Code: tea.KeyDown})
+	first := model.handleKey(down)
+	if first == nil {
+		t.Fatal("first navigation key did not schedule a flush")
+	}
+	for range 3 {
+		if cmd := model.handleKey(down); cmd != nil {
+			t.Fatal("queued navigation key scheduled a second flush")
+		}
+	}
+	if len(editor.pendingNav) != 4 {
+		t.Fatalf("pendingNav = %d", len(editor.pendingNav))
+	}
+	if row := editor.area.Line(); row != 0 {
+		t.Fatalf("cursor moved before flush: row %d", row)
+	}
+	applyMessage(t, model, editorNavFlushMsg{})
+	if row := editor.area.Line(); row != 1 {
+		t.Fatalf("cursor row after flush = %d (buffer has 2 lines)", row)
+	}
+	if len(editor.pendingNav) != 0 || editor.navQueued {
+		t.Fatalf("flush left pendingNav=%d navQueued=%v", len(editor.pendingNav), editor.navQueued)
+	}
+
+	// A non-navigation key drains the queue before it is applied.
+	model.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
+	model.handleKey(keyPress('x', "x"))
+	if row := editor.area.Line(); row != 0 {
+		t.Fatalf("pending navigation not drained before typing: row %d", row)
+	}
+	if !strings.Contains(editor.area.Value(), "x") {
+		t.Fatal("typed key lost")
 	}
 }
 

@@ -496,6 +496,9 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.flushMappingOps()
 		}
 		return m, nil
+	case editorNavFlushMsg:
+		m.handleEditorNavFlush()
+		return m, nil
 	case editFetchResultMsg:
 		return m, m.handleEditFetchResult(msg)
 	case editSaveResultMsg:
