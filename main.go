@@ -169,9 +169,12 @@ examples:
 		}
 	}
 
+	resolver := dsncopy.New(cfg.DSNSearchPath, source, debugLog.Printf)
 	var src []byte
 	if *copybookDSN != "" {
-		src, err = source.FetchText(context.Background(), *copybookDSN)
+		var text string
+		text, err = resolver.FetchPrimary(context.Background(), *copybookDSN)
+		src = []byte(text)
 	} else {
 		src, err = os.ReadFile(*copybookPath)
 		if err == nil {
@@ -181,7 +184,6 @@ examples:
 	if err != nil {
 		return err
 	}
-	resolver := dsncopy.New(cfg.DSNSearchPath, source, debugLog.Printf)
 	items, err := copybook.ParseWithCopies(string(src), cbFormat, resolver.Resolve)
 	if err != nil {
 		return err

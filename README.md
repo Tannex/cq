@@ -253,7 +253,10 @@ a copybook at startup with `-c`/`--copybook` or `--copybook-dsn`, or press `c`
 to choose a local file or DSN, source format, and optional 01-level record.
 Nested `COPY MEMBER.` statements use the ordered `dsnSearchPath` libraries in
 the shared `cq/config.json`; this requires the active z/OSMF session even when
-the top-level copybook is local.
+the top-level copybook is local. When the top-level copybook DSN itself is not
+found (404), its member name — from `DSN(MEMBER)` or a bare member-sized
+name — is searched through the same libraries, so mappings survive a copybook
+moving to another library.
 
 A valid overlay persists while browsing data sets and members. If a replacement
 copybook fails to load or parse, the previous valid overlay remains active.
@@ -350,7 +353,9 @@ is supplied; cq falls back to `cp037` when the property is absent.
 ### Nested copybooks
 
 When a copybook contains `COPY MEMBER.`, cq resolves the member recursively
-through the ordered libraries in `dsnSearchPath`. By default, `cq` reads
+through the ordered libraries in `dsnSearchPath`. The same chain is tried for
+`--copybook-dsn` itself when z/OSMF reports it missing (404), using the member
+name from `DSN(MEMBER)` or a bare member-sized name. By default, `cq` reads
 `config.json` from its platform user configuration directory:
 
 - Linux: `$XDG_CONFIG_HOME/cq/config.json`, or `$HOME/.config/cq/config.json`
