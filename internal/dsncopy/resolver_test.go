@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -48,14 +49,20 @@ func TestResolveContextCancelsProbesWithoutCachingCancellation(t *testing.T) {
 	}
 }
 
+// mapFetcher answers from fixed tables; the resolver probes libraries
+// concurrently, so the request log is mutex-guarded.
 type mapFetcher struct {
 	texts    map[string]string
 	statuses map[string]int
+
+	mu       sync.Mutex
 	requests []string
 }
 
 func (f *mapFetcher) FetchText(_ context.Context, dsn string) ([]byte, error) {
+	f.mu.Lock()
 	f.requests = append(f.requests, dsn)
+	f.mu.Unlock()
 	if text, ok := f.texts[dsn]; ok {
 		return []byte(text), nil
 	}
