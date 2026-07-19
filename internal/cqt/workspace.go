@@ -39,9 +39,15 @@ type workspace struct {
 	rawLongest int
 	recordPage pager[int64]
 
-	overlay         *overlay
-	overlaySource   CopybookSource
-	overlayError    string
+	overlay       *overlay
+	overlaySource CopybookSource
+	overlayError  string
+	// overlayMappedPattern names the persisted mapping pattern behind the
+	// current overlay source, or "" when the source was chosen manually.
+	overlayMappedPattern string
+	// pendingMapping is a mapping save deferred until its overlay load
+	// succeeds, so failed copybooks never enter the store.
+	pendingMapping  *pendingMappingSave
 	recordMode      RecordMode
 	decodedMode     RecordMode
 	horizontal      int
@@ -125,6 +131,15 @@ func (ws *workspace) recordIdentity() string {
 		member = ws.member.Name
 	}
 	return fmt.Sprintf("%s(%s)", ws.dataSet.Name, member)
+}
+
+// matchName is the name persisted DSN → copybook mappings are matched
+// against: DSN(MEMBER) for members and the plain DSN otherwise.
+func (ws *workspace) matchName() string {
+	if ws.member != nil {
+		return fmt.Sprintf("%s(%s)", ws.dataSet.Name, ws.member.Name)
+	}
+	return ws.dataSet.Name
 }
 
 func (ws *workspace) resetRecordState() {

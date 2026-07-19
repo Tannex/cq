@@ -184,20 +184,38 @@ func TestClearOverlayCancelsPendingReplacementAndRejectsItsResult(t *testing.T) 
 	}
 }
 
-func TestCopybookDialogRequiresExactlyOneSourceAndValidFormat(t *testing.T) {
-	dialog := newCopybookDialog(CopybookSource{})
-	if _, _, err := dialog.source().validate(); err == nil {
-		t.Fatal("empty dialog source was accepted")
+func TestCopybookSourceValidateRequiresExactlyOneSourceAndValidFormat(t *testing.T) {
+	if _, _, err := (CopybookSource{}).validate(); err == nil {
+		t.Fatal("empty source was accepted")
 	}
-	dialog.local.SetValue("local.cpy")
-	dialog.dsn.SetValue("HLQ.CPY(MEM)")
-	if _, _, err := dialog.source().validate(); err == nil {
-		t.Fatal("dialog accepted both local and DSN sources")
+	if _, _, err := (CopybookSource{Local: "local.cpy", DSN: "HLQ.CPY(MEM)"}).validate(); err == nil {
+		t.Fatal("both local and DSN sources were accepted")
 	}
-	dialog.dsn.SetValue("")
-	dialog.format.SetValue("variable")
-	if _, _, err := dialog.source().validate(); err == nil || !strings.Contains(err.Error(), "auto, fixed, or free") {
+	if _, _, err := (CopybookSource{Local: "local.cpy", Format: "variable"}).validate(); err == nil || !strings.Contains(err.Error(), "auto, fixed, or free") {
 		t.Fatalf("invalid format error = %v", err)
+	}
+}
+
+func TestMappingFormClassifiesCopybookInput(t *testing.T) {
+	form := newMappingForm(CopybookSource{}, "HQ.DATA", false)
+	form.copybook.SetValue("hlq.copylib(cust)")
+	if source := form.formSource(); source.DSN != "hlq.copylib(cust)" || source.Local != "" {
+		t.Fatalf("plain value not classified as DSN: %#v", source)
+	}
+	form.copybook.SetValue("./layouts/cust.cpy")
+	if source := form.formSource(); source.Local != "./layouts/cust.cpy" || source.DSN != "" {
+		t.Fatalf("path value not classified as local: %#v", source)
+	}
+
+	// An untouched prefill of a local mapping stays local even without a
+	// path separator, so editing never silently reclassifies the source.
+	edit := newMappingForm(CopybookSource{Local: "cust.cpy"}, "HQ.DATA", true)
+	if source := edit.formSource(); source.Local != "cust.cpy" || source.DSN != "" {
+		t.Fatalf("untouched local prefill reclassified: %#v", source)
+	}
+	edit.copybook.SetValue("HQ.COPYLIB(CUST)")
+	if source := edit.formSource(); source.DSN != "HQ.COPYLIB(CUST)" || source.Local != "" {
+		t.Fatalf("edited value not reclassified as DSN: %#v", source)
 	}
 }
 

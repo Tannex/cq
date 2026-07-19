@@ -928,7 +928,7 @@ func TestJSONPageKeysScrollAndRecordSelectionResetsOffset(t *testing.T) {
 	}
 }
 
-func TestEmptyCopybookDialogClearsActiveOverlay(t *testing.T) {
+func TestEmptyCopybookFormClearsActiveOverlay(t *testing.T) {
 	model := recordViewModel(t)
 	decoded := record.DecodedRecord{Value: record.Object{{Name: "FIELD", Value: "VALUE"}}}
 	model.overlay = &overlay{
@@ -944,13 +944,14 @@ func TestEmptyCopybookDialogClearsActiveOverlay(t *testing.T) {
 		Decoded: &decoded,
 		Err:     errors.New("old diagnostic"),
 	}}
-	model.dialog = newCopybookDialog(CopybookSource{})
+	model.handleAction(actionCopybook)
+	model.mappingView.form.copybook.SetValue("")
 
 	if command := model.handleKey(keyPress(tea.KeyEnter, "")); command != nil {
-		t.Fatal("empty copybook dialog returned a command")
+		t.Fatal("empty copybook form returned a command")
 	}
-	if model.dialog != nil || model.overlay != nil || !model.overlaySource.empty() {
-		t.Fatalf("dialog/overlay not cleared: dialog=%v overlay=%v source=%#v", model.dialog, model.overlay, model.overlaySource)
+	if model.mappingView != nil || model.overlay != nil || !model.overlaySource.empty() {
+		t.Fatalf("view/overlay not cleared: view=%v overlay=%v source=%#v", model.mappingView, model.overlay, model.overlaySource)
 	}
 	if model.recordMode != ModeRaw || model.horizontal != 0 || model.jsonVertical != 0 {
 		t.Fatalf("presentation not reset: mode=%d horizontal=%d vertical=%d", model.recordMode, model.horizontal, model.jsonVertical)
@@ -963,19 +964,20 @@ func TestEmptyCopybookDialogClearsActiveOverlay(t *testing.T) {
 	}
 }
 
-func TestEmptyCopybookDialogWithoutOverlayClosesCleanly(t *testing.T) {
+func TestEmptyCopybookFormWithoutOverlayClosesCleanly(t *testing.T) {
 	model := recordViewModel(t)
 	model.status = status{Level: statusReady, Text: "unchanged"}
-	model.dialog = newCopybookDialog(CopybookSource{})
+	model.handleAction(actionCopybook)
+	model.mappingView.form.copybook.SetValue("")
 
 	if command := model.handleKey(keyPress(tea.KeyEnter, "")); command != nil {
-		t.Fatal("empty copybook dialog returned a command")
+		t.Fatal("empty copybook form returned a command")
 	}
-	if model.dialog != nil {
-		t.Fatal("empty copybook dialog remained open")
+	if model.mappingView != nil {
+		t.Fatal("empty copybook form remained open")
 	}
 	if model.status.Level != statusReady || model.status.Text != "unchanged" {
-		t.Fatalf("empty dialog changed status: %#v", model.status)
+		t.Fatalf("empty form changed status: %#v", model.status)
 	}
 }
 

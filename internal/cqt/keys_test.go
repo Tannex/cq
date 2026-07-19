@@ -97,6 +97,33 @@ func TestFocusedInputAndDialogSuppressGlobalShortcuts(t *testing.T) {
 	}
 }
 
+func TestMappingListKeysRouteToListActionsAndFormKeepsTyping(t *testing.T) {
+	keys := DefaultKeyMap()
+	list := keyContext{Screen: ScreenRecords, DialogOpen: true}
+	for _, want := range []struct {
+		msg    tea.KeyPressMsg
+		action action
+	}{
+		{keyPress('a', "a"), actionMappingAdd},
+		{keyPress('e', "e"), actionMappingEdit},
+		{keyPress('x', "x"), actionMappingRemove},
+		{keyPress(tea.KeyUp, ""), actionUp},
+		{keyPress(tea.KeyDown, ""), actionDown},
+		{keyPress(tea.KeyEnter, ""), actionAccept},
+		{keyPress(tea.KeyEscape, ""), actionCancel},
+	} {
+		if got := keys.actionFor(want.msg, list); got != want.action {
+			t.Fatalf("list key %q action = %d, want %d", want.msg.String(), got, want.action)
+		}
+	}
+	form := keyContext{Screen: ScreenRecords, DialogOpen: true, DialogFormFocused: true}
+	for _, msg := range []tea.KeyPressMsg{keyPress('a', "a"), keyPress('e', "e"), keyPress('x', "x")} {
+		if got := keys.actionFor(msg, form); got != actionNone {
+			t.Fatalf("form key %q dispatched action %d instead of typing", msg.String(), got)
+		}
+	}
+}
+
 func TestShowHelpSuppressesNavigationAndEnablesScrolling(t *testing.T) {
 	keys := DefaultKeyMap()
 	ctx := keyContext{Screen: ScreenRecords, Mode: ModeTable, ShowHelp: true}
@@ -206,8 +233,11 @@ func TestProfileKeysSwitchOnlyWhenTabsEnabledAndUnfocused(t *testing.T) {
 	if got := keys.actionFor(tab, keyContext{Tabs: true, InputFocused: true}); got != actionNone {
 		t.Fatalf("tab switched profiles while input focused: %d", got)
 	}
-	if got := keys.actionFor(tab, keyContext{Tabs: true, DialogOpen: true}); got != actionNextField {
-		t.Fatalf("tab did not move dialog field while dialog open: %d", got)
+	if got := keys.actionFor(tab, keyContext{Tabs: true, DialogOpen: true, DialogFormFocused: true}); got != actionNextField {
+		t.Fatalf("tab did not move form field while mapping form focused: %d", got)
+	}
+	if got := keys.actionFor(tab, keyContext{Tabs: true, DialogOpen: true}); got != actionNone {
+		t.Fatalf("tab switched profiles while mapping list open: %d", got)
 	}
 	if got := keys.actionFor(tab, keyContext{Tabs: true, ShowHelp: true}); got != actionNone {
 		t.Fatalf("tab switched profiles while help open: %d", got)

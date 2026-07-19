@@ -18,6 +18,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/Tannex/cq/internal/decode"
+	"github.com/Tannex/cq/internal/dsnmap"
+	"github.com/Tannex/cq/internal/favorites"
 	"github.com/Tannex/cq/internal/record"
 	"github.com/Tannex/cq/internal/zosmf"
 )
@@ -46,12 +48,58 @@ type Session struct {
 	Encoding string
 }
 
+// MappingStore persists DSN → copybook mappings across sessions. A nil store
+// disables mapping persistence.
+type MappingStore interface {
+	Match(name string) (dsnmap.Mapping, bool)
+	Matches(name string) []dsnmap.Mapping
+	Put(mapping dsnmap.Mapping) error
+	Remove(pattern string) (bool, error)
+	Touch(pattern string) error
+}
+
+// mappingFlushDelay debounces background mapping writes: bursts of add/edit/
+// remove actions coalesce into one flush shortly after the user pauses.
+const mappingFlushDelay = 750 * time.Millisecond
+
+// mappingOp is one queued background store write: exactly one of put and
+// removePattern is set.
+type mappingOp struct {
+	put           *dsnmap.Mapping
+	removePattern string
+}
+
+type mappingFlushMsg struct {
+	Seq uint64
+}
+
+// pendingMappingSave is a mapping waiting for its overlay load to succeed;
+// only successful applies are persisted. removeOld names a pattern the save
+// replaces (an edit that changed the pattern), removed in the same flush.
+type pendingMappingSave struct {
+	mapping   dsnmap.Mapping
+	removeOld string
+}
+
+// FavoriteStore persists data set favorites across sessions. A nil store
+// disables favorites.
+type FavoriteStore interface {
+	Favorites() []favorites.Favorite
+	Matches(name string) bool
+	Toggle(name string) (bool, error)
+	SetNote(pattern, note string) error
+	Remove(pattern string) (bool, error)
+	Touch(pattern string) error
+}
+
 // Dependencies provide test seams without weakening the production command's
 // read-only boundaries.
 type Dependencies struct {
 	LoadSession   func(ctx context.Context, profile string) (Session, error)
 	ListProfiles  func(context.Context) ([]string, error)
 	LoadFile      func(context.Context, string) ([]byte, error)
+	Mappings      MappingStore
+	Favorites     FavoriteStore
 	DSNSearchPath []string
 	Timeout       time.Duration
 }
@@ -164,7 +212,13 @@ type Model struct {
 	prefixInput textinput.Model
 	memberInput textinput.Model
 	locateInput textinput.Model
-	dialog      *copybookDialog
+	mappingView *mappingView
+	favPopup    *favoritesPopup
+
+	// mappingOps are background store writes awaiting the debounced flush;
+	// mappingSeq invalidates timers superseded by a newer queued op.
+	mappingOps []mappingOp
+	mappingSeq uint64
 
 	showHelp     bool
 	helpVertical int
@@ -429,6 +483,11 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if ws != nil {
 			return m, m.handleDecodeResult(ws, msg)
 		}
+	case mappingFlushMsg:
+		if msg.Seq == m.mappingSeq {
+			m.flushMappingOps()
+		}
+		return m, nil
 	case spinner.TickMsg:
 		level, _ := m.effectiveStatus()
 		if level != statusLoading {
@@ -512,6 +571,17 @@ func (m *Model) initialCopybookSource() CopybookSource {
 }
 
 func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
+	if view := m.mappingView; view != nil {
+		if view.form == nil {
+			switch msg.Button {
+			case tea.MouseWheelUp:
+				view.move(-1)
+			case tea.MouseWheelDown:
+				view.move(1)
+			}
+		}
+		return nil
+	}
 	switch msg.Button {
 	case tea.MouseWheelLeft:
 		return m.handleAction(actionWideLeft)
@@ -528,6 +598,10 @@ func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
 
 	if m.showHelp {
 		m.helpVertical = max(0, m.helpVertical+delta)
+		return nil
+	}
+	if m.favPopup != nil {
+		m.favPopup.move(delta)
 		return nil
 	}
 	if m.scrollJSON(delta) {
@@ -551,36 +625,60 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	ws := m.ws()
 	ctx := keyContext{
 		Screen: ws.screen, Mode: ws.recordMode,
-		InputFocused: m.inputFocused(), DialogOpen: m.dialog != nil,
-		ShowHelp: m.showHelp, Tabs: m.hasTabs(),
+		InputFocused: m.inputFocused(), DialogOpen: m.mappingView != nil,
+		DialogFormFocused: m.mappingView != nil && m.mappingView.form != nil,
+		ShowHelp:          m.showHelp, Tabs: m.hasTabs(),
+		FavoritesOpen: m.favPopup != nil, FavoritesInput: m.favPopup != nil && m.favPopup.editing,
 	}
 	selectedAction := m.keys.actionFor(msg, ctx)
-	if m.dialog != nil {
-		switch selectedAction {
-		case actionAccept:
-			source := m.dialog.source()
-			if source.empty() {
-				m.dialog = nil
-				if ws.overlay != nil {
-					m.clearOverlay()
+	if m.favPopup != nil {
+		return m.handleFavoritesKey(msg, selectedAction)
+	}
+	if view := m.mappingView; view != nil {
+		if view.form != nil {
+			switch selectedAction {
+			case actionAccept:
+				return m.submitMappingForm(ws)
+			case actionCancel:
+				view.form = nil
+				if len(view.entries) == 0 {
+					m.mappingView = nil
 				}
 				return nil
+			case actionNextField:
+				return view.form.moveFocus(1)
+			case actionPreviousField:
+				return view.form.moveFocus(-1)
+			default:
+				return view.form.update(msg)
 			}
-			if _, _, err := source.validate(); err != nil {
-				m.dialog.err = err.Error()
-				return nil
-			}
-			m.dialog = nil
-			return m.startOverlay(ws, source)
-		case actionCancel:
-			m.dialog = nil
+		}
+		switch selectedAction {
+		case actionUp:
+			view.move(-1)
 			return nil
-		case actionNextField:
-			return m.dialog.moveFocus(1)
-		case actionPreviousField:
-			return m.dialog.moveFocus(-1)
+		case actionDown:
+			view.move(1)
+			return nil
+		case actionAccept:
+			return m.applySelectedMapping(ws)
+		case actionMappingAdd:
+			view.openForm(CopybookSource{}, view.target, false)
+			view.setWidth(m.width)
+			return nil
+		case actionMappingEdit:
+			if entry := view.selectedEntry(); entry != nil {
+				view.openForm(mappingSource(entry.Mapping), entry.Mapping.Pattern, true)
+				view.setWidth(m.width)
+			}
+			return nil
+		case actionMappingRemove:
+			return m.removeSelectedMapping(ws)
+		case actionCancel:
+			m.mappingView = nil
+			return nil
 		default:
-			return m.dialog.update(msg)
+			return nil
 		}
 	}
 	if m.inputFocused() {
@@ -606,6 +704,7 @@ func (m *Model) handleAction(selected action) tea.Cmd {
 	case actionNone:
 		return nil
 	case actionQuit:
+		m.flushMappingOps()
 		m.cancelAll()
 		return tea.Quit
 	case actionHelp:
@@ -656,9 +755,14 @@ func (m *Model) handleAction(selected action) tea.Cmd {
 		return m.navigateBack()
 	case actionRefresh:
 		return m.refresh()
+	case actionToggleFavorite:
+		m.toggleFavorite()
+		return nil
+	case actionFavorites:
+		m.openFavoritesPopup()
+		return nil
 	case actionCopybook:
-		m.dialog = newCopybookDialog(ws.overlaySource)
-		m.dialog.setWidth(m.width)
+		m.openMappingView(ws)
 		return nil
 	case actionClearOverlay:
 		m.clearOverlay()
@@ -753,11 +857,13 @@ func (m *Model) switchProfile(delta int) tea.Cmd {
 func (m *Model) clearOverlay() {
 	ws := m.ws()
 	ws.cancelOverlay()
+	ws.pendingMapping = nil
 	ws.overlayGeneration++
 	ws.cancelDecode()
 	ws.overlay = nil
 	ws.overlaySource = CopybookSource{}
 	ws.overlayError = ""
+	ws.overlayMappedPattern = ""
 	ws.recordMode = ModeRaw
 	ws.horizontal = 0
 	ws.jsonVertical = 0
@@ -766,6 +872,186 @@ func (m *Model) clearOverlay() {
 		ws.records[i].Err = nil
 	}
 	ws.status = status{Level: statusReady, Text: "copybook overlay cleared"}
+}
+
+// openMappingView opens the combined mapping screen: every persisted mapping
+// matching the current data set, most precise first, so unintentional matches
+// are visible. With no matches it opens straight into the add form seeded with
+// the exact data set name.
+func (m *Model) openMappingView(ws *workspace) {
+	view := &mappingView{target: ws.matchName()}
+	if m.deps.Mappings != nil {
+		seen := map[string]struct{}{}
+		add := func(mappings []dsnmap.Mapping) {
+			for _, mapping := range mappings {
+				if _, ok := seen[mapping.Pattern]; ok {
+					continue
+				}
+				seen[mapping.Pattern] = struct{}{}
+				view.entries = append(view.entries, mappingEntry{
+					Mapping: mapping, Applied: mapping.Pattern == ws.overlayMappedPattern,
+				})
+			}
+		}
+		add(m.deps.Mappings.Matches(view.target))
+		if ws.member != nil {
+			add(m.deps.Mappings.Matches(ws.dataSet.Name))
+		}
+	}
+	for i, entry := range view.entries {
+		if entry.Applied {
+			view.selected = i
+		}
+	}
+	if len(view.entries) == 0 {
+		view.openForm(ws.overlaySource, view.target, false)
+	}
+	view.setWidth(m.width)
+	m.mappingView = view
+}
+
+// applySelectedMapping applies the selected persisted mapping as the overlay.
+func (m *Model) applySelectedMapping(ws *workspace) tea.Cmd {
+	view := m.mappingView
+	entry := view.selectedEntry()
+	if entry == nil {
+		return nil
+	}
+	m.mappingView = nil
+	if m.deps.Mappings != nil {
+		_ = m.deps.Mappings.Touch(entry.Mapping.Pattern)
+	}
+	ws.overlayMappedPattern = entry.Mapping.Pattern
+	return m.startOverlay(ws, mappingSource(entry.Mapping))
+}
+
+// removeSelectedMapping drops the selected mapping from the list and queues
+// the background removal.
+func (m *Model) removeSelectedMapping(ws *workspace) tea.Cmd {
+	view := m.mappingView
+	pattern := view.removeSelected()
+	if pattern == "" {
+		return nil
+	}
+	if ws.overlayMappedPattern == pattern {
+		ws.overlayMappedPattern = ""
+	}
+	view.err = ""
+	view.note = "removed mapping " + pattern
+	return m.queueMappingOps(mappingOp{removePattern: pattern})
+}
+
+// submitMappingForm applies the form: a copybook value loads the overlay and,
+// on success, persists the mapping in the background; an empty copybook clears
+// the overlay and removes the mapping through the same background path.
+func (m *Model) submitMappingForm(ws *workspace) tea.Cmd {
+	view := m.mappingView
+	form := view.form
+	pattern := dsnmap.NormalizePattern(form.pattern.Value())
+	if pattern == "" {
+		view.err = "enter a DSN pattern"
+		return nil
+	}
+	if err := dsnmap.ValidatePattern(pattern); err != nil {
+		view.err = err.Error()
+		return nil
+	}
+	source := form.formSource()
+	if source.empty() {
+		removeTarget := form.original
+		if removeTarget == "" {
+			removeTarget = pattern
+		}
+		m.mappingView = nil
+		if ws.overlay != nil || ws.overlayPending {
+			m.clearOverlay()
+		}
+		if ws.overlayMappedPattern == removeTarget {
+			ws.overlayMappedPattern = ""
+		}
+		command := m.queueMappingOps(mappingOp{removePattern: removeTarget})
+		if command != nil {
+			ws.status = status{Level: statusReady, Text: "copybook cleared; removed mapping " + removeTarget}
+		}
+		return command
+	}
+	validated, _, err := source.validate()
+	if err != nil {
+		view.err = err.Error()
+		return nil
+	}
+	m.mappingView = nil
+	ws.overlayMappedPattern = ""
+	command := m.startOverlay(ws, validated)
+	ws.pendingMapping = &pendingMappingSave{
+		mapping: dsnmap.Mapping{
+			Pattern: pattern, Local: validated.Local, DSN: validated.DSN, Record: validated.Record,
+		},
+		removeOld: form.original,
+	}
+	return command
+}
+
+// queueMappingOps schedules background store writes behind the debounce
+// timer. Ops queue even while a flush is pending; a newer op re-arms the
+// timer and invalidates the older one.
+func (m *Model) queueMappingOps(ops ...mappingOp) tea.Cmd {
+	if m.deps.Mappings == nil || len(ops) == 0 {
+		return nil
+	}
+	m.mappingOps = append(m.mappingOps, ops...)
+	m.mappingSeq++
+	seq := m.mappingSeq
+	return tea.Tick(mappingFlushDelay, func(time.Time) tea.Msg { return mappingFlushMsg{Seq: seq} })
+}
+
+// flushMappingOps writes queued mapping changes to the store, in order.
+// Failures surface in the status line but never block browsing.
+func (m *Model) flushMappingOps() {
+	ops := m.mappingOps
+	m.mappingOps = nil
+	if m.deps.Mappings == nil {
+		return
+	}
+	for _, op := range ops {
+		var err error
+		switch {
+		case op.removePattern != "":
+			_, err = m.deps.Mappings.Remove(op.removePattern)
+		case op.put != nil:
+			err = m.deps.Mappings.Put(*op.put)
+		}
+		if err != nil {
+			m.ws().status = status{Level: statusError, Text: "mapping save failed: " + err.Error()}
+		}
+	}
+}
+
+// autoApplyMapping starts the overlay for a persisted mapping when a records
+// screen is entered with no overlay active. Explicit --copybook/--copybook-dsn
+// flags override persisted mappings, and a failed load degrades to the raw
+// view through the normal overlay error path.
+func (m *Model) autoApplyMapping(ws *workspace) tea.Cmd {
+	if m.deps.Mappings == nil || ws.overlay != nil || ws.overlayPending || !ws.overlaySource.empty() {
+		return nil
+	}
+	if !m.initialCopybookSource().empty() {
+		return nil
+	}
+	mapping, ok := m.deps.Mappings.Match(ws.matchName())
+	if !ok && ws.member != nil {
+		mapping, ok = m.deps.Mappings.Match(ws.dataSet.Name)
+	}
+	if !ok {
+		return nil
+	}
+	_ = m.deps.Mappings.Touch(mapping.Pattern)
+	ws.overlayMappedPattern = mapping.Pattern
+	return m.startOverlay(ws, mappingSource(mapping))
+}
+
+func mappingSource(mapping dsnmap.Mapping) CopybookSource {
+	return CopybookSource{Local: mapping.Local, DSN: mapping.DSN, Format: mapping.Format, Record: mapping.Record}
 }
 
 func (m *Model) focusedInput() *textinput.Model {
@@ -906,7 +1192,7 @@ func (m *Model) openSelection() tea.Cmd {
 			ws.dataSet = selected
 			ws.resetMemberState()
 			ws.screen = ScreenRecords
-			return m.startRecords(ws, ws.recordPage.initialPlan(0))
+			return tea.Batch(m.startRecords(ws, ws.recordPage.initialPlan(0)), m.autoApplyMapping(ws))
 		case "PO", "PO-E", "POE", "PDS", "PDSE":
 			ws.cancelBrowse()
 			ws.cancelDecode()
@@ -933,7 +1219,7 @@ func (m *Model) openSelection() tea.Cmd {
 		ws.member = &selected
 		ws.screen = ScreenRecords
 		ws.resetRecordState()
-		return m.startRecords(ws, ws.recordPage.initialPlan(0))
+		return tea.Batch(m.startRecords(ws, ws.recordPage.initialPlan(0)), m.autoApplyMapping(ws))
 	}
 	return nil
 }
@@ -1030,8 +1316,11 @@ func (m *Model) handleResize(width, height int) tea.Cmd {
 	m.prefixInput.SetWidth(max(8, width-10))
 	m.memberInput.SetWidth(max(8, min(24, width-10)))
 	m.locateInput.SetWidth(max(8, min(24, width-10)))
-	if m.dialog != nil {
-		m.dialog.setWidth(width)
+	if m.mappingView != nil {
+		m.mappingView.setWidth(width)
+	}
+	if m.favPopup != nil {
+		m.favPopup.setWidth(width)
 	}
 
 	ws.resizePagers(m.visible, m.budget)
@@ -1321,6 +1610,9 @@ func cloneInt(value *int) *int {
 
 func (m *Model) startOverlay(ws *workspace, source CopybookSource) tea.Cmd {
 	ws.cancelOverlay()
+	// A new overlay request supersedes any not-yet-persisted mapping; the
+	// form handler re-stashes its own pending save after this call.
+	ws.pendingMapping = nil
 	ws.overlayError = ""
 	ws.overlayGeneration++
 	generation := ws.overlayGeneration
@@ -1344,6 +1636,7 @@ func (m *Model) handleOverlayResult(ws *workspace, msg overlayResultMsg) tea.Cmd
 	}
 	ws.cancelOverlay()
 	if msg.Err != nil {
+		ws.pendingMapping = nil
 		ws.overlayError = msg.Err.Error()
 		if ws.overlay != nil {
 			ws.overlayError += "; previous overlay retained"
@@ -1365,17 +1658,35 @@ func (m *Model) handleOverlayResult(ws *workspace, msg overlayResultMsg) tea.Cmd
 	ws.decodedMode = ModeTable
 	ws.horizontal = 0
 	ws.jsonVertical = 0
+	saveCmd := m.persistPendingMapping(ws)
 	if ws.browsePending != nil {
-		return nil
+		return saveCmd
 	}
 	ws.status = status{Level: statusReady, Text: fmt.Sprintf("overlay %s record %s", msg.Overlay.Source.label(), msg.Overlay.Record.Name)}
 	if ws != &m.workspace {
-		return nil
+		return saveCmd
 	}
 	if len(ws.records) > 0 && ws.screen == ScreenRecords {
-		return m.startDecode(ws)
+		return tea.Batch(saveCmd, m.startDecode(ws))
 	}
-	return nil
+	return saveCmd
+}
+
+// persistPendingMapping queues the background save for an overlay that was
+// applied through the mapping form, once the copybook has actually loaded.
+func (m *Model) persistPendingMapping(ws *workspace) tea.Cmd {
+	pending := ws.pendingMapping
+	if pending == nil {
+		return nil
+	}
+	ws.pendingMapping = nil
+	ws.overlayMappedPattern = pending.mapping.Pattern
+	ops := make([]mappingOp, 0, 2)
+	if pending.removeOld != "" && pending.removeOld != pending.mapping.Pattern {
+		ops = append(ops, mappingOp{removePattern: pending.removeOld})
+	}
+	ops = append(ops, mappingOp{put: &pending.mapping})
+	return m.queueMappingOps(ops...)
 }
 
 func (m *Model) startDecode(ws *workspace) tea.Cmd {

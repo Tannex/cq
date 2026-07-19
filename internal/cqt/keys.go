@@ -48,6 +48,13 @@ const (
 	actionCancel
 	actionNextField
 	actionPreviousField
+	actionMappingAdd
+	actionMappingEdit
+	actionMappingRemove
+	actionToggleFavorite
+	actionFavorites
+	actionFavoriteNote
+	actionFavoriteRemove
 	actionHelpUp
 	actionHelpDown
 	actionHelpPageUp
@@ -63,8 +70,13 @@ type keyContext struct {
 	Mode         RecordMode
 	InputFocused bool
 	DialogOpen   bool
-	ShowHelp     bool
-	Tabs         bool
+	// DialogFormFocused is set while the mapping view's inline form has focus,
+	// so printable keys reach the text inputs instead of the list bindings.
+	DialogFormFocused bool
+	ShowHelp          bool
+	Tabs              bool
+	FavoritesOpen     bool
+	FavoritesInput    bool
 }
 
 // KeyMap is the single source of truth for application, input, dialog, and
@@ -94,6 +106,13 @@ type KeyMap struct {
 	Cancel          key.Binding
 	NextField       key.Binding
 	PreviousField   key.Binding
+	MappingAdd      key.Binding
+	MappingEdit     key.Binding
+	MappingRemove   key.Binding
+	ToggleFavorite  key.Binding
+	Favorites       key.Binding
+	FavoriteNote    key.Binding
+	FavoriteRemove  key.Binding
 	NextProfile     key.Binding
 	PreviousProfile key.Binding
 }
@@ -124,6 +143,13 @@ func DefaultKeyMap() KeyMap {
 		Cancel:          key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
 		NextField:       key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next field")),
 		PreviousField:   key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("shift+tab", "previous field")),
+		MappingAdd:      key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "add mapping")),
+		MappingEdit:     key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit mapping")),
+		MappingRemove:   key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "remove mapping")),
+		ToggleFavorite:  key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "favorite")),
+		Favorites:       key.NewBinding(key.WithKeys("F"), key.WithHelp("F", "favorites")),
+		FavoriteNote:    key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "edit note")),
+		FavoriteRemove:  key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "remove favorite")),
 		NextProfile:     key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next profile")),
 		PreviousProfile: key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("shift+tab", "previous profile")),
 	}
@@ -131,15 +157,35 @@ func DefaultKeyMap() KeyMap {
 
 func (k KeyMap) actionFor(msg tea.KeyPressMsg, ctx keyContext) action {
 	if ctx.DialogOpen {
+		if ctx.DialogFormFocused {
+			switch {
+			case key.Matches(msg, k.Accept):
+				return actionAccept
+			case key.Matches(msg, k.Cancel):
+				return actionCancel
+			case key.Matches(msg, k.NextField):
+				return actionNextField
+			case key.Matches(msg, k.PreviousField):
+				return actionPreviousField
+			default:
+				return actionNone
+			}
+		}
 		switch {
+		case key.Matches(msg, k.Up):
+			return actionUp
+		case key.Matches(msg, k.Down):
+			return actionDown
 		case key.Matches(msg, k.Accept):
 			return actionAccept
 		case key.Matches(msg, k.Cancel):
 			return actionCancel
-		case key.Matches(msg, k.NextField):
-			return actionNextField
-		case key.Matches(msg, k.PreviousField):
-			return actionPreviousField
+		case key.Matches(msg, k.MappingAdd):
+			return actionMappingAdd
+		case key.Matches(msg, k.MappingEdit):
+			return actionMappingEdit
+		case key.Matches(msg, k.MappingRemove):
+			return actionMappingRemove
 		default:
 			return actionNone
 		}
@@ -150,6 +196,36 @@ func (k KeyMap) actionFor(msg tea.KeyPressMsg, ctx keyContext) action {
 			return actionAccept
 		case key.Matches(msg, k.Cancel):
 			return actionCancel
+		default:
+			return actionNone
+		}
+	}
+	if ctx.FavoritesOpen {
+		if ctx.FavoritesInput {
+			switch {
+			case key.Matches(msg, k.Accept):
+				return actionAccept
+			case key.Matches(msg, k.Cancel):
+				return actionCancel
+			default:
+				return actionNone
+			}
+		}
+		switch {
+		case key.Matches(msg, k.Up):
+			return actionUp
+		case key.Matches(msg, k.Down):
+			return actionDown
+		case key.Matches(msg, k.Accept):
+			return actionAccept
+		case key.Matches(msg, k.Cancel), key.Matches(msg, k.Favorites):
+			return actionCancel
+		case key.Matches(msg, k.FavoriteNote):
+			return actionFavoriteNote
+		case key.Matches(msg, k.FavoriteRemove):
+			return actionFavoriteRemove
+		case key.Matches(msg, k.Quit):
+			return actionQuit
 		default:
 			return actionNone
 		}
@@ -200,6 +276,10 @@ func (k KeyMap) actionFor(msg tea.KeyPressMsg, ctx keyContext) action {
 		return actionSearch
 	case key.Matches(msg, k.Refresh):
 		return actionRefresh
+	case key.Matches(msg, k.ToggleFavorite) && ctx.Screen == ScreenDataSets:
+		return actionToggleFavorite
+	case key.Matches(msg, k.Favorites) && ctx.Screen == ScreenDataSets:
+		return actionFavorites
 	case key.Matches(msg, k.Copybook) && ctx.Screen == ScreenRecords:
 		return actionCopybook
 	case key.Matches(msg, k.ClearOverlay) && ctx.Screen == ScreenRecords:
@@ -232,13 +312,28 @@ func (k KeyMap) shortHelp(ctx keyContext, overlay bool) []key.Binding {
 		return []key.Binding{k.Up, k.Down, k.PageUp, k.PageDown, k.Back, k.Help}
 	}
 	if ctx.DialogOpen {
-		return []key.Binding{k.Accept, k.Cancel, k.NextField}
+		if ctx.DialogFormFocused {
+			apply := k.Accept
+			apply.SetHelp("enter", "apply+save")
+			return []key.Binding{apply, k.Cancel, k.NextField}
+		}
+		apply := k.Accept
+		apply.SetHelp("enter", "apply")
+		return []key.Binding{k.Up, k.Down, apply, k.MappingAdd, k.MappingEdit, k.MappingRemove, k.Cancel}
+	}
+	if ctx.FavoritesOpen {
+		if ctx.FavoritesInput {
+			return []key.Binding{k.Accept, k.Cancel}
+		}
+		return []key.Binding{k.Up, k.Down, k.Accept, k.FavoriteNote, k.FavoriteRemove, k.Cancel}
 	}
 	if ctx.InputFocused {
 		return []key.Binding{k.Accept, k.Cancel}
 	}
 	bindings := []key.Binding{k.Up, k.Down, k.Open}
-	if ctx.Screen != ScreenRecords {
+	if ctx.Screen == ScreenDataSets {
+		bindings = append(bindings, k.Search, k.ToggleFavorite, k.Favorites)
+	} else if ctx.Screen != ScreenRecords {
 		bindings = append(bindings, k.Search)
 	} else {
 		bindings = append(bindings, k.Locate, k.WideLeft, k.WideRight, k.Copybook)
@@ -268,7 +363,9 @@ func (k KeyMap) fullHelp(ctx keyContext, overlay bool) []helpGroup {
 	}
 	navigation := []key.Binding{k.Up, k.Down, pageUp, pageDown, k.Top, k.Bottom, k.Open, k.Back}
 	actions := []key.Binding{k.Refresh}
-	if ctx.Screen != ScreenRecords {
+	if ctx.Screen == ScreenDataSets {
+		actions = append(actions, k.Search, k.ToggleFavorite, k.Favorites)
+	} else if ctx.Screen != ScreenRecords {
 		actions = append(actions, k.Search)
 	} else {
 		actions = append(actions, k.Locate, k.WideLeft, k.WideRight, k.Copybook)

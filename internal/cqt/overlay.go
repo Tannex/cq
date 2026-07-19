@@ -8,9 +8,6 @@ import (
 	"fmt"
 	"strings"
 
-	"charm.land/bubbles/v2/textinput"
-	tea "charm.land/bubbletea/v2"
-
 	"github.com/Tannex/cq/internal/copybook"
 	"github.com/Tannex/cq/internal/decode"
 	"github.com/Tannex/cq/internal/dsncopy"
@@ -282,87 +279,4 @@ func prettyRecordJSON(decoded record.DecodedRecord) string {
 		return string(encoded)
 	}
 	return out.String()
-}
-
-type copybookDialog struct {
-	local  textinput.Model
-	dsn    textinput.Model
-	format textinput.Model
-	record textinput.Model
-	focus  int
-	err    string
-}
-
-func newCopybookDialog(source CopybookSource) *copybookDialog {
-	newInput := func(prompt, placeholder string, limit int) textinput.Model {
-		input := textinput.New()
-		input.Prompt = prompt
-		input.Placeholder = placeholder
-		input.CharLimit = limit
-		input.SetWidth(58)
-		styles := input.Styles()
-		styles.Cursor.Blink = false
-		input.SetStyles(styles)
-		return input
-	}
-	dialog := &copybookDialog{
-		local:  newInput("LOCAL  ", "/path/to/CUSTOMER.cpy", 4096),
-		dsn:    newInput("DSN    ", "HLQ.COPYLIB(MEMBER)", 55),
-		format: newInput("FORMAT ", "auto | fixed | free", 5),
-		record: newInput("RECORD ", "optional 01-level name", 64),
-	}
-	dialog.local.SetValue(source.Local)
-	dialog.dsn.SetValue(source.DSN)
-	if strings.TrimSpace(source.Format) == "" {
-		source.Format = "auto"
-	}
-	dialog.format.SetValue(source.Format)
-	dialog.record.SetValue(source.Record)
-	dialog.focusAt(0)
-	return dialog
-}
-
-func (d *copybookDialog) inputs() []*textinput.Model {
-	return []*textinput.Model{&d.local, &d.dsn, &d.format, &d.record}
-}
-
-func (d *copybookDialog) setWidth(width int) {
-	// Leave room for the three-column focus marker, the seven-column prompt,
-	// and the cursor cell so a focused field never overflows the terminal.
-	fieldWidth := max(8, width-14)
-	for _, input := range d.inputs() {
-		input.SetWidth(fieldWidth)
-	}
-}
-
-func (d *copybookDialog) focusAt(index int) tea.Cmd {
-	inputs := d.inputs()
-	if index < 0 {
-		index = len(inputs) - 1
-	}
-	if index >= len(inputs) {
-		index = 0
-	}
-	for _, input := range inputs {
-		input.Blur()
-	}
-	d.focus = index
-	return inputs[index].Focus()
-}
-
-func (d *copybookDialog) moveFocus(delta int) tea.Cmd {
-	return d.focusAt(d.focus + delta)
-}
-
-func (d *copybookDialog) source() CopybookSource {
-	return CopybookSource{
-		Local: d.local.Value(), DSN: d.dsn.Value(), Format: d.format.Value(), Record: d.record.Value(),
-	}
-}
-
-func (d *copybookDialog) update(msg tea.Msg) tea.Cmd {
-	inputs := d.inputs()
-	updated, cmd := inputs[d.focus].Update(msg)
-	*inputs[d.focus] = updated
-	return cmd
 }

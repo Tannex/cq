@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Tannex/cq/internal/cqt"
+	"github.com/Tannex/cq/internal/dsnmap"
 	"github.com/Tannex/cq/internal/zosmf"
 )
 
@@ -310,43 +311,7 @@ func paginate[T any](items []T, start string, maxItems int, name func(T) string)
 }
 
 func matchPattern(name, pattern string) bool {
-	name = strings.ToUpper(strings.TrimSpace(name))
-	pattern = strings.ToUpper(strings.TrimSpace(pattern))
-	if pattern == "" || pattern == "*" {
-		return true
-	}
-	if strings.HasSuffix(pattern, "*") {
-		return strings.HasPrefix(name, strings.TrimSuffix(pattern, "*"))
-	}
-	if strings.ContainsRune(pattern, '%') {
-		return matchWildcard(name, pattern)
-	}
-	return name == pattern
-}
-
-func matchWildcard(name, pattern string) bool {
-	if pattern == "" {
-		return name == ""
-	}
-	if name == "" {
-		return pattern == ""
-	}
-	runesName := []rune(name)
-	runesPattern := []rune(pattern)
-	var match func(i, j int) bool
-	match = func(i, j int) bool {
-		if j == len(runesPattern) {
-			return i == len(runesName)
-		}
-		if runesPattern[j] == '%' {
-			return match(i+1, j+1) || (i < len(runesName) && match(i+1, j))
-		}
-		if i < len(runesName) && runesName[i] == runesPattern[j] {
-			return match(i+1, j+1)
-		}
-		return false
-	}
-	return match(0, 0)
+	return dsnmap.MatchPattern(name, pattern)
 }
 
 func demoHash(s string) int {
