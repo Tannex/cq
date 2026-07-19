@@ -60,6 +60,7 @@ const (
 	actionFavoriteRemove
 	actionFavoriteAdd
 	actionFavoriteEdit
+	actionFavoriteOpen
 	actionEdit
 	actionQuery
 	actionSaveEdit
@@ -129,6 +130,7 @@ type KeyMap struct {
 	FavoriteRemove  key.Binding
 	FavoriteAdd     key.Binding
 	FavoriteEdit    key.Binding
+	FavoriteOpen    key.Binding
 	Edit            key.Binding
 	Query           key.Binding
 	QueryComplete   key.Binding
@@ -176,6 +178,7 @@ func DefaultKeyMap() KeyMap {
 		FavoriteRemove: key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "remove favorite")),
 		FavoriteAdd:    key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "add pattern")),
 		FavoriteEdit:   key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit pattern")),
+		FavoriteOpen:   key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "open favorite")),
 		Edit:           key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit")),
 		Query:          key.NewBinding(key.WithKeys(":"), key.WithHelp(":", "jq query")),
 		// Legacy terminals report ctrl+space as the NUL byte, which decodes
@@ -284,6 +287,8 @@ func (k KeyMap) actionFor(msg tea.KeyPressMsg, ctx keyContext) action {
 			return actionFavoriteAdd
 		case key.Matches(msg, k.FavoriteEdit):
 			return actionFavoriteEdit
+		case key.Matches(msg, k.FavoriteOpen):
+			return actionFavoriteOpen
 		case key.Matches(msg, k.Quit):
 			return actionQuit
 		default:
@@ -430,7 +435,7 @@ func (k KeyMap) shortHelp(ctx keyContext, overlay bool) []key.Binding {
 		if ctx.FavoritesInput {
 			return []key.Binding{k.Accept, k.Cancel}
 		}
-		return []key.Binding{k.Up, k.Down, k.Accept, k.FavoriteAdd, k.FavoriteEdit, k.FavoriteNote, k.FavoriteRemove, k.Cancel}
+		return []key.Binding{k.Up, k.Down, k.Accept, k.FavoriteOpen, k.FavoriteAdd, k.FavoriteEdit, k.FavoriteNote, k.FavoriteRemove, k.Cancel}
 	}
 	if ctx.InputFocused {
 		return []key.Binding{k.Accept, k.Cancel}

@@ -416,3 +416,74 @@ func TestFavoritesNoteInputStillTypesAandE(t *testing.T) {
 		t.Fatalf("note input = %q", model.favPopup.note.Value())
 	}
 }
+
+func TestOpenFavoriteOpensExactDataSetDirectly(t *testing.T) {
+	store := &fakeFavoriteStore{entries: []favorites.Favorite{{Pattern: "A.CUSTOMER.DATA"}}}
+	model, browser := favoriteModel(t, store)
+	browser.readRecords = func(context.Context, zosmf.ReadRecordsRequest) (zosmf.RecordPage, error) {
+		return zosmf.RecordPage{Records: []zosmf.Record{{Number: 1, Data: []byte("ABC")}}}, nil
+	}
+
+	executeCommand(t, model, model.handleKey(keyPress('F', "F")))
+	executeCommand(t, model, model.handleKey(keyPress('o', "o")))
+	if model.favPopup != nil {
+		t.Fatal("popup stayed open")
+	}
+	if model.screen != ScreenRecords || model.dataSet.Name != "A.CUSTOMER.DATA" {
+		t.Fatalf("screen=%d dataSet=%q, want records of the favorite", model.screen, model.dataSet.Name)
+	}
+	if len(model.records) == 0 {
+		t.Fatal("records not fetched")
+	}
+	if len(store.touched) != 1 || store.touched[0] != "A.CUSTOMER.DATA" {
+		t.Fatalf("touched = %#v", store.touched)
+	}
+}
+
+func TestOpenFavoriteWarnsWhenTheDataSetIsGone(t *testing.T) {
+	store := &fakeFavoriteStore{entries: []favorites.Favorite{{Pattern: "A.DELETED.DATA"}}}
+	model, browser := favoriteModel(t, store)
+	browser.listDataSets = func(context.Context, zosmf.ListDataSetsRequest) (zosmf.DataSetPage, error) {
+		return zosmf.DataSetPage{}, nil
+	}
+
+	executeCommand(t, model, model.handleKey(keyPress('F', "F")))
+	executeCommand(t, model, model.handleKey(keyPress('o', "o")))
+	if model.screen != ScreenDataSets {
+		t.Fatalf("screen = %d, want data sets", model.screen)
+	}
+	if model.status.Level != statusWarn || !strings.Contains(model.status.Text, "A.DELETED.DATA") {
+		t.Fatalf("status = %+v", model.status)
+	}
+}
+
+func TestOpenFavoriteDegradesToFilterForPatterns(t *testing.T) {
+	store := &fakeFavoriteStore{entries: []favorites.Favorite{{Pattern: "A.*"}}}
+	model, _ := favoriteModel(t, store)
+
+	executeCommand(t, model, model.handleKey(keyPress('F', "F")))
+	executeCommand(t, model, model.handleKey(keyPress('o', "o")))
+	if model.screen != ScreenDataSets || model.prefix != "A.*" {
+		t.Fatalf("screen=%d prefix=%q, want filtered data set list", model.screen, model.prefix)
+	}
+	if model.ws().autoOpen != "" {
+		t.Fatal("pattern favorite queued an auto-open")
+	}
+}
+
+func TestOpenFavoriteSuggestsRecallForMigratedDataSets(t *testing.T) {
+	store := &fakeFavoriteStore{entries: []favorites.Favorite{{Pattern: "A.MIGRATED"}}}
+	model, browser := favoriteModel(t, store)
+	browser.listDataSets = func(context.Context, zosmf.ListDataSetsRequest) (zosmf.DataSetPage, error) {
+		return zosmf.DataSetPage{Items: []zosmf.DataSet{{Name: "A.MIGRATED", Organization: "PS", Volume: "MIGRAT"}}}, nil
+	}
+
+	executeCommand(t, model, model.handleKey(keyPress('F', "F")))
+	executeCommand(t, model, model.handleKey(keyPress('o', "o")))
+	if model.screen != ScreenDataSets {
+		t.Fatalf("screen = %d, want data sets", model.screen)
+	}
+	if model.status.Level != statusWarn || !strings.Contains(model.status.Text, "recall") {
+		t.Fatalf("status = %+v", model.status)
+	}
+}

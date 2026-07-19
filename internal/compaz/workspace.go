@@ -27,6 +27,9 @@ type workspace struct {
 	datasets     []zosmf.DataSet
 	datasetPage  pager[string]
 	datasetTotal *int
+	// autoOpen queues an exact data set name to open as soon as the next
+	// data set listing lands (the favorites "open" action); consumed once.
+	autoOpen     string
 	dataSet      zosmf.DataSet
 	members      []zosmf.Member
 	memberPage   pager[string]
