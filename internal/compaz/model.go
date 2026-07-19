@@ -30,6 +30,24 @@ const (
 	mouseWheelStep        = 3
 )
 
+// z/OSMF reports no recall progress, so a queued HRECALL is watched by
+// re-listing the data set until it stops being migrated. Checks start eager
+// for recalls served from disk, then back off for tape recalls; the watch
+// gives up with a warning after maxRecallPolls attempts (roughly half an
+// hour), surfacing the last catalog-check error if there was one.
+const maxRecallPolls = 92
+
+func recallPollDelay(attempt int) time.Duration {
+	switch {
+	case attempt <= 20: // first minute
+		return 3 * time.Second
+	case attempt <= 40: // next ~3 minutes
+		return 10 * time.Second
+	default: // up to ~30 minutes in total
+		return 30 * time.Second
+	}
+}
+
 // Options are the approved compaz command-line settings.
 type Options struct {
 	Prefix      string
@@ -160,6 +178,26 @@ type recordsResultMsg struct {
 	Meta requestMeta
 	Page zosmf.RecordPage
 	Err  error
+}
+
+type recallResultMsg struct {
+	Profile string
+	DSN     string
+	Err     error
+}
+
+type recallPollMsg struct {
+	Profile string
+	DSN     string
+	Attempt int
+}
+
+type recallCheckMsg struct {
+	Profile string
+	DSN     string
+	Attempt int
+	Page    zosmf.DataSetPage
+	Err     error
 }
 
 type overlayResultMsg struct {
@@ -495,6 +533,18 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if ws := m.targetWorkspace(msg.Profile); ws != nil {
 			return m, m.handleOverlayResult(ws, msg)
 		}
+	case recallResultMsg:
+		if ws := m.targetWorkspace(msg.Profile); ws != nil {
+			return m, m.handleRecallResult(ws, msg)
+		}
+	case recallPollMsg:
+		if ws := m.targetWorkspace(msg.Profile); ws != nil {
+			return m, m.handleRecallPoll(ws, msg)
+		}
+	case recallCheckMsg:
+		if ws := m.targetWorkspace(msg.Profile); ws != nil {
+			return m, m.handleRecallCheck(ws, msg)
+		}
 	case decodeResultMsg:
 		ws := m.targetWorkspace(msg.Profile)
 		if ws != nil {
@@ -521,7 +571,9 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.query.spin = updated
 			commands = append(commands, command)
 		}
-		if level, _ := m.effectiveStatus(); level == statusLoading {
+		// Recalls keep the status spinner alive so list rows can animate their
+		// RECALL indicator even after the status line has moved on.
+		if level, _ := m.effectiveStatus(); level == statusLoading || m.ws().hasRecalls() {
 			updated, command := m.spinner.Update(msg)
 			m.spinner = updated
 			commands = append(commands, command)
@@ -814,6 +866,8 @@ func (m *Model) handleAction(selected action) tea.Cmd {
 	case actionFavorites:
 		m.openFavoritesPopup()
 		return nil
+	case actionRecall:
+		return m.startRecall()
 	case actionEdit:
 		return m.beginEdit()
 	case actionQuery:
@@ -1241,6 +1295,14 @@ func (m *Model) openSelection() tea.Cmd {
 			return nil
 		}
 		selected := ws.datasets[index]
+		if zosmf.IsMigrated(selected) {
+			if ws.recallPending(strings.ToUpper(strings.TrimSpace(selected.Name))) {
+				ws.status = status{Level: statusLoading, Text: "recall of " + selected.Name + " is in progress"}
+			} else {
+				ws.status = status{Level: statusWarn, Text: selected.Name + " is migrated; press R to recall it"}
+			}
+			return nil
+		}
 		organization := strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(selected.Organization), " ", ""))
 		switch organization {
 		case "PS", "SEQ", "PS-L", "PSL":
@@ -1341,6 +1403,141 @@ func (m *Model) refresh() tea.Cmd {
 		return m.startRecords(ws, plan)
 	}
 	return nil
+}
+
+// startRecall submits an HRECALL for the selected migrated data set. z/OSMF
+// only acknowledges the request, so completion is watched by polling the
+// catalog; the row shows a RECALL indicator until the data set leaves
+// migration storage.
+func (m *Model) startRecall() tea.Cmd {
+	ws := m.ws()
+	if !ws.sessionReady || ws.browser == nil {
+		return nil
+	}
+	index := ws.datasetPage.selectedIndex()
+	if index < 0 || index >= len(ws.datasets) {
+		return nil
+	}
+	selected := ws.datasets[index]
+	name := strings.ToUpper(strings.TrimSpace(selected.Name))
+	if ws.recallPending(name) {
+		ws.status = status{Level: statusLoading, Text: "recall of " + name + " is already in progress"}
+		return nil
+	}
+	if !zosmf.IsMigrated(selected) {
+		ws.status = status{Level: statusWarn, Text: name + " is not migrated"}
+		return nil
+	}
+	recaller, ok := ws.browser.(zosmf.Recaller)
+	if !ok {
+		ws.status = status{Level: statusWarn, Text: "this session cannot recall data sets"}
+		return nil
+	}
+	ws.markRecall(name)
+	profile := ws.profile
+	ctx, cancel := context.WithTimeout(context.Background(), m.deps.Timeout)
+	ws.status = status{Level: statusLoading, Text: "requesting recall of " + name}
+	return m.loadingCommand(func() tea.Msg {
+		defer cancel()
+		err := recaller.RecallDataSet(ctx, name)
+		return recallResultMsg{Profile: profile, DSN: name, Err: err}
+	})
+}
+
+func (m *Model) handleRecallResult(ws *workspace, msg recallResultMsg) tea.Cmd {
+	if !ws.recallPending(msg.DSN) {
+		return nil
+	}
+	if msg.Err != nil {
+		ws.clearRecall(msg.DSN)
+		ws.status = status{Level: statusError, Text: fmt.Sprintf("recall of %s failed: %v", msg.DSN, msg.Err)}
+		return nil
+	}
+	if ws == &m.workspace && ws.browsePending == nil {
+		ws.status = status{Level: statusLoading, Text: "recalling " + msg.DSN}
+	}
+	return scheduleRecallPoll(msg.Profile, msg.DSN, 1)
+}
+
+func scheduleRecallPoll(profile, dsn string, attempt int) tea.Cmd {
+	return tea.Tick(recallPollDelay(attempt), func(time.Time) tea.Msg {
+		return recallPollMsg{Profile: profile, DSN: dsn, Attempt: attempt}
+	})
+}
+
+// handleRecallPoll re-lists one data set to see whether its recall finished.
+// The request runs outside the browse pipeline so paging and refreshes are
+// never displaced by the watcher.
+func (m *Model) handleRecallPoll(ws *workspace, msg recallPollMsg) tea.Cmd {
+	if !ws.recallPending(msg.DSN) || ws.browser == nil {
+		return nil
+	}
+	browser := ws.browser
+	ctx, cancel := context.WithTimeout(context.Background(), m.deps.Timeout)
+	request := zosmf.ListDataSetsRequest{Prefix: msg.DSN, MaxItems: 1}
+	return func() tea.Msg {
+		defer cancel()
+		page, err := browser.ListDataSets(ctx, request)
+		return recallCheckMsg{Profile: msg.Profile, DSN: msg.DSN, Attempt: msg.Attempt, Page: page, Err: err}
+	}
+}
+
+func (m *Model) handleRecallCheck(ws *workspace, msg recallCheckMsg) tea.Cmd {
+	if !ws.recallPending(msg.DSN) {
+		return nil
+	}
+	if msg.Err != nil {
+		ws.setRecallIssue(msg.DSN, msg.Err.Error())
+	} else if resolveRecalledDataSet(ws, msg.DSN, msg.Page.Items) {
+		return nil
+	}
+	if msg.Attempt >= maxRecallPolls {
+		text := "recall of " + msg.DSN + " is still running on the host; refresh later with r"
+		if issue := ws.recallIssue(msg.DSN); issue != "" {
+			text = "recall watch for " + msg.DSN + " gave up; last catalog check failed: " + issue
+		}
+		ws.clearRecall(msg.DSN)
+		ws.status = status{Level: statusWarn, Text: text}
+		return nil
+	}
+	return scheduleRecallPoll(msg.Profile, msg.DSN, msg.Attempt+1)
+}
+
+// resolveRecalledDataSet finishes the recall watch for dsn if items show it on
+// primary storage again: the cached row refreshes in place and the status
+// reports the new volume. Browse results reuse this so a manual refresh
+// resolves an indicator even when the watcher's own check has not fired yet.
+func resolveRecalledDataSet(ws *workspace, dsn string, items []zosmf.DataSet) bool {
+	for _, item := range items {
+		if strings.ToUpper(strings.TrimSpace(item.Name)) != dsn {
+			continue
+		}
+		if zosmf.IsMigrated(item) {
+			return false
+		}
+		ws.clearRecall(dsn)
+		replaceDataSetEntry(ws, dsn, item)
+		text := "recalled " + dsn
+		if volume := displayOr(item.Volume, item.Volumes); volume != "" {
+			text += " to " + volume
+		}
+		if ws.browsePending == nil {
+			ws.status = status{Level: statusReady, Text: text}
+		}
+		return true
+	}
+	return false
+}
+
+// replaceDataSetEntry refreshes one cached catalog row after a recall, so the
+// volume and attributes reflect primary storage without a full refresh.
+func replaceDataSetEntry(ws *workspace, name string, item zosmf.DataSet) {
+	for i := range ws.datasets {
+		if strings.ToUpper(strings.TrimSpace(ws.datasets[i].Name)) == name {
+			ws.datasets[i] = item
+			return
+		}
+	}
 }
 
 func (m *Model) ensureActivePage() tea.Cmd {
@@ -1520,6 +1717,17 @@ func (m *Model) handleDataSetsResult(ws *workspace, msg dataSetsResultMsg) tea.C
 		return nil
 	}
 	ws.statusForCount(len(ws.datasets), "data sets")
+	// A refresh or page fetch may observe a finished recall before the
+	// watcher's next check; resolve those indicators from this page too.
+	if ws.hasRecalls() {
+		pending := make([]string, 0, len(ws.recalls))
+		for name := range ws.recalls {
+			pending = append(pending, name)
+		}
+		for _, name := range pending {
+			resolveRecalledDataSet(ws, name, msg.Page.Items)
+		}
+	}
 	if ws != &m.workspace {
 		return nil
 	}

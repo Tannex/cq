@@ -409,9 +409,6 @@ func normalizeDataSetPrefix(value string) (string, error) {
 	if invalidBrowseName(prefix) {
 		return "", &RequestError{Field: "prefix", Message: "contains invalid data set characters"}
 	}
-	if !strings.ContainsAny(prefix, "*%") {
-		prefix += "*"
-	}
 	if len(prefix) > 44 {
 		return "", &RequestError{Field: "prefix", Message: "must not exceed 44 characters including wildcards"}
 	}

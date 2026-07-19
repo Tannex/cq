@@ -23,6 +23,8 @@ type Browser interface {
 // positive; zero is deliberately rejected because z/OSMF interprets it as
 // "return all items". Start is sent as an inclusive cursor, and a matching
 // leading boundary item is removed from the returned page.
+// Prefix is sent as dslevel exactly as given: callers spell out their own
+// wildcards, and a wildcard-free prefix looks up one catalog entry.
 type ListDataSetsRequest struct {
 	Prefix   string
 	Start    string
