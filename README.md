@@ -192,6 +192,7 @@ prefix patterns.
 | `o` | toggle raw records and the active copybook overlay |
 | `v` | toggle copybook table and pretty JSON views without refetching records |
 | `d` | show or hide the selected record/field diagnostic |
+| `:` | open the jq query popup on the record screen (needs a copybook overlay) |
 | `F10` | scroll wide raw, table, or JSON data left |
 | `F11` | scroll wide raw, table, or JSON data right |
 | `?` | toggle expanded help |

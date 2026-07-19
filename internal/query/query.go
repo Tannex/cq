@@ -4,6 +4,7 @@ package query
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -62,7 +63,13 @@ func FromJSON(raw []byte) (any, error) {
 // Run evaluates the query against one input value and calls emit for each
 // result. Errors raised by the expression (including halt) abort the run.
 func (q *Query) Run(v any, emit func(any) error) error {
-	iter := q.code.Run(v)
+	return q.RunContext(context.Background(), v, emit)
+}
+
+// RunContext evaluates like Run but honors ctx, so interactive callers can
+// bound a pathological expression instead of freezing.
+func (q *Query) RunContext(ctx context.Context, v any, emit func(any) error) error {
+	iter := q.code.RunWithContext(ctx, v)
 	for {
 		out, ok := iter.Next()
 		if !ok {
@@ -79,4 +86,13 @@ func (q *Query) Run(v any, emit func(any) error) error {
 			return err
 		}
 	}
+}
+
+// Marshal renders one query output as compact JSON in jq's own encoding.
+func Marshal(v any) string {
+	encoded, err := gojq.Marshal(v)
+	if err != nil {
+		return fmt.Sprintf("%v", v)
+	}
+	return string(encoded)
 }
