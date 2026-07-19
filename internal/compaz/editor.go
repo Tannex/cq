@@ -449,6 +449,9 @@ func (m *Model) handleEditSaveResult(msg editSaveResultMsg) tea.Cmd {
 	if msg.ETag != "" {
 		editor.etag = msg.ETag
 	}
+	// The save changed data on the host; a cached bulk query download of
+	// this workspace's records is stale.
+	ws.dropBulkRecords()
 	suffix := ""
 	if editor.dirty() {
 		suffix = " (buffer modified again since)"
