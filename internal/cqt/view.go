@@ -39,6 +39,8 @@ var consolePalette = struct {
 func (m *Model) View() tea.View {
 	var content string
 	switch {
+	case m.editor != nil:
+		content = m.editorView()
 	case m.visible <= 0 && !m.showHelp:
 		content = m.tinyView()
 	case m.mappingView != nil:
@@ -46,7 +48,7 @@ func (m *Model) View() tea.View {
 	default:
 		content = m.mainView()
 	}
-	if m.showHelp && m.width >= MinTerminalWidth && m.visible > 0 && m.mappingView == nil {
+	if m.editor == nil && m.showHelp && m.width >= MinTerminalWidth && m.visible > 0 && m.mappingView == nil {
 		content = m.overlayHelp(content)
 	} else if m.favPopup != nil && m.width >= MinTerminalWidth && m.visible > 0 && m.mappingView == nil && !m.showHelp {
 		content = m.overlayFavorites(content)
@@ -1003,6 +1005,7 @@ func (m *Model) helpLine() string {
 		DialogOpen: m.mappingView != nil, DialogFormFocused: m.mappingView != nil && m.mappingView.form != nil,
 		ShowHelp: m.showHelp, Tabs: m.hasTabs(),
 		FavoritesOpen: m.favPopup != nil, FavoritesInput: m.favPopup != nil && m.favPopup.editing,
+		EditorOpen: m.editor != nil, EditorConfirm: m.editor != nil && m.editor.confirmDiscard,
 	}
 	line := m.help.ShortHelpView(m.keys.shortHelp(ctx, m.overlay != nil))
 	return consolePalette.muted.Width(m.width).Render(truncateStyled(" "+line, m.width))

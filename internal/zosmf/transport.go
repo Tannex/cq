@@ -123,7 +123,7 @@ func (z *Client) OpenDataSet(dsn string, hint DownloadHint) (io.ReadCloser, erro
 
 func (z *Client) openRequest(ctx context.Context, dsn, dataType, recordRange string) (*http.Response, error) {
 	path := "/zosmf/restfiles/ds/" + url.PathEscape(dsn)
-	req, err := z.newAPIRequest(ctx, http.MethodGet, path, nil)
+	req, err := z.newAPIRequest(ctx, http.MethodGet, path, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -134,7 +134,7 @@ func (z *Client) openRequest(ctx context.Context, dsn, dataType, recordRange str
 	return z.doRequest(req, dsn, http.StatusOK)
 }
 
-func (z *Client) newAPIRequest(ctx context.Context, method, path string, query url.Values) (*http.Request, error) {
+func (z *Client) newAPIRequest(ctx context.Context, method, path string, query url.Values, body io.Reader) (*http.Request, error) {
 	if ctx == nil {
 		return nil, &RequestError{Field: "context", Message: "must not be nil"}
 	}
@@ -151,7 +151,7 @@ func (z *Client) newAPIRequest(ctx context.Context, method, path string, query u
 	if len(query) > 0 {
 		endpoint += "?" + query.Encode()
 	}
-	req, err := http.NewRequestWithContext(ctx, method, endpoint, nil)
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, body)
 	if err != nil {
 		return nil, fmt.Errorf("build z/OSMF request: %w", err)
 	}

@@ -55,6 +55,10 @@ const (
 	actionFavorites
 	actionFavoriteNote
 	actionFavoriteRemove
+	actionEdit
+	actionSaveEdit
+	actionReloadEdit
+	actionDiscardEdit
 	actionHelpUp
 	actionHelpDown
 	actionHelpPageUp
@@ -77,6 +81,8 @@ type keyContext struct {
 	Tabs              bool
 	FavoritesOpen     bool
 	FavoritesInput    bool
+	EditorOpen        bool
+	EditorConfirm     bool
 }
 
 // KeyMap is the single source of truth for application, input, dialog, and
@@ -113,6 +119,11 @@ type KeyMap struct {
 	Favorites       key.Binding
 	FavoriteNote    key.Binding
 	FavoriteRemove  key.Binding
+	Edit            key.Binding
+	SaveEdit        key.Binding
+	ReloadEdit      key.Binding
+	DiscardEdit     key.Binding
+	ForceQuit       key.Binding
 	NextProfile     key.Binding
 	PreviousProfile key.Binding
 }
@@ -150,12 +161,38 @@ func DefaultKeyMap() KeyMap {
 		Favorites:       key.NewBinding(key.WithKeys("F"), key.WithHelp("F", "favorites")),
 		FavoriteNote:    key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "edit note")),
 		FavoriteRemove:  key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "remove favorite")),
+		Edit:            key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit")),
+		SaveEdit:        key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "save")),
+		ReloadEdit:      key.NewBinding(key.WithKeys("ctrl+r"), key.WithHelp("ctrl+r", "reload from host")),
+		DiscardEdit:     key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "discard changes")),
+		ForceQuit:       key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit")),
 		NextProfile:     key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next profile")),
 		PreviousProfile: key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("shift+tab", "previous profile")),
 	}
 }
 
 func (k KeyMap) actionFor(msg tea.KeyPressMsg, ctx keyContext) action {
+	if ctx.EditorOpen {
+		if ctx.EditorConfirm {
+			// Any key other than an explicit discard returns to editing.
+			if key.Matches(msg, k.DiscardEdit) {
+				return actionDiscardEdit
+			}
+			return actionCancel
+		}
+		switch {
+		case key.Matches(msg, k.SaveEdit):
+			return actionSaveEdit
+		case key.Matches(msg, k.ReloadEdit):
+			return actionReloadEdit
+		case key.Matches(msg, k.Cancel):
+			return actionCancel
+		case key.Matches(msg, k.ForceQuit):
+			return actionQuit
+		default:
+			return actionNone
+		}
+	}
 	if ctx.DialogOpen {
 		if ctx.DialogFormFocused {
 			switch {
@@ -280,6 +317,8 @@ func (k KeyMap) actionFor(msg tea.KeyPressMsg, ctx keyContext) action {
 		return actionToggleFavorite
 	case key.Matches(msg, k.Favorites) && ctx.Screen == ScreenDataSets:
 		return actionFavorites
+	case key.Matches(msg, k.Edit) && ctx.Screen != ScreenRecords:
+		return actionEdit
 	case key.Matches(msg, k.Copybook) && ctx.Screen == ScreenRecords:
 		return actionCopybook
 	case key.Matches(msg, k.ClearOverlay) && ctx.Screen == ScreenRecords:
@@ -308,6 +347,12 @@ func (k KeyMap) actionFor(msg tea.KeyPressMsg, ctx keyContext) action {
 }
 
 func (k KeyMap) shortHelp(ctx keyContext, overlay bool) []key.Binding {
+	if ctx.EditorOpen {
+		if ctx.EditorConfirm {
+			return []key.Binding{k.DiscardEdit, k.Cancel}
+		}
+		return []key.Binding{k.SaveEdit, k.ReloadEdit, k.Cancel, k.ForceQuit}
+	}
 	if ctx.ShowHelp {
 		return []key.Binding{k.Up, k.Down, k.PageUp, k.PageDown, k.Back, k.Help}
 	}
@@ -332,9 +377,9 @@ func (k KeyMap) shortHelp(ctx keyContext, overlay bool) []key.Binding {
 	}
 	bindings := []key.Binding{k.Up, k.Down, k.Open}
 	if ctx.Screen == ScreenDataSets {
-		bindings = append(bindings, k.Search, k.ToggleFavorite, k.Favorites)
+		bindings = append(bindings, k.Search, k.ToggleFavorite, k.Favorites, k.Edit)
 	} else if ctx.Screen != ScreenRecords {
-		bindings = append(bindings, k.Search)
+		bindings = append(bindings, k.Search, k.Edit)
 	} else {
 		bindings = append(bindings, k.Locate, k.WideLeft, k.WideRight, k.Copybook)
 		if overlay {
@@ -364,9 +409,9 @@ func (k KeyMap) fullHelp(ctx keyContext, overlay bool) []helpGroup {
 	navigation := []key.Binding{k.Up, k.Down, pageUp, pageDown, k.Top, k.Bottom, k.Open, k.Back}
 	actions := []key.Binding{k.Refresh}
 	if ctx.Screen == ScreenDataSets {
-		actions = append(actions, k.Search, k.ToggleFavorite, k.Favorites)
+		actions = append(actions, k.Search, k.ToggleFavorite, k.Favorites, k.Edit)
 	} else if ctx.Screen != ScreenRecords {
-		actions = append(actions, k.Search)
+		actions = append(actions, k.Search, k.Edit)
 	} else {
 		actions = append(actions, k.Locate, k.WideLeft, k.WideRight, k.Copybook)
 		if overlay {

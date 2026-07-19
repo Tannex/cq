@@ -40,7 +40,7 @@ func (z *Client) ListDataSets(ctx context.Context, request ListDataSetsRequest) 
 	if start != "" {
 		query.Set("start", start)
 	}
-	req, err := z.newAPIRequest(ctx, http.MethodGet, "/zosmf/restfiles/ds", query)
+	req, err := z.newAPIRequest(ctx, http.MethodGet, "/zosmf/restfiles/ds", query, nil)
 	if err != nil {
 		return DataSetPage{}, err
 	}
@@ -106,7 +106,7 @@ func (z *Client) ListMembers(ctx context.Context, request ListMembersRequest) (M
 		query.Set("pattern", pattern)
 	}
 	path := "/zosmf/restfiles/ds/" + url.PathEscape(dataSet) + "/member"
-	req, err := z.newAPIRequest(ctx, http.MethodGet, path, query)
+	req, err := z.newAPIRequest(ctx, http.MethodGet, path, query, nil)
 	if err != nil {
 		return MemberPage{}, err
 	}
@@ -172,7 +172,7 @@ func (z *Client) ReadRecords(ctx context.Context, request ReadRecordsRequest) (R
 	}
 
 	path := "/zosmf/restfiles/ds/" + url.PathEscape(target)
-	req, err := z.newAPIRequest(ctx, http.MethodGet, path, nil)
+	req, err := z.newAPIRequest(ctx, http.MethodGet, path, nil, nil)
 	if err != nil {
 		return RecordPage{}, err
 	}

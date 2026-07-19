@@ -38,6 +38,9 @@ type Options struct {
 	Format      string
 	Record      string
 	Codepage    string
+	// ReadOnly disables edit mode entirely, restoring the strictly read-only
+	// console guarantee for operators who want it.
+	ReadOnly bool
 }
 
 // Session is the credential-safe application session returned by an injected
@@ -214,6 +217,11 @@ type Model struct {
 	locateInput textinput.Model
 	mappingView *mappingView
 	favPopup    *favoritesPopup
+	editor      *editorState
+
+	editGeneration uint64
+	editCancel     context.CancelFunc
+	editPending    bool
 
 	// mappingOps are background store writes awaiting the debounced flush;
 	// mappingSeq invalidates timers superseded by a newer queued op.
@@ -488,6 +496,10 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.flushMappingOps()
 		}
 		return m, nil
+	case editFetchResultMsg:
+		return m, m.handleEditFetchResult(msg)
+	case editSaveResultMsg:
+		return m, m.handleEditSaveResult(msg)
 	case spinner.TickMsg:
 		level, _ := m.effectiveStatus()
 		if level != statusLoading {
@@ -571,6 +583,11 @@ func (m *Model) initialCopybookSource() CopybookSource {
 }
 
 func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
+	if m.editor != nil {
+		updated, cmd := m.editor.area.Update(msg)
+		m.editor.area = updated
+		return cmd
+	}
 	if view := m.mappingView; view != nil {
 		if view.form == nil {
 			switch msg.Button {
@@ -629,8 +646,12 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		DialogFormFocused: m.mappingView != nil && m.mappingView.form != nil,
 		ShowHelp:          m.showHelp, Tabs: m.hasTabs(),
 		FavoritesOpen: m.favPopup != nil, FavoritesInput: m.favPopup != nil && m.favPopup.editing,
+		EditorOpen: m.editor != nil, EditorConfirm: m.editor != nil && m.editor.confirmDiscard,
 	}
 	selectedAction := m.keys.actionFor(msg, ctx)
+	if m.editor != nil {
+		return m.handleEditorKey(msg, selectedAction)
+	}
 	if m.favPopup != nil {
 		return m.handleFavoritesKey(msg, selectedAction)
 	}
@@ -761,6 +782,8 @@ func (m *Model) handleAction(selected action) tea.Cmd {
 	case actionFavorites:
 		m.openFavoritesPopup()
 		return nil
+	case actionEdit:
+		return m.beginEdit()
 	case actionCopybook:
 		m.openMappingView(ws)
 		return nil
@@ -1322,6 +1345,7 @@ func (m *Model) handleResize(width, height int) tea.Cmd {
 	if m.favPopup != nil {
 		m.favPopup.setWidth(width)
 	}
+	m.resizeEditor()
 
 	ws.resizePagers(m.visible, m.budget)
 	ws.jsonVertical = min(ws.jsonVertical, m.maxJSONVertical())
@@ -1791,4 +1815,5 @@ func (m *Model) cancelAll() {
 	for _, ws := range m.workspaces {
 		ws.cancelAll()
 	}
+	m.cancelEdit()
 }
