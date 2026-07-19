@@ -30,14 +30,17 @@ for Linux, macOS, and Windows on amd64 and arm64. Extract the archive you need
 and place `cq`/`compaz` (or the corresponding `.exe` on Windows) on your `PATH`.
 The attached `cq_VERSION_checksums.txt` covers both sets of release archives.
 
-Alternatively, install either executable from source with Go:
+Alternatively, install either executable with Go, pinned to a
+[release tag](https://github.com/Tannex/cq/releases) so you get a tested build:
 
 ```console
-$ go install github.com/Tannex/cq@latest
-$ go install github.com/Tannex/cq/cmd/compaz@latest
+$ go install github.com/Tannex/cq@vX.Y.Z
+$ go install github.com/Tannex/cq/cmd/compaz@vX.Y.Z
 ```
 
 Confirm the installed versions with `cq --version` and `compaz --version`.
+Building from `main` (`go install …@main`) gives the development version, which
+may be unstable — prefer release binaries or tagged versions.
 
 ## Usage
 
