@@ -5,7 +5,7 @@
 #   -o FILE     PNG output path (default artifacts/tui.png; "-" to skip PNG)
 #   -t FILE     also write a plain-text capture of the pane (tmux capture-pane)
 #   -a FILE     also write an ANSI (styled) text capture of the pane
-#   -x COLS     terminal width  (default 120)
+#   -x COLS     terminal width  (default 160)
 #   -y ROWS     terminal height (default 40)
 #   -k KEYS     tmux send-keys arguments, may repeat; each -k is one send-keys
 #               call, e.g. -k "Down Down Enter" -k "/" -k "PAY Enter"
@@ -20,7 +20,7 @@ set -euo pipefail
 shot="artifacts/tui.png"
 text_out=""
 ansi_out=""
-cols=120
+cols=160
 rows=40
 delay=0.4
 declare -a key_batches=()
@@ -80,7 +80,7 @@ fi
 if [ "$shot" != "-" ]; then
   mkdir -p "$(dirname "$shot")"
   shot="$(realpath "$shot")"
-  xvfb-run -a -s '-screen 0 1600x1000x24' \
+  xvfb-run -a -s '-screen 0 2400x1200x24' \
     sh -c '
       LC_ALL=C.UTF-8 LANG=C.UTF-8 xterm \
         -geometry "${3}x${4}+0+0" -tn xterm-direct -u8 \
