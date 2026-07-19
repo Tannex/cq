@@ -780,10 +780,9 @@ func (m *Model) queryPanel() string {
 }
 
 // overlayQuery composites the query popup over the live view with the same
-// Canvas/Layer mechanism as the help popup. Unlike help it carries no
-// background fill (the compositor blanks the covered cells to the terminal
-// default) and anchors below the table header row, so the column names the
-// expression refers to stay readable while typing.
+// Canvas/Layer mechanism and styling as the help popup. Unlike help it
+// anchors below the table header row, so the column names the expression
+// refers to stay readable while typing.
 func (m *Model) overlayQuery(background string) string {
 	popupWidth := min(76, m.width-4)
 	// Rows above the popup: optional tab bar, title, search, rule, and the
@@ -805,11 +804,11 @@ func (m *Model) overlayQuery(background string) string {
 	innerWidth := popupWidth - 4
 	contentHeight := popupHeight - 4
 
-	fill := lipgloss.NewStyle().Width(innerWidth)
-	accent := consolePalette.cyan.Bold(true)
-	body := consolePalette.plain
-	muted := consolePalette.muted
-	danger := consolePalette.danger
+	fill := consolePalette.popup.Width(innerWidth)
+	accent := consolePalette.cyan.Bold(true).Inherit(consolePalette.popup)
+	body := consolePalette.popup
+	muted := consolePalette.muted.Inherit(consolePalette.popup)
+	danger := consolePalette.danger.Inherit(consolePalette.popup)
 
 	title := accent.Render("JQ QUERY")
 	footer := m.queryFooterLines(muted, danger, innerWidth)
@@ -832,9 +831,10 @@ func (m *Model) overlayQuery(background string) string {
 		innerLines = append(innerLines, fill.Render(line))
 	}
 
-	popupStyle := lipgloss.NewStyle().
+	popupStyle := consolePalette.popup.
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(consolePalette.popupBorder.GetForeground()).
+		BorderBackground(consolePalette.popup.GetBackground()).
 		Padding(0, 1).
 		Width(popupWidth).
 		Height(popupHeight)
