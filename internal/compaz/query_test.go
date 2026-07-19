@@ -43,6 +43,11 @@ func executeQuery(t *testing.T, model *Model, command tea.Cmd) {
 // copybook overlay applied, backed by the supplied record pages.
 func queryModel(t *testing.T, pages map[int64]zosmf.RecordPage) (*Model, *fakeBrowser) {
 	t.Helper()
+	return queryModelWithCopybook(t, "01 REC.\n 05 NAME PIC X(3).\n", pages)
+}
+
+func queryModelWithCopybook(t *testing.T, copybook string, pages map[int64]zosmf.RecordPage) (*Model, *fakeBrowser) {
+	t.Helper()
 	browser := &fakeBrowser{
 		listDataSets: func(context.Context, zosmf.ListDataSetsRequest) (zosmf.DataSetPage, error) {
 			return zosmf.DataSetPage{Items: []zosmf.DataSet{{Name: "A.CUSTOMER.DATA", Organization: "PS"}}}, nil
@@ -56,7 +61,7 @@ func queryModel(t *testing.T, pages map[int64]zosmf.RecordPage) (*Model, *fakeBr
 			return Session{Browser: browser, User: "A", Encoding: "latin1"}, nil
 		},
 		LoadFile: func(context.Context, string) ([]byte, error) {
-			return []byte("01 REC.\n 05 NAME PIC X(3).\n"), nil
+			return []byte(copybook), nil
 		},
 	})
 	if err != nil {
@@ -373,5 +378,131 @@ func TestFormatElapsedGranularity(t *testing.T) {
 		if got := formatElapsed(test.d); got != test.want {
 			t.Fatalf("formatElapsed(%v) = %q, want %q", test.d, got, test.want)
 		}
+	}
+}
+
+func TestJQFieldRefQuotesSegmentsWithDashes(t *testing.T) {
+	tests := []struct {
+		parts []string
+		want  string
+	}{
+		{[]string{"NAME"}, ".NAME"},
+		{[]string{"CUST-TYPE"}, `."CUST-TYPE"`},
+		{[]string{"CUST-GRP", "NAME"}, `."CUST-GRP".NAME`},
+		{[]string{"A_1", "B-2"}, `.A_1."B-2"`},
+	}
+	for _, test := range tests {
+		if got := jqFieldRef(test.parts); got != test.want {
+			t.Fatalf("jqFieldRef(%v) = %q, want %q", test.parts, got, test.want)
+		}
+	}
+}
+
+func TestFieldTokenAtFindsThePartialReference(t *testing.T) {
+	tests := []struct {
+		value string
+		start int
+		token string
+	}{
+		{"select(.CUS", 7, "CUS"},
+		{`select(."CUS`, 7, "CUS"},
+		{".NA", 0, "NA"},
+		{"CUS", 0, "CUS"},
+		{"select(", 7, ""},
+		{"", 0, ""},
+	}
+	for _, test := range tests {
+		start, token := fieldTokenAt([]rune(test.value), len([]rune(test.value)))
+		if start != test.start || token != test.token {
+			t.Fatalf("fieldTokenAt(%q) = %d, %q, want %d, %q", test.value, start, token, test.start, test.token)
+		}
+	}
+}
+
+const dashedCopybook = "01 REC.\n 05 CUST-GRP.\n  10 CUST-TYPE PIC X(1).\n  10 NAME PIC X(2).\n"
+
+func ctrlSpace() tea.KeyPressMsg {
+	return tea.KeyPressMsg(tea.Key{Code: tea.KeySpace, Mod: tea.ModCtrl})
+}
+
+func TestQueryCompletionListNavigatesAndInsertsQuotedField(t *testing.T) {
+	model, _ := queryModelWithCopybook(t, dashedCopybook, singleRecordPage(zosmf.Record{Number: 1, Data: []byte("ABC")}))
+	openQuery(t, model)
+	model.query.input.SetValue("select(")
+	model.query.input.CursorEnd()
+
+	applyMessage(t, model, ctrlSpace())
+	comp := model.query.comp
+	if comp == nil || len(comp.filtered) != 2 {
+		t.Fatalf("completion = %#v, want two candidates", comp)
+	}
+	applyMessage(t, model, keyPress(tea.KeyDown, ""))
+	if model.query.comp.selected != 1 {
+		t.Fatalf("selected = %d, want 1", model.query.comp.selected)
+	}
+	applyMessage(t, model, keyPress(tea.KeyEnter, ""))
+	if model.query.comp != nil {
+		t.Fatal("completion list still open after insert")
+	}
+	if got := model.query.input.Value(); got != `select(."CUST-GRP".NAME` {
+		t.Fatalf("value = %q", got)
+	}
+	if model.query.running {
+		t.Fatal("insert must not run the query")
+	}
+}
+
+func TestQueryCompletionSingleMatchInsertsImmediately(t *testing.T) {
+	model, _ := queryModelWithCopybook(t, dashedCopybook, singleRecordPage(zosmf.Record{Number: 1, Data: []byte("ABC")}))
+	openQuery(t, model)
+	model.query.input.SetValue(".NA")
+	model.query.input.CursorEnd()
+
+	applyMessage(t, model, ctrlSpace())
+	if model.query.comp != nil {
+		t.Fatal("single candidate should insert without a list")
+	}
+	if got := model.query.input.Value(); got != `."CUST-GRP".NAME` {
+		t.Fatalf("value = %q", got)
+	}
+}
+
+func TestQueryCompletionFiltersWhileTypingAndCancels(t *testing.T) {
+	model, _ := queryModelWithCopybook(t, dashedCopybook, singleRecordPage(zosmf.Record{Number: 1, Data: []byte("ABC")}))
+	openQuery(t, model)
+
+	applyMessage(t, model, ctrlSpace())
+	if comp := model.query.comp; comp == nil || len(comp.filtered) != 2 {
+		t.Fatalf("completion = %#v, want two candidates", comp)
+	}
+	applyMessage(t, model, keyPress('T', "T"))
+	applyMessage(t, model, keyPress('Y', "Y"))
+	if comp := model.query.comp; comp == nil || len(comp.filtered) != 1 || comp.filtered[0].label != "CUST-GRP.CUST-TYPE" {
+		t.Fatalf("filtered = %#v, want CUST-GRP.CUST-TYPE only", comp)
+	}
+	applyMessage(t, model, keyPress(tea.KeyEscape, ""))
+	if model.query.comp != nil {
+		t.Fatal("esc should close the completion list")
+	}
+	if model.query == nil {
+		t.Fatal("esc with an open list must not close the popup")
+	}
+}
+
+func TestQueryPopupKeepsTableHeaderVisible(t *testing.T) {
+	model, _ := queryModelWithCopybook(t, dashedCopybook, singleRecordPage(zosmf.Record{Number: 1, Data: []byte("ABC")}))
+	applyMessage(t, model, tea.WindowSizeMsg{Width: 90, Height: 24})
+	openQuery(t, model)
+
+	lines := strings.Split(model.overlayQuery(model.mainView()), "\n")
+	if len(lines) < 6 {
+		t.Fatalf("composited view has %d lines", len(lines))
+	}
+	header := lines[3]
+	if !strings.Contains(header, "CUST-TYPE") || !strings.Contains(header, "RECORD") {
+		t.Fatalf("table header row not visible above the popup: %q", header)
+	}
+	if !strings.Contains(lines[4], "─") {
+		t.Fatalf("popup border expected on the row below the header: %q", lines[4])
 	}
 }

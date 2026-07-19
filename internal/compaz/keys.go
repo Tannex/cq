@@ -54,6 +54,7 @@ const (
 	actionToggleFavorite
 	actionFavorites
 	actionRecall
+	actionQueryComplete
 	actionFavoriteNote
 	actionFavoriteRemove
 	actionEdit
@@ -125,6 +126,7 @@ type KeyMap struct {
 	FavoriteRemove  key.Binding
 	Edit            key.Binding
 	Query           key.Binding
+	QueryComplete   key.Binding
 	SaveEdit        key.Binding
 	ReloadEdit      key.Binding
 	DiscardEdit     key.Binding
@@ -134,40 +136,43 @@ type KeyMap struct {
 
 func DefaultKeyMap() KeyMap {
 	return KeyMap{
-		Up:              key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
-		Down:            key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
-		PageUp:          key.NewBinding(key.WithKeys("pgup"), key.WithHelp("pgup", "page up")),
-		PageDown:        key.NewBinding(key.WithKeys("pgdown"), key.WithHelp("pgdn", "page down")),
-		Top:             key.NewBinding(key.WithKeys("home", "g"), key.WithHelp("g", "top")),
-		Bottom:          key.NewBinding(key.WithKeys("end", "G"), key.WithHelp("G", "bottom")),
-		Open:            key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open")),
-		Back:            key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
-		Search:          key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
-		Locate:          key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "locate")),
-		Refresh:         key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh")),
-		Copybook:        key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "copybook")),
-		ClearOverlay:    key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "clear overlay")),
-		ToggleOverlay:   key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "raw/overlay")),
-		ToggleView:      key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "table/json")),
-		Diagnostics:     key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "diagnostics")),
-		Help:            key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
-		Quit:            key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
-		WideLeft:        key.NewBinding(key.WithKeys("f10", "left", "h"), key.WithHelp("←/h", "pan left")),
-		WideRight:       key.NewBinding(key.WithKeys("f11", "right", "l"), key.WithHelp("→/l", "pan right")),
-		Accept:          key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "apply")),
-		Cancel:          key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
-		NextField:       key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next field")),
-		PreviousField:   key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("shift+tab", "previous field")),
-		MappingAdd:      key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "add mapping")),
-		MappingEdit:     key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit mapping")),
-		MappingRemove:   key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "remove mapping")),
-		ToggleFavorite:  key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "favorite")),
-		Favorites:       key.NewBinding(key.WithKeys("F"), key.WithHelp("F", "favorites")),
-		Recall:          key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "recall migrated")),
-		FavoriteNote:    key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "edit note")),
-		FavoriteRemove:  key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "remove favorite")),
-		Edit:            key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit")),
-		Query:           key.NewBinding(key.WithKeys(":"), key.WithHelp(":", "jq query")),
+		Up:             key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
+		Down:           key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
+		PageUp:         key.NewBinding(key.WithKeys("pgup"), key.WithHelp("pgup", "page up")),
+		PageDown:       key.NewBinding(key.WithKeys("pgdown"), key.WithHelp("pgdn", "page down")),
+		Top:            key.NewBinding(key.WithKeys("home", "g"), key.WithHelp("g", "top")),
+		Bottom:         key.NewBinding(key.WithKeys("end", "G"), key.WithHelp("G", "bottom")),
+		Open:           key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open")),
+		Back:           key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
+		Search:         key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
+		Locate:         key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "locate")),
+		Refresh:        key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh")),
+		Copybook:       key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "copybook")),
+		ClearOverlay:   key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "clear overlay")),
+		ToggleOverlay:  key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "raw/overlay")),
+		ToggleView:     key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "table/json")),
+		Diagnostics:    key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "diagnostics")),
+		Help:           key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
+		Quit:           key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
+		WideLeft:       key.NewBinding(key.WithKeys("f10", "left", "h"), key.WithHelp("←/h", "pan left")),
+		WideRight:      key.NewBinding(key.WithKeys("f11", "right", "l"), key.WithHelp("→/l", "pan right")),
+		Accept:         key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "apply")),
+		Cancel:         key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
+		NextField:      key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next field")),
+		PreviousField:  key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("shift+tab", "previous field")),
+		MappingAdd:     key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "add mapping")),
+		MappingEdit:    key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit mapping")),
+		MappingRemove:  key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "remove mapping")),
+		ToggleFavorite: key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "favorite")),
+		Favorites:      key.NewBinding(key.WithKeys("F"), key.WithHelp("F", "favorites")),
+		Recall:         key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "recall migrated")),
+		FavoriteNote:   key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "edit note")),
+		FavoriteRemove: key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "remove favorite")),
+		Edit:           key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit")),
+		Query:          key.NewBinding(key.WithKeys(":"), key.WithHelp(":", "jq query")),
+		// Legacy terminals report ctrl+space as the NUL byte, which decodes
+		// as ctrl+@; accept both encodings.
+		QueryComplete:   key.NewBinding(key.WithKeys("ctrl+@", "ctrl+space"), key.WithHelp("ctrl+space", "insert field")),
 		SaveEdit:        key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "save")),
 		ReloadEdit:      key.NewBinding(key.WithKeys("ctrl+r"), key.WithHelp("ctrl+r", "reload from host")),
 		DiscardEdit:     key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "discard changes")),
@@ -280,6 +285,16 @@ func (k KeyMap) actionFor(msg tea.KeyPressMsg, ctx keyContext) action {
 			return actionPageUp
 		case key.Matches(msg, k.PageDown):
 			return actionPageDown
+		case key.Matches(msg, k.QueryComplete):
+			return actionQueryComplete
+		// Only the arrow keys navigate: the j/k aliases must stay typable in
+		// the expression input.
+		case msg.Code == tea.KeyUp && msg.Mod == 0:
+			return actionUp
+		case msg.Code == tea.KeyDown && msg.Mod == 0:
+			return actionDown
+		case key.Matches(msg, k.NextField):
+			return actionNextField
 		default:
 			return actionNone
 		}
@@ -382,7 +397,7 @@ func (k KeyMap) shortHelp(ctx keyContext, overlay bool) []key.Binding {
 		run.SetHelp("enter", "run query")
 		cancel := k.Cancel
 		cancel.SetHelp("esc", "cancel/close")
-		return []key.Binding{run, k.PageUp, k.PageDown, cancel}
+		return []key.Binding{run, k.QueryComplete, k.PageUp, k.PageDown, cancel}
 	}
 	if ctx.DialogOpen {
 		if ctx.DialogFormFocused {
