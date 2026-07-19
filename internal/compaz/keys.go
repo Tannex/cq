@@ -55,6 +55,7 @@ const (
 	actionFavorites
 	actionRecall
 	actionQueryComplete
+	actionQueryCopy
 	actionFavoriteNote
 	actionFavoriteRemove
 	actionEdit
@@ -127,6 +128,7 @@ type KeyMap struct {
 	Edit            key.Binding
 	Query           key.Binding
 	QueryComplete   key.Binding
+	QueryCopy       key.Binding
 	SaveEdit        key.Binding
 	ReloadEdit      key.Binding
 	DiscardEdit     key.Binding
@@ -172,7 +174,10 @@ func DefaultKeyMap() KeyMap {
 		Query:          key.NewBinding(key.WithKeys(":"), key.WithHelp(":", "jq query")),
 		// Legacy terminals report ctrl+space as the NUL byte, which decodes
 		// as ctrl+@; accept both encodings.
-		QueryComplete:   key.NewBinding(key.WithKeys("ctrl+@", "ctrl+space"), key.WithHelp("ctrl+space", "insert field")),
+		QueryComplete: key.NewBinding(key.WithKeys("ctrl+@", "ctrl+space"), key.WithHelp("ctrl+space", "insert field")),
+		// A shifted letter arrives as its text ("C"), indistinguishable from
+		// typing it into the expression input, so copy gets a control chord.
+		QueryCopy:       key.NewBinding(key.WithKeys("ctrl+y"), key.WithHelp("ctrl+y", "copy results")),
 		SaveEdit:        key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "save")),
 		ReloadEdit:      key.NewBinding(key.WithKeys("ctrl+r"), key.WithHelp("ctrl+r", "reload from host")),
 		DiscardEdit:     key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "discard changes")),
@@ -287,6 +292,8 @@ func (k KeyMap) actionFor(msg tea.KeyPressMsg, ctx keyContext) action {
 			return actionPageDown
 		case key.Matches(msg, k.QueryComplete):
 			return actionQueryComplete
+		case key.Matches(msg, k.QueryCopy):
+			return actionQueryCopy
 		// Only the arrow keys navigate: the j/k aliases must stay typable in
 		// the expression input.
 		case msg.Code == tea.KeyUp && msg.Mod == 0:
@@ -397,7 +404,7 @@ func (k KeyMap) shortHelp(ctx keyContext, overlay bool) []key.Binding {
 		run.SetHelp("enter", "run query")
 		cancel := k.Cancel
 		cancel.SetHelp("esc", "cancel/close")
-		return []key.Binding{run, k.QueryComplete, k.PageUp, k.PageDown, cancel}
+		return []key.Binding{run, k.QueryComplete, k.QueryCopy, k.PageUp, k.PageDown, cancel}
 	}
 	if ctx.DialogOpen {
 		if ctx.DialogFormFocused {

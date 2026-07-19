@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"regexp"
 	"strings"
 	"time"
@@ -59,6 +60,7 @@ type queryPopup struct {
 	arrayMode bool   // whole-dataset fallback ran after zero streaming matches
 	err       string // compile/setup error shown instead of the footer
 	lastErr   string // most recent per-record runtime error
+	notice    string // copy feedback appended to the footer state
 
 	generation uint64
 	ctx        context.Context
@@ -80,6 +82,39 @@ type queryEvalMsg struct {
 	Canceled   bool
 	Array      bool // result of the whole-dataset array fallback
 	LastError  string
+}
+
+// queryPlaceholderProvider produces the example expression shown as the input
+// placeholder, built from the overlay's flattened field paths. A variable so a
+// smarter generator can replace the static template set later.
+type queryPlaceholderProvider func(fields []completionField) string
+
+var queryPlaceholder queryPlaceholderProvider = examplePlaceholder
+
+// queryExampleTemplates double as discovery for the console's syntax: filters,
+// projections, and the whole-dataset array-mode aggregates. {f1}/{f2} are
+// replaced with jq references to actual overlay fields.
+var queryExampleTemplates = []string{
+	`select({f1} == "VALUE") | {f2}`,
+	`select({f1} != null) | [{f1}, {f2}]`,
+	`{f1}`,
+	`[{f1}, {f2}]`,
+	`select({f1} | test("^A"))`,
+	`map({f1}) | unique`,
+	`map({f1}) | unique | length`,
+	`group_by({f1}) | map({key: (.[0] | {f1}), count: length})`,
+	`length`,
+}
+
+func examplePlaceholder(fields []completionField) string {
+	if len(fields) == 0 {
+		return `select(.FIELD == "VALUE") | .FIELD`
+	}
+	template := queryExampleTemplates[rand.IntN(len(queryExampleTemplates))]
+	return strings.NewReplacer(
+		"{f1}", jqFieldRef(fields[rand.IntN(len(fields))].parts),
+		"{f2}", jqFieldRef(fields[rand.IntN(len(fields))].parts),
+	).Replace(template)
 }
 
 func newQueryPopup(width int) *queryPopup {
@@ -284,6 +319,7 @@ func (m *Model) openQueryPopup() tea.Cmd {
 		for _, column := range overlay.Columns {
 			popup.fields = append(popup.fields, completionField{label: column.Path, parts: column.Parts})
 		}
+		popup.input.Placeholder = queryPlaceholder(popup.fields)
 	}
 	m.query = popup
 	return popup.input.Focus()
@@ -299,6 +335,8 @@ func (m *Model) handleQueryKey(msg tea.KeyPressMsg, selected action) tea.Cmd {
 	case actionQueryComplete:
 		popup.openCompletion()
 		return nil
+	case actionQueryCopy:
+		return m.copyQueryResults()
 	case actionAccept, actionNextField:
 		if comp := popup.comp; comp != nil {
 			popup.insertCompletion(comp.filtered[comp.selected])
@@ -428,7 +466,7 @@ func (m *Model) runQuery() tea.Cmd {
 	popup.lines = nil
 	popup.matches, popup.errored, popup.searched, popup.next = 0, 0, 0, 0
 	popup.scroll = 0
-	popup.err, popup.lastErr = "", ""
+	popup.err, popup.lastErr, popup.notice = "", "", ""
 	popup.done, popup.capped, popup.cancelled, popup.arrayMode = false, false, false, false
 	popup.running = true
 	popup.started = time.Now()
@@ -675,7 +713,26 @@ func (m *Model) queryFooter() string {
 	if popup.errored > 0 {
 		state += fmt.Sprintf(", %d records skipped", popup.errored)
 	}
+	if popup.notice != "" {
+		state += " — " + popup.notice
+	}
 	return state
+}
+
+// copyQueryResults puts the retained result lines on the system clipboard via
+// OSC 52, so the copy works over SSH too. tea.SetClipboard is fire-and-forget;
+// the footer notice is the only feedback.
+func (m *Model) copyQueryResults() tea.Cmd {
+	popup := m.query
+	if len(popup.lines) == 0 {
+		return nil
+	}
+	if popup.capped {
+		popup.notice = fmt.Sprintf("copied the %d retained lines (result cap)", len(popup.lines))
+	} else {
+		popup.notice = fmt.Sprintf("copied %d lines", len(popup.lines))
+	}
+	return tea.SetClipboard(strings.Join(popup.lines, "\n"))
 }
 
 // wrapPlain hard-wraps text at width, returning at most maxLines lines with
@@ -812,11 +869,7 @@ func (m *Model) overlayQuery(background string) string {
 		fill.Render(truncateStyled(m.query.input.View(), innerWidth)),
 		fill.Render(muted.Render(strings.Repeat("─", max(0, innerWidth)))),
 	}
-	completion := m.queryCompletionLines(innerWidth, max(1, contentHeight-2-len(footer)))
-	for _, line := range completion {
-		innerLines = append(innerLines, fill.Render(line))
-	}
-	for _, line := range m.queryResultLines(body, muted, innerWidth, max(1, contentHeight-1-len(completion)-len(footer))) {
+	for _, line := range m.queryResultLines(body, muted, innerWidth, max(1, contentHeight-1-len(footer))) {
 		innerLines = append(innerLines, fill.Render(line))
 	}
 	for len(innerLines) < contentHeight+2-len(footer) {
@@ -838,8 +891,45 @@ func (m *Model) overlayQuery(background string) string {
 	x := (m.width - popupWidth) / 2
 
 	canvas := lipgloss.NewCanvas(m.width, m.height)
-	mainLayer := lipgloss.NewLayer(background).X(0).Y(0).Z(0)
-	popupLayer := lipgloss.NewLayer(popup).X(x).Y(top).Z(1)
-	compositor := lipgloss.NewCompositor(mainLayer, popupLayer)
+	layers := []*lipgloss.Layer{
+		lipgloss.NewLayer(background).X(0).Y(0).Z(0),
+		lipgloss.NewLayer(popup).X(x).Y(top).Z(1),
+	}
+	// The ctrl+space field list is its own pop-over so it overlaps the
+	// results instead of displacing them. The input renders at top+2 (border
+	// plus title row); the list hangs directly under it, anchored to the
+	// token being completed.
+	if box, offset := m.queryCompletionBox(innerWidth, max(1, min(6, m.height-top-6))); box != "" {
+		compX := min(x+2+offset, x+popupWidth-lipgloss.Width(strings.SplitN(box, "\n", 2)[0])-1)
+		layers = append(layers, lipgloss.NewLayer(box).X(max(x+1, compX)).Y(top+3).Z(2))
+	}
+	compositor := lipgloss.NewCompositor(layers...)
 	return canvas.Compose(compositor).Render()
+}
+
+// queryCompletionBox renders the open completion list as a bordered pop-over.
+// The returned offset is the column of the partial token inside the popup's
+// inner width, so the caller can anchor the box under the text it replaces.
+func (m *Model) queryCompletionBox(innerWidth, maxRows int) (string, int) {
+	comp := m.query.comp
+	if comp == nil || maxRows < 1 {
+		return "", 0
+	}
+	width := 0
+	for _, field := range comp.filtered {
+		width = max(width, lipgloss.Width(field.label))
+	}
+	width = min(width+2, innerWidth-2)
+	if width < 4 {
+		return "", 0
+	}
+	rows := m.queryCompletionLines(width, maxRows)
+	// Width is the full block including the border, so the row width gets +2.
+	box := consolePalette.popup.
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(consolePalette.popupBorder.GetForeground()).
+		Width(width + 2).
+		Render(strings.Join(rows, "\n"))
+	start, _ := fieldTokenAt([]rune(m.query.input.Value()), m.query.input.Position())
+	return box, lipgloss.Width(m.query.input.Prompt) + start
 }
