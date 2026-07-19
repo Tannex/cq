@@ -1,4 +1,4 @@
-package cqt
+package compaz
 
 import (
 	"charm.land/bubbles/v2/key"

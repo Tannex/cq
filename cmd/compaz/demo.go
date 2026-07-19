@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Tannex/cq/internal/cqt"
+	"github.com/Tannex/cq/internal/compaz"
 	"github.com/Tannex/cq/internal/dsnmap"
 	"github.com/Tannex/cq/internal/zosmf"
 )
@@ -19,15 +19,15 @@ import (
 // plausible data sets, PDS members, and records for visual inspection.
 type demoBrowser struct{}
 
-func loadDemoSession(ctx context.Context, profile string) (cqt.Session, error) {
+func loadDemoSession(ctx context.Context, profile string) (compaz.Session, error) {
 	if err := ctx.Err(); err != nil {
-		return cqt.Session{}, err
+		return compaz.Session{}, err
 	}
 	user := "DEMOUSER"
 	if profile != "" {
 		user = strings.ToUpper(profile) + "USR"
 	}
-	return cqt.Session{
+	return compaz.Session{
 		Browser:  &demoBrowser{},
 		User:     user,
 		Encoding: "latin1",

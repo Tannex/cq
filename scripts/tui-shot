@@ -12,8 +12,8 @@
 #   -d SECS     settle delay after launch and after each -k (default 0.4)
 #
 # Examples:
-#   scripts/tui-shot -o artifacts/main.png -- ./cqt --demo
-#   scripts/tui-shot -t artifacts/help.txt -k "?" -- ./cqt --demo
+#   scripts/tui-shot -o artifacts/main.png -- ./compaz --demo
+#   scripts/tui-shot -t artifacts/help.txt -k "?" -- ./compaz --demo
 
 set -euo pipefail
 

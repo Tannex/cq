@@ -1,4 +1,4 @@
-package cqt
+package compaz
 
 import (
 	"fmt"
@@ -59,14 +59,14 @@ func (m *Model) View() tea.View {
 	view := tea.NewView(content)
 	view.AltScreen = true
 	view.MouseMode = tea.MouseModeCellMotion
-	view.WindowTitle = "cqt — z/OSMF data sets"
+	view.WindowTitle = "Compa/z — z/OSMF data sets"
 	return view
 }
 
 func (m *Model) tinyView() string {
 	width := max(1, m.width)
 	height := max(1, m.height)
-	title := consolePalette.navy.Bold(true).Width(width).Render(" CQT  z/OSMF DATA SET CONSOLE ")
+	title := consolePalette.navy.Bold(true).Width(width).Render(" COMPA/Z  z/OSMF DATA SET CONSOLE ")
 	message := fmt.Sprintf("TERMINAL TOO SMALL\nresize to at least %d columns × %d rows\ncurrent %d × %d\nno row request dispatched", MinTerminalWidth, MinTerminalHeight(m.hasTabs()), m.width, m.height)
 	body := lipgloss.Place(width, max(1, height-1), lipgloss.Center, lipgloss.Center, consolePalette.amber.Render(message))
 	return fitHeight(title+"\n"+body, width, height)
@@ -303,7 +303,7 @@ func (m *Model) overlayHelp(background string) string {
 // the background, so the footer advertises no save keys.
 func (m *Model) mappingViewContent() string {
 	view := m.mappingView
-	title := consolePalette.navy.Bold(true).Width(m.width).Render(" CQT  COPYBOOK MAPPINGS ")
+	title := consolePalette.navy.Bold(true).Width(m.width).Render(" COMPA/Z  COPYBOOK MAPPINGS ")
 	subtitle := consolePalette.panel.Width(m.width).Render(" " + view.target + "  mappings are matched most precise first and saved automatically ")
 
 	var lines []string
