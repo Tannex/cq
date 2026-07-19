@@ -11,7 +11,7 @@ import (
 	"github.com/Tannex/cq/internal/zosmf"
 )
 
-const amberSGR = "38;2;251;191;36"
+var amberSGR = fgSGR(ayu.fn)
 
 var jclSample = []string{
 	"//NIGHTLY  JOB (ACCT01),'NIGHTLY BATCH',CLASS=A",

@@ -3,6 +3,8 @@ package compaz
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"image/color"
 	"strings"
 	"testing"
 
@@ -14,12 +16,19 @@ import (
 	"github.com/Tannex/cq/internal/zosmf"
 )
 
+// fgSGR returns the truecolor SGR foreground fragment for a palette color so
+// assertions track the palette instead of hardcoding hex values.
+func fgSGR(c color.Color) string {
+	r, g, b, _ := c.RGBA()
+	return fmt.Sprintf("38;2;%d;%d;%d", r>>8, g>>8, b>>8)
+}
+
 // SGR foreground fragments for the palette colors used by cell tints.
-const (
-	cyanSGR   = "38;2;94;234;212"
-	greenSGR  = "38;2;74;222;128"
-	mutedSGR  = "38;2;148;163;184"
-	dangerSGR = "38;2;251;113;133"
+var (
+	cyanSGR   = fgSGR(ayu.tag)
+	greenSGR  = fgSGR(ayu.str)
+	mutedSGR  = fgSGR(ayu.comment)
+	dangerSGR = fgSGR(ayu.markup)
 )
 
 func TestRightAligned(t *testing.T) {

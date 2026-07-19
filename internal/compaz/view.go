@@ -2,6 +2,7 @@ package compaz
 
 import (
 	"fmt"
+	"image/color"
 	"strconv"
 	"strings"
 
@@ -18,22 +19,52 @@ import (
 
 const hScrollStep = 8
 
+// ayu holds the Ayu Dark scheme (https://github.com/ayu-theme/ayu-colors),
+// hardcoded so the TUI carries no theme dependency. Alpha-composited Ayu
+// values (selection, comment, status-chip fills) are pre-blended onto the
+// editor background because terminal cells cannot layer translucent color.
+var ayu = struct {
+	bg, panelBg, popupBg, headerBg, selectionBg color.Color
+	fg, fgBright, uiFg                          color.Color
+	accent, tag, str, fn, markup, comment       color.Color
+	successBg, warnBg, dangerBg, infoBg         color.Color
+}{
+	bg:          lipgloss.Color("#0B0E14"), // editor.bg
+	panelBg:     lipgloss.Color("#141821"), // ui.panel.bg
+	popupBg:     lipgloss.Color("#0F131A"), // ui.popup.bg
+	headerBg:    lipgloss.Color("#15283E"), // selection tint over bg
+	selectionBg: lipgloss.Color("#18324F"), // editor.selection.active over bg
+	fg:          lipgloss.Color("#BFBDB6"), // editor.fg
+	fgBright:    lipgloss.Color("#E6E1CF"),
+	uiFg:        lipgloss.Color("#5A6378"), // ui.fg
+	accent:      lipgloss.Color("#E6B450"), // common.accent
+	tag:         lipgloss.Color("#39BAE6"), // syntax.tag
+	str:         lipgloss.Color("#AAD94C"), // syntax.string
+	fn:          lipgloss.Color("#FFB454"), // syntax.func
+	markup:      lipgloss.Color("#F07178"), // syntax.markup
+	comment:     lipgloss.Color("#ACB6BF"), // syntax.comment (55% alpha via Faint)
+	successBg:   lipgloss.Color("#3B4B25"),
+	warnBg:      lipgloss.Color("#544027"),
+	dangerBg:    lipgloss.Color("#492428"),
+	infoBg:      lipgloss.Color("#194253"),
+}
+
 var consolePalette = struct {
 	navy, panel, header, activeTab, popup, popupBorder, cyan, green, amber, danger, muted, bright, selected, plain lipgloss.Style
 }{
-	navy:        lipgloss.NewStyle().Background(lipgloss.Color("#111827")).Foreground(lipgloss.Color("#CCFBF1")),
-	panel:       lipgloss.NewStyle().Background(lipgloss.Color("#1F2937")).Foreground(lipgloss.Color("#CBD5E1")),
-	header:      lipgloss.NewStyle().Background(lipgloss.Color("#334155")).Foreground(lipgloss.Color("#E2E8F0")).Bold(true),
-	activeTab:   lipgloss.NewStyle().Background(lipgloss.Color("#334155")).Foreground(lipgloss.Color("#5EEAD4")).Bold(true),
-	popup:       lipgloss.NewStyle().Background(lipgloss.Color("#0B1220")).Foreground(lipgloss.Color("#E2E8F0")),
-	popupBorder: lipgloss.NewStyle().Foreground(lipgloss.Color("#2DD4BF")),
-	cyan:        lipgloss.NewStyle().Foreground(lipgloss.Color("#5EEAD4")),
-	green:       lipgloss.NewStyle().Foreground(lipgloss.Color("#4ADE80")),
-	amber:       lipgloss.NewStyle().Foreground(lipgloss.Color("#FBBF24")),
-	danger:      lipgloss.NewStyle().Foreground(lipgloss.Color("#FB7185")),
-	muted:       lipgloss.NewStyle().Foreground(lipgloss.Color("#94A3B8")).Faint(true),
-	bright:      lipgloss.NewStyle().Foreground(lipgloss.Color("#F8FAFC")),
-	selected:    lipgloss.NewStyle().Background(lipgloss.Color("#263449")).Foreground(lipgloss.Color("#99F6E4")).Bold(true),
+	navy:        lipgloss.NewStyle().Background(ayu.bg).Foreground(ayu.fgBright),
+	panel:       lipgloss.NewStyle().Background(ayu.panelBg).Foreground(ayu.fg),
+	header:      lipgloss.NewStyle().Background(ayu.headerBg).Foreground(ayu.fgBright).Bold(true),
+	activeTab:   lipgloss.NewStyle().Background(ayu.headerBg).Foreground(ayu.accent).Bold(true),
+	popup:       lipgloss.NewStyle().Background(ayu.popupBg).Foreground(ayu.fgBright),
+	popupBorder: lipgloss.NewStyle().Foreground(ayu.accent),
+	cyan:        lipgloss.NewStyle().Foreground(ayu.tag),
+	green:       lipgloss.NewStyle().Foreground(ayu.str),
+	amber:       lipgloss.NewStyle().Foreground(ayu.fn),
+	danger:      lipgloss.NewStyle().Foreground(ayu.markup),
+	muted:       lipgloss.NewStyle().Foreground(ayu.comment).Faint(true),
+	bright:      lipgloss.NewStyle().Foreground(ayu.fgBright),
+	selected:    lipgloss.NewStyle().Background(ayu.selectionBg).Foreground(ayu.accent).Bold(true),
 	plain:       lipgloss.NewStyle(),
 }
 
@@ -401,8 +432,8 @@ func (m *Model) titleLine() string {
 	}
 
 	accent := consolePalette.cyan.Bold(true).Inherit(consolePalette.navy)
-	plain := consolePalette.navy.Foreground(lipgloss.Color("#CBD5E1"))
-	chipStyle := consolePalette.navy.Foreground(lipgloss.Color("#94A3B8")).Faint(true)
+	plain := consolePalette.navy.Foreground(ayu.fg)
+	chipStyle := consolePalette.navy.Foreground(ayu.comment).Faint(true)
 
 	plainMiddle := "  " + body
 	chipText := ""
@@ -426,8 +457,8 @@ func (m *Model) titleLine() string {
 }
 
 func (m *Model) searchLine() string {
-	label := consolePalette.panel.Foreground(lipgloss.Color("#64748B"))
-	value := consolePalette.panel.Foreground(lipgloss.Color("#F8FAFC"))
+	label := consolePalette.panel.Foreground(ayu.uiFg)
+	value := consolePalette.panel.Foreground(ayu.fgBright)
 
 	var line string
 	switch m.screen {
@@ -1008,13 +1039,13 @@ func (m *Model) renderStatusLabel(level statusLevel) string {
 	chip := fmt.Sprintf("%-*s", 7, label)
 	switch level {
 	case statusReady:
-		return consolePalette.green.Background(lipgloss.Color("#064E3B")).Bold(true).Render(chip)
+		return consolePalette.green.Background(ayu.successBg).Bold(true).Render(chip)
 	case statusWarn, statusLoading:
-		return consolePalette.amber.Background(lipgloss.Color("#78350F")).Bold(true).Render(chip)
+		return consolePalette.amber.Background(ayu.warnBg).Bold(true).Render(chip)
 	case statusError:
-		return consolePalette.danger.Background(lipgloss.Color("#7F1D1D")).Bold(true).Render(chip)
+		return consolePalette.danger.Background(ayu.dangerBg).Bold(true).Render(chip)
 	case statusEmpty:
-		return consolePalette.cyan.Background(lipgloss.Color("#164E63")).Bold(true).Render(chip)
+		return consolePalette.cyan.Background(ayu.infoBg).Bold(true).Render(chip)
 	default:
 		return chip
 	}
