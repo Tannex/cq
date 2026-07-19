@@ -38,6 +38,11 @@ type workspace struct {
 	// records, so horizontal panning does not rescan the whole cache.
 	rawLongest int
 	recordPage pager[int64]
+	// syntaxKind caches the detected content type of the cached records;
+	// syntaxSampled remembers the cache size at detection time so the verdict
+	// refreshes once per loaded page, not per render frame.
+	syntaxKind    sourceKind
+	syntaxSampled int
 
 	overlay       *overlay
 	overlaySource CopybookSource
@@ -145,6 +150,8 @@ func (ws *workspace) matchName() string {
 func (ws *workspace) resetRecordState() {
 	ws.records = nil
 	ws.rawLongest = 0
+	ws.syntaxKind = sourcePlain
+	ws.syntaxSampled = 0
 	ws.recordPage.reset(ws.recordPage.visible, ws.recordPage.budget)
 	ws.horizontal = 0
 	ws.jsonVertical = 0

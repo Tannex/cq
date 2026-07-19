@@ -730,11 +730,18 @@ func (m *Model) rawRecordView() string {
 	numberWidth := m.recordNumberWidth()
 	header := consolePalette.header.Render(fmt.Sprintf("  %-*s │ RAW DATA", numberWidth, "RECORD"))
 	start, end, showEnd := endMarkerWindow(&m.recordPage)
+	selected := m.recordPage.selectedIndex()
+	syntax := m.recordSyntax()
 	lines := make([]string, end-start)
 	for i, row := range m.records[start:end] {
-		lines[i] = decode.DisplayBytes(row.Record.Data, m.charmap)
+		line := decode.DisplayBytes(row.Record.Data, m.charmap)
+		// The cursor row stays untinted so the selected-row style renders
+		// uniformly; elsewhere tints survive the viewport's ANSI-aware cut.
+		if syntax != sourcePlain && start+i != selected {
+			line = highlightSourceLine(line, syntax)
+		}
+		lines[i] = line
 	}
-	selected := m.recordPage.selectedIndex()
 	height := m.visible
 	if showEnd {
 		height--

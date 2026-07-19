@@ -289,6 +289,14 @@ const demoRecordLength = 80
 var demoBaseDate = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
 func demoRecords(dataSet, member string) []zosmf.Record {
+	upperSet := strings.ToUpper(strings.TrimSpace(dataSet))
+	upperMember := strings.ToUpper(strings.TrimSpace(member))
+	switch {
+	case strings.Contains(upperSet, "JCLLIB"):
+		return demoSourceRecords(demoJCLLines(upperMember))
+	case strings.Contains(upperSet, "COBOL"):
+		return demoSourceRecords(demoCOBOLLines(upperMember))
+	}
 	seed := demoHash(dataSet + "(" + strings.ToUpper(strings.TrimSpace(member)) + ")")
 	records := make([]zosmf.Record, demoRecordCount)
 	for i := 0; i < demoRecordCount; i++ {
@@ -306,6 +314,91 @@ func demoRecords(dataSet, member string) []zosmf.Record {
 		records[i] = zosmf.Record{Number: int64(n), Data: []byte(line)}
 	}
 	return records
+}
+
+// demoSourceRecords pads source lines to the demo record length so JCL and
+// COBOL members look like real fixed-block library members.
+func demoSourceRecords(lines []string) []zosmf.Record {
+	records := make([]zosmf.Record, len(lines))
+	for i, line := range lines {
+		if len(line) < demoRecordLength {
+			line += strings.Repeat(" ", demoRecordLength-len(line))
+		} else if len(line) > demoRecordLength {
+			line = line[:demoRecordLength]
+		}
+		records[i] = zosmf.Record{Number: int64(i + 1), Data: []byte(line)}
+	}
+	return records
+}
+
+// demoJCLLines exercises every highlighted JCL token class: comments,
+// statement names, operations, keyword parameters, in-stream data, delimiters.
+func demoJCLLines(member string) []string {
+	job := member
+	if job == "" {
+		job = "DEMOJOB"
+	}
+	return []string{
+		"//" + job + " JOB (ACCT01),'NIGHTLY BATCH',CLASS=A,MSGCLASS=X,NOTIFY=&SYSUID",
+		"//*",
+		"//* NIGHTLY CUSTOMER MASTER REFRESH - DEMO MEMBER",
+		"//*",
+		"//JOBLIB   DD DSN=DEMO.LOADLIB,DISP=SHR",
+		"//STEP01   EXEC PGM=IEFBR14",
+		"//NEWFILE  DD DSN=DEMO.OUTPUT.DAILY,DISP=(NEW,CATLG,DELETE),",
+		"//            SPACE=(TRK,(15,5),RLSE),UNIT=SYSDA,",
+		"//            DCB=(RECFM=FB,LRECL=80,BLKSIZE=27920)",
+		"//STEP02   EXEC PGM=SORT,COND=(0,NE,STEP01)",
+		"//SYSOUT   DD SYSOUT=*",
+		"//SORTIN   DD DSN=DEMO.CUSTOMER.MASTER,DISP=SHR",
+		"//SORTOUT  DD DSN=&&SORTED,DISP=(NEW,PASS)",
+		"//SYSIN    DD *",
+		"  SORT FIELDS=(1,6,CH,A)",
+		"  INCLUDE COND=(27,9,ZD,GT,0)",
+		"/*",
+		"//STEP03   EXEC PGM=IDCAMS",
+		"//SYSPRINT DD SYSOUT=*",
+		"//SYSIN    DD *",
+		"  REPRO INFILE(SORTIN) OUTFILE(SORTOUT)",
+		"/*",
+		"//",
+	}
+}
+
+// demoCOBOLLines exercises the COBOL highlighter: sequence numbers, a
+// column-7 comment, divisions, PIC clauses, literals, and procedure verbs.
+func demoCOBOLLines(member string) []string {
+	program := member
+	if program == "" {
+		program = "DEMOPGM"
+	}
+	return []string{
+		"000100 IDENTIFICATION DIVISION.",
+		"000200 PROGRAM-ID. " + program + ".",
+		"000300*  DEMO PROGRAM - REFRESHES THE CUSTOMER MASTER EXTRACT.",
+		"000400 ENVIRONMENT DIVISION.",
+		"000500 DATA DIVISION.",
+		"000600 WORKING-STORAGE SECTION.",
+		"000700 01  WS-CUSTOMER.",
+		"000800     05  WS-ID          PIC 9(6).",
+		"000900     05  WS-NAME        PIC X(20).",
+		"001000     05  WS-AMOUNT      PIC S9(7)V99 COMP-3.",
+		"001100     05  WS-STATUS      PIC X.",
+		"001200         88  WS-ACTIVE  VALUE 'A'.",
+		"001300 PROCEDURE DIVISION.",
+		"001400 MAIN-PARA.",
+		"001500     INITIALIZE WS-CUSTOMER",
+		"001600     MOVE 'PENDING' TO WS-NAME",
+		"001700     PERFORM UNTIL WS-ID > 000100",
+		"001800        ADD 1 TO WS-ID",
+		"001900     END-PERFORM",
+		"002000     IF WS-ACTIVE",
+		"002100        DISPLAY 'ACTIVE: ' WS-NAME",
+		"002200     ELSE",
+		"002300        DISPLAY 'DORMANT: ' WS-NAME",
+		"002400     END-IF",
+		"002500     GOBACK.",
+	}
 }
 
 func demoName(index int) string {
