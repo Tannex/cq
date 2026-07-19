@@ -21,13 +21,19 @@ const (
 // type never changes mid-file, so a prefix sample is enough.
 const syntaxSampleLimit = 120
 
+// COBOL fixed-format layout as 0-based offsets: columns 1-6 hold the numeric
+// sequence area, column 7 the indicator character.
+const (
+	cobolSequenceLen  = 6
+	cobolIndicatorCol = 6
+)
+
+var cobolDivisionHeaders = []string{
+	"IDENTIFICATION DIVISION", "ENVIRONMENT DIVISION", "DATA DIVISION", "PROCEDURE DIVISION",
+}
+
 // detectSourceKind classifies decoded display lines as JCL, COBOL, or plain.
-//
-// JCL: nearly every non-blank line starts in column 1 with `//` (statements,
-// comments) or `/*` (delimiters, JES control), so a simple ratio is reliable.
-//
-// COBOL: scored from independent signals — division headers, `PIC` clauses,
-// column-7 comment indicators, and numeric sequence areas — so partial
+// JCL is a prefix-ratio test; COBOL scores independent signals so partial
 // listings (a copybook without divisions, a program without sequence numbers)
 // still clear the bar while flat data files do not.
 func detectSourceKind(lines []string) sourceKind {
@@ -41,20 +47,17 @@ func detectSourceKind(lines []string) sourceKind {
 			break
 		}
 		sampled++
-		if strings.HasPrefix(line, "//") || strings.HasPrefix(line, "/*") {
+		if isJCLPrefixed(line) {
 			jcl++
 		}
 		upper := strings.ToUpper(line)
-		for _, division := range []string{"IDENTIFICATION DIVISION", "ENVIRONMENT DIVISION", "DATA DIVISION", "PROCEDURE DIVISION"} {
-			if strings.Contains(upper, division) {
-				cobolScore += 4
-				break
-			}
+		if containsCOBOLDivision(upper) {
+			cobolScore += 4
 		}
 		if cobolCommentLine(line) {
 			cobolScore++
 		}
-		if strings.Contains(upper, " PIC ") || strings.Contains(upper, " PICTURE ") {
+		if containsPICClause(upper) {
 			cobolScore++
 		}
 		if sequenceArea(line) {
@@ -78,14 +81,33 @@ func detectSourceKind(lines []string) sourceKind {
 	return sourcePlain
 }
 
-// sequenceArea reports whether columns 1-6 hold a classic numeric sequence
-// field (digits, possibly blank-padded, at least one digit).
+// isJCLPrefixed matches JCL statements and comments (`//`) plus delimiters and
+// JES control (`/*`).
+func isJCLPrefixed(line string) bool {
+	return strings.HasPrefix(line, "//") || strings.HasPrefix(line, "/*")
+}
+
+func containsCOBOLDivision(upper string) bool {
+	for _, header := range cobolDivisionHeaders {
+		if strings.Contains(upper, header) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPICClause(upper string) bool {
+	return strings.Contains(upper, " PIC ") || strings.Contains(upper, " PICTURE ")
+}
+
+// sequenceArea reports whether the sequence columns hold a classic numeric
+// sequence field: digits, possibly blank-padded, at least one digit.
 func sequenceArea(line string) bool {
-	if len(line) < 6 {
+	if len(line) < cobolSequenceLen {
 		return false
 	}
 	digits := 0
-	for _, c := range line[:6] {
+	for _, c := range line[:cobolSequenceLen] {
 		switch {
 		case c >= '0' && c <= '9':
 			digits++
@@ -97,13 +119,20 @@ func sequenceArea(line string) bool {
 	return digits > 0
 }
 
-// cobolCommentLine reports a `*` or `/` comment indicator in column 7 behind a
-// valid sequence area (digits or blanks).
+// cobolCommentLine reports a `*` or `/` indicator behind a blank-or-digit
+// sequence area.
 func cobolCommentLine(line string) bool {
-	if len(line) < 7 || (line[6] != '*' && line[6] != '/') {
+	if len(line) <= cobolIndicatorCol {
 		return false
 	}
-	for _, c := range line[:6] {
+	if c := line[cobolIndicatorCol]; c != '*' && c != '/' {
+		return false
+	}
+	return blankOrDigits(line[:cobolSequenceLen])
+}
+
+func blankOrDigits(s string) bool {
+	for _, c := range s {
 		if c != ' ' && (c < '0' || c > '9') {
 			return false
 		}
@@ -136,34 +165,21 @@ var jclOperations = map[string]bool{
 }
 
 func highlightJCL(line string) string {
-	if strings.HasPrefix(line, "//*") {
+	switch {
+	case strings.HasPrefix(line, "//*"), strings.HasPrefix(line, "/*"):
 		return consolePalette.muted.Render(line)
+	case !strings.HasPrefix(line, "//"):
+		return line // in-stream data between a `DD *` and its delimiter
 	}
-	if strings.HasPrefix(line, "/*") {
-		return consolePalette.muted.Render(line)
-	}
-	if !strings.HasPrefix(line, "//") {
-		// In-stream data between a `DD *` and its delimiter.
-		return line
-	}
-	rest := line[2:]
-	nameEnd := strings.IndexByte(rest, ' ')
-	if nameEnd < 0 {
-		nameEnd = len(rest)
-	}
+	name, rest := splitAtSpace(line[2:])
 	var b strings.Builder
-	b.WriteString(consolePalette.cyan.Render("//" + rest[:nameEnd]))
-	rest = rest[nameEnd:]
-	blankEnd := len(rest) - len(strings.TrimLeft(rest, " "))
-	b.WriteString(rest[:blankEnd])
-	rest = rest[blankEnd:]
-	opEnd := strings.IndexByte(rest, ' ')
-	if opEnd < 0 {
-		opEnd = len(rest)
-	}
-	if op := rest[:opEnd]; jclOperations[strings.ToUpper(op)] {
+	b.WriteString(consolePalette.cyan.Render("//" + name))
+	gap := len(rest) - len(strings.TrimLeft(rest, " "))
+	b.WriteString(rest[:gap])
+	rest = rest[gap:]
+	if op, tail := splitAtSpace(rest); jclOperations[strings.ToUpper(op)] {
 		b.WriteString(consolePalette.amber.Render(op))
-		rest = rest[opEnd:]
+		rest = tail
 	}
 	b.WriteString(highlightJCLParameters(rest))
 	return b.String()
@@ -174,23 +190,13 @@ func highlightJCL(line string) string {
 func highlightJCLParameters(text string) string {
 	var b strings.Builder
 	for i := 0; i < len(text); {
-		c := text[i]
-		switch {
+		switch c := text[i]; {
 		case c == '\'':
-			end := strings.IndexByte(text[i+1:], '\'')
-			var literal string
-			if end < 0 {
-				literal = text[i:]
-			} else {
-				literal = text[i : i+end+2]
-			}
+			literal := takeQuoted(text[i:], '\'')
 			b.WriteString(consolePalette.green.Render(literal))
 			i += len(literal)
 		case isJCLWordByte(c):
-			end := i
-			for end < len(text) && isJCLWordByte(text[end]) {
-				end++
-			}
+			end := wordEnd(text, i, isJCLWordByte)
 			word := text[i:end]
 			if end < len(text) && text[end] == '=' {
 				b.WriteString(consolePalette.green.Render(word))
@@ -234,20 +240,18 @@ var cobolKeywords = map[string]bool{
 func highlightCOBOL(line string) string {
 	var b strings.Builder
 	body := line
-	// Sequence area (columns 1-6) dims so code carries the contrast.
 	if sequenceArea(line) {
-		b.WriteString(consolePalette.muted.Render(line[:6]))
-		body = line[6:]
-	}
-	// Indicator column: comment lines dim wholesale, continuations get a nudge.
-	if len(body) > 0 && len(line)-len(body) == 6 {
-		switch body[0] {
-		case '*', '/':
-			b.WriteString(consolePalette.muted.Render(body))
-			return b.String()
-		case '-':
-			b.WriteString(consolePalette.amber.Render("-"))
-			body = body[1:]
+		b.WriteString(consolePalette.muted.Render(line[:cobolSequenceLen]))
+		body = line[cobolSequenceLen:]
+		if len(body) > 0 {
+			switch body[0] {
+			case '*', '/':
+				b.WriteString(consolePalette.muted.Render(body))
+				return b.String()
+			case '-':
+				b.WriteString(consolePalette.amber.Render("-"))
+				body = body[1:]
+			}
 		}
 	}
 	b.WriteString(highlightCOBOLBody(body))
@@ -258,33 +262,19 @@ func highlightCOBOLBody(text string) string {
 	var b strings.Builder
 	pictureNext := false
 	for i := 0; i < len(text); {
-		c := text[i]
-		switch {
+		switch c := text[i]; {
 		case c == '\'' || c == '"':
-			end := strings.IndexByte(text[i+1:], c)
-			var literal string
-			if end < 0 {
-				literal = text[i:]
-			} else {
-				literal = text[i : i+end+2]
-			}
+			literal := takeQuoted(text[i:], c)
 			b.WriteString(consolePalette.green.Render(literal))
 			i += len(literal)
 			pictureNext = false
 		case pictureNext && c != ' ':
-			// The picture string after PIC/PICTURE: consume to whitespace.
-			end := i
-			for end < len(text) && text[end] != ' ' {
-				end++
-			}
+			end := wordEnd(text, i, func(c byte) bool { return c != ' ' })
 			b.WriteString(consolePalette.amber.Render(text[i:end]))
 			i = end
 			pictureNext = false
 		case isCOBOLWordByte(c):
-			end := i
-			for end < len(text) && isCOBOLWordByte(text[end]) {
-				end++
-			}
+			end := wordEnd(text, i, isCOBOLWordByte)
 			word := text[i:end]
 			upper := strings.ToUpper(word)
 			switch {
@@ -309,9 +299,34 @@ func isCOBOLWordByte(c byte) bool {
 	return c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-'
 }
 
+// takeQuoted returns the literal starting at text[0] (the opening quote)
+// through the closing quote, or the rest of the text when unterminated.
+func takeQuoted(text string, quote byte) string {
+	if end := strings.IndexByte(text[1:], quote); end >= 0 {
+		return text[:end+2]
+	}
+	return text
+}
+
+// splitAtSpace cuts text at the first space, keeping the space in rest.
+func splitAtSpace(text string) (field, rest string) {
+	if i := strings.IndexByte(text, ' '); i >= 0 {
+		return text[:i], text[i:]
+	}
+	return text, ""
+}
+
+func wordEnd(text string, start int, isWordByte func(byte) bool) int {
+	end := start
+	for end < len(text) && isWordByte(text[end]) {
+		end++
+	}
+	return end
+}
+
 // recordSyntax returns the cached content classification for the loaded
-// records, re-detecting only when the cache size changes (a new page landed or
-// the window was trimmed) — never per keystroke or per render frame.
+// records, re-detecting only when the cache size changes — never per keystroke
+// or per render frame.
 func (m *Model) recordSyntax() sourceKind {
 	if len(m.records) == 0 {
 		return sourcePlain
