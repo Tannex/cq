@@ -45,6 +45,9 @@ type workspace struct {
 	// overlayMappedPattern names the persisted mapping pattern behind the
 	// current overlay source, or "" when the source was chosen manually.
 	overlayMappedPattern string
+	// pendingMapping is a mapping save deferred until its overlay load
+	// succeeds, so failed copybooks never enter the store.
+	pendingMapping  *pendingMappingSave
 	recordMode      RecordMode
 	decodedMode     RecordMode
 	horizontal      int

@@ -28,11 +28,27 @@ func (f *fakeMappingStore) Match(name string) (dsnmap.Mapping, bool) {
 	return dsnmap.Mapping{}, false
 }
 
+func (f *fakeMappingStore) Matches(name string) []dsnmap.Mapping {
+	var matches []dsnmap.Mapping
+	for _, mapping := range f.mappings {
+		if dsnmap.MatchPattern(name, mapping.Pattern) {
+			matches = append(matches, mapping)
+		}
+	}
+	return matches
+}
+
 func (f *fakeMappingStore) Put(mapping dsnmap.Mapping) error {
 	if f.putErr != nil {
 		return f.putErr
 	}
 	f.put = append(f.put, mapping)
+	for i, existing := range f.mappings {
+		if existing.Pattern == mapping.Pattern {
+			f.mappings[i] = mapping
+			return nil
+		}
+	}
 	f.mappings = append(f.mappings, mapping)
 	return nil
 }
@@ -53,8 +69,11 @@ func (f *fakeMappingStore) Touch(pattern string) error {
 	return nil
 }
 
-func ctrlKey(code rune) tea.KeyPressMsg {
-	return tea.KeyPressMsg(tea.Key{Code: code, Mod: tea.ModCtrl})
+// flushMappings delivers the pending debounce timer so queued background
+// writes reach the store, mirroring what tea.Tick does after the delay.
+func flushMappings(t *testing.T, model *Model) {
+	t.Helper()
+	applyMessage(t, model, mappingFlushMsg{Seq: model.mappingSeq})
 }
 
 func mappedModel(t *testing.T, options Options, store MappingStore) *Model {
@@ -179,35 +198,74 @@ func TestAutoApplyPrefersMemberMappingOverDataSetMapping(t *testing.T) {
 	}
 }
 
-func TestCopybookDialogPrefillsFromMappingAndDefaultsPatternToExactName(t *testing.T) {
+func TestMappingViewListsMatchesAndMarksApplied(t *testing.T) {
 	store := &fakeMappingStore{mappings: []dsnmap.Mapping{
 		{Pattern: "HQ.*", Local: "hq.cpy", Format: "fixed", Record: "HQ-REC"},
+		{Pattern: "HQ.DATA", Local: "exact.cpy", Format: "free"},
 	}}
 	model := recordViewModel(t)
 	model.deps.Mappings = store
+	model.overlayMappedPattern = "HQ.DATA"
 
 	model.handleAction(actionCopybook)
-	if model.dialog == nil {
-		t.Fatal("dialog did not open")
+	view := model.mappingView
+	if view == nil || view.form != nil {
+		t.Fatalf("mapping view did not open in list mode: %#v", view)
 	}
-	if model.dialog.local.Value() != "hq.cpy" || model.dialog.format.Value() != "fixed" || model.dialog.record.Value() != "HQ-REC" {
-		t.Fatalf("dialog not prefilled from mapping: local=%q format=%q record=%q",
-			model.dialog.local.Value(), model.dialog.format.Value(), model.dialog.record.Value())
+	if len(view.entries) != 2 {
+		t.Fatalf("entries = %#v", view.entries)
 	}
-	if model.dialog.pattern.Value() != "HQ.*" || !strings.Contains(model.dialog.note, "HQ.*") {
-		t.Fatalf("matched mapping not indicated: pattern=%q note=%q", model.dialog.pattern.Value(), model.dialog.note)
-	}
-
-	// Without any matching mapping the pattern defaults to the exact name.
-	model.dialog = nil
-	model.deps.Mappings = &fakeMappingStore{}
-	model.handleAction(actionCopybook)
-	if model.dialog.pattern.Value() != "HQ.DATA" || model.dialog.note != "" {
-		t.Fatalf("default pattern = %q note = %q", model.dialog.pattern.Value(), model.dialog.note)
+	if !view.entries[view.selected].Applied || view.entries[view.selected].Mapping.Pattern != "HQ.DATA" {
+		t.Fatalf("applied entry not selected: %#v selected=%d", view.entries, view.selected)
 	}
 }
 
-func TestDialogSavesMappingWithEditedPatternAndAppliesOverlay(t *testing.T) {
+func TestMappingViewOpensAddFormWhenNothingMatches(t *testing.T) {
+	model := recordViewModel(t)
+	model.deps.Mappings = &fakeMappingStore{}
+
+	model.handleAction(actionCopybook)
+	view := model.mappingView
+	if view == nil || view.form == nil {
+		t.Fatalf("mapping view did not open the add form: %#v", view)
+	}
+	if view.form.pattern.Value() != "HQ.DATA" {
+		t.Fatalf("add form pattern = %q, want the exact data set name", view.form.pattern.Value())
+	}
+	if view.form.editing {
+		t.Fatal("add form exposed the advanced record field")
+	}
+}
+
+func TestMappingViewAppliesSelectedEntry(t *testing.T) {
+	store := &fakeMappingStore{mappings: []dsnmap.Mapping{
+		{Pattern: "HQ.*", Local: "hq.cpy", Format: "free"},
+	}}
+	model := recordViewModel(t)
+	model.deps.Timeout = defaultRequestTimeout
+	model.deps.Mappings = store
+	model.deps.LoadFile = func(context.Context, string) ([]byte, error) {
+		return []byte("01 REC. 05 NAME PIC X(3).\n"), nil
+	}
+
+	model.handleAction(actionCopybook)
+	executeCommand(t, model, model.handleKey(keyPress(tea.KeyEnter, "")))
+
+	if model.mappingView != nil {
+		t.Fatal("mapping view stayed open after apply")
+	}
+	if model.overlay == nil || model.overlayMappedPattern != "HQ.*" {
+		t.Fatalf("overlay not applied from list: overlay=%v pattern=%q error=%q", model.overlay, model.overlayMappedPattern, model.overlayError)
+	}
+	if len(store.touched) != 1 || store.touched[0] != "HQ.*" {
+		t.Fatalf("touched = %#v", store.touched)
+	}
+	if len(store.put) != 0 {
+		t.Fatalf("applying an existing mapping persisted a duplicate: %#v", store.put)
+	}
+}
+
+func TestMappingFormApplyPersistsInBackgroundAfterDebounce(t *testing.T) {
 	store := &fakeMappingStore{}
 	model := recordViewModel(t)
 	model.deps.Timeout = defaultRequestTimeout
@@ -217,58 +275,62 @@ func TestDialogSavesMappingWithEditedPatternAndAppliesOverlay(t *testing.T) {
 	}
 
 	model.handleAction(actionCopybook)
-	model.dialog.local.SetValue("cust.cpy")
-	model.dialog.format.SetValue("free")
-	model.dialog.pattern.SetValue("hq.%ata")
-	executeCommand(t, model, model.handleKey(ctrlKey('s')))
+	model.mappingView.form.copybook.SetValue("./cust.cpy")
+	model.mappingView.form.pattern.SetValue("hq.%ata")
+	command := model.handleKey(keyPress(tea.KeyEnter, ""))
 
+	if model.mappingView != nil {
+		t.Fatal("mapping view stayed open after apply")
+	}
+	if len(store.put) != 0 {
+		t.Fatalf("mapping persisted synchronously on submit: %#v", store.put)
+	}
+
+	// Executing the command chain loads the overlay, queues the save, and
+	// delivers the debounce timer.
+	executeCommand(t, model, command)
+	if model.overlay == nil || model.overlayMappedPattern != "HQ.%ATA" {
+		t.Fatalf("overlay not applied: overlay=%v pattern=%q error=%q", model.overlay, model.overlayMappedPattern, model.overlayError)
+	}
+	flushMappings(t, model)
 	if len(store.put) != 1 {
 		t.Fatalf("saved mappings = %#v", store.put)
 	}
 	saved := store.put[0]
-	if saved.Pattern != "HQ.%ATA" || saved.Local != "cust.cpy" || saved.Format != "free" {
+	if saved.Pattern != "HQ.%ATA" || saved.Local != "./cust.cpy" {
 		t.Fatalf("saved mapping = %#v", saved)
 	}
-	if model.dialog != nil {
-		t.Fatal("dialog stayed open after save")
-	}
-	if model.overlay == nil || model.overlayMappedPattern != "HQ.%ATA" {
-		t.Fatalf("overlay not applied on save: overlay=%v pattern=%q error=%q", model.overlay, model.overlayMappedPattern, model.overlayError)
-	}
 }
 
-func TestDialogSaveValidatesSourceAndPattern(t *testing.T) {
+func TestMappingFormFailedApplyPersistsNothing(t *testing.T) {
+	store := &fakeMappingStore{}
 	model := recordViewModel(t)
-	model.deps.Mappings = &fakeMappingStore{}
+	model.deps.Timeout = defaultRequestTimeout
+	model.deps.Mappings = store
+	model.deps.LoadFile = func(context.Context, string) ([]byte, error) {
+		return []byte("this is not a copybook"), nil
+	}
 
 	model.handleAction(actionCopybook)
-	if command := model.handleKey(ctrlKey('s')); command != nil {
-		t.Fatal("empty save returned a command")
-	}
-	if !strings.Contains(model.dialog.err, "copybook source") {
-		t.Fatalf("empty-source save error = %q", model.dialog.err)
-	}
+	model.mappingView.form.copybook.SetValue("./broken.cpy")
+	executeCommand(t, model, model.handleKey(keyPress(tea.KeyEnter, "")))
 
-	model.dialog.local.SetValue("cust.cpy")
-	model.dialog.pattern.SetValue("  ")
-	if command := model.handleKey(ctrlKey('s')); command != nil {
-		t.Fatal("patternless save returned a command")
+	if model.overlay != nil || model.overlayError == "" {
+		t.Fatalf("broken copybook produced an overlay: %#v error=%q", model.overlay, model.overlayError)
 	}
-	if !strings.Contains(model.dialog.err, "pattern") {
-		t.Fatalf("empty-pattern save error = %q", model.dialog.err)
+	flushMappings(t, model)
+	if len(store.put) != 0 {
+		t.Fatalf("failed apply persisted a mapping: %#v", store.put)
 	}
-
-	model.dialog.pattern.SetValue(`/HQ\.(/`)
-	if command := model.handleKey(ctrlKey('s')); command != nil {
-		t.Fatal("invalid-regex save returned a command")
-	}
-	if !strings.Contains(model.dialog.err, "invalid regex") {
-		t.Fatalf("invalid-regex save error = %q", model.dialog.err)
+	if model.pendingMapping != nil {
+		t.Fatal("pending mapping retained after failure")
 	}
 }
 
-func TestDialogSavesRegexPatternWithoutUppercasing(t *testing.T) {
-	store := &fakeMappingStore{}
+func TestMappingFormEditReplacesPatternWithoutOrphans(t *testing.T) {
+	store := &fakeMappingStore{mappings: []dsnmap.Mapping{
+		{Pattern: "HQ.DATA", Local: "hq.cpy", Format: "free"},
+	}}
 	model := recordViewModel(t)
 	model.deps.Timeout = defaultRequestTimeout
 	model.deps.Mappings = store
@@ -277,20 +339,30 @@ func TestDialogSavesRegexPatternWithoutUppercasing(t *testing.T) {
 	}
 
 	model.handleAction(actionCopybook)
-	model.dialog.local.SetValue("cust.cpy")
-	model.dialog.format.SetValue("free")
-	model.dialog.pattern.SetValue(` /hq\.d\w+/ `)
-	executeCommand(t, model, model.handleKey(ctrlKey('s')))
-
-	if len(store.put) != 1 || store.put[0].Pattern != `/hq\.d\w+/` {
-		t.Fatalf("saved mappings = %#v", store.put)
+	model.handleKey(keyPress('e', "e"))
+	form := model.mappingView.form
+	if form == nil || !form.editing || form.original != "HQ.DATA" {
+		t.Fatalf("edit form not opened for entry: %#v", form)
 	}
-	if model.overlayMappedPattern != `/hq\.d\w+/` {
-		t.Fatalf("mapped pattern attribution = %q", model.overlayMappedPattern)
+	if form.copybook.Value() != "hq.cpy" || form.record.Value() != "" {
+		t.Fatalf("edit form not prefilled: copybook=%q record=%q", form.copybook.Value(), form.record.Value())
+	}
+	form.pattern.SetValue("HQ.*")
+	executeCommand(t, model, model.handleKey(keyPress(tea.KeyEnter, "")))
+
+	flushMappings(t, model)
+	if len(store.removed) != 1 || store.removed[0] != "HQ.DATA" {
+		t.Fatalf("old pattern not removed: %#v", store.removed)
+	}
+	if len(store.put) != 1 || store.put[0].Pattern != "HQ.*" || store.put[0].Local != "hq.cpy" {
+		t.Fatalf("edited mapping = %#v", store.put)
+	}
+	if model.overlayMappedPattern != "HQ.*" {
+		t.Fatalf("attribution = %q", model.overlayMappedPattern)
 	}
 }
 
-func TestDialogRemovesMappingAndStaysOpen(t *testing.T) {
+func TestMappingViewRemoveQueuesBackgroundRemoval(t *testing.T) {
 	store := &fakeMappingStore{mappings: []dsnmap.Mapping{
 		{Pattern: "HQ.DATA", Local: "hq.cpy", Format: "free"},
 	}}
@@ -299,44 +371,144 @@ func TestDialogRemovesMappingAndStaysOpen(t *testing.T) {
 	model.overlayMappedPattern = "HQ.DATA"
 
 	model.handleAction(actionCopybook)
-	if command := model.handleKey(ctrlKey('r')); command != nil {
-		t.Fatal("remove returned a command")
+	command := model.handleKey(keyPress('x', "x"))
+	if command == nil {
+		t.Fatal("remove queued no debounce timer")
 	}
+	if len(model.mappingView.entries) != 0 {
+		t.Fatalf("entry still listed after remove: %#v", model.mappingView.entries)
+	}
+	if !strings.Contains(model.mappingView.note, "removed mapping HQ.DATA") {
+		t.Fatalf("note = %q", model.mappingView.note)
+	}
+	if model.overlayMappedPattern != "" {
+		t.Fatalf("attribution retained after remove: %q", model.overlayMappedPattern)
+	}
+	if len(store.removed) != 0 {
+		t.Fatalf("removal hit the store before the flush: %#v", store.removed)
+	}
+
+	flushMappings(t, model)
 	if len(store.removed) != 1 || store.removed[0] != "HQ.DATA" {
 		t.Fatalf("removed = %#v", store.removed)
 	}
-	if model.dialog == nil || !strings.Contains(model.dialog.note, "removed mapping HQ.DATA") {
-		t.Fatalf("dialog state after remove: %#v", model.dialog)
+}
+
+func TestMappingFormClearingCopybookRemovesMappingAndOverlay(t *testing.T) {
+	store := &fakeMappingStore{mappings: []dsnmap.Mapping{
+		{Pattern: "HQ.DATA", Local: "hq.cpy", Format: "free"},
+	}}
+	model := recordViewModel(t)
+	model.deps.Mappings = store
+	model.overlayMappedPattern = "HQ.DATA"
+
+	model.handleAction(actionCopybook)
+	model.handleKey(keyPress('e', "e"))
+	model.mappingView.form.copybook.SetValue("  ")
+	command := model.handleKey(keyPress(tea.KeyEnter, ""))
+	if command == nil {
+		t.Fatal("clear queued no removal")
 	}
-	if model.overlayMappedPattern != "" {
-		t.Fatalf("mapped pattern retained after remove: %q", model.overlayMappedPattern)
+	if model.mappingView != nil {
+		t.Fatal("mapping view stayed open after clear")
+	}
+	if model.overlay != nil || model.overlayMappedPattern != "" {
+		t.Fatalf("overlay retained after clear: %#v pattern=%q", model.overlay, model.overlayMappedPattern)
+	}
+	if !strings.Contains(model.status.Text, "removed mapping HQ.DATA") {
+		t.Fatalf("status = %#v", model.status)
 	}
 
-	// Removing again reports that nothing is stored under the pattern.
-	model.handleKey(ctrlKey('r'))
-	if !strings.Contains(model.dialog.err, "no mapping stored") {
-		t.Fatalf("second remove error = %q", model.dialog.err)
+	flushMappings(t, model)
+	if len(store.removed) != 1 || store.removed[0] != "HQ.DATA" {
+		t.Fatalf("removed = %#v", store.removed)
 	}
 }
 
-func TestManualDialogApplyClearsMappedPatternAttribution(t *testing.T) {
+func TestMappingFormValidatesPattern(t *testing.T) {
+	model := recordViewModel(t)
+	model.deps.Mappings = &fakeMappingStore{}
+
+	model.handleAction(actionCopybook)
+	model.mappingView.form.copybook.SetValue("HQ.COPYLIB(CUST)")
+	model.mappingView.form.pattern.SetValue("  ")
+	if command := model.handleKey(keyPress(tea.KeyEnter, "")); command != nil {
+		t.Fatal("patternless apply returned a command")
+	}
+	if !strings.Contains(model.mappingView.err, "pattern") {
+		t.Fatalf("empty-pattern error = %q", model.mappingView.err)
+	}
+
+	model.mappingView.form.pattern.SetValue(`/HQ\.(/`)
+	if command := model.handleKey(keyPress(tea.KeyEnter, "")); command != nil {
+		t.Fatal("invalid-regex apply returned a command")
+	}
+	if !strings.Contains(model.mappingView.err, "invalid regex") {
+		t.Fatalf("invalid-regex error = %q", model.mappingView.err)
+	}
+}
+
+func TestMappingFormKeepsRegexPatternCase(t *testing.T) {
+	store := &fakeMappingStore{}
 	model := recordViewModel(t)
 	model.deps.Timeout = defaultRequestTimeout
-	model.deps.Mappings = &fakeMappingStore{}
+	model.deps.Mappings = store
 	model.deps.LoadFile = func(context.Context, string) ([]byte, error) {
 		return []byte("01 REC. 05 NAME PIC X(3).\n"), nil
 	}
-	model.overlayMappedPattern = "OLD.*"
 
 	model.handleAction(actionCopybook)
-	model.dialog.local.SetValue("manual.cpy")
-	model.dialog.format.SetValue("free")
+	model.mappingView.form.copybook.SetValue("./cust.cpy")
+	model.mappingView.form.pattern.SetValue(` /hq\.d\w+/ `)
 	executeCommand(t, model, model.handleKey(keyPress(tea.KeyEnter, "")))
 
-	if model.overlayMappedPattern != "" {
-		t.Fatalf("manual apply kept mapping attribution: %q", model.overlayMappedPattern)
+	flushMappings(t, model)
+	if len(store.put) != 1 || store.put[0].Pattern != `/hq\.d\w+/` {
+		t.Fatalf("saved mappings = %#v", store.put)
 	}
-	if model.overlay == nil {
-		t.Fatalf("manual overlay not applied: %q", model.overlayError)
+	if model.overlayMappedPattern != `/hq\.d\w+/` {
+		t.Fatalf("mapped pattern attribution = %q", model.overlayMappedPattern)
+	}
+}
+
+func TestQuitFlushesPendingMappingWrites(t *testing.T) {
+	store := &fakeMappingStore{mappings: []dsnmap.Mapping{
+		{Pattern: "HQ.DATA", Local: "hq.cpy", Format: "free"},
+	}}
+	model := recordViewModel(t)
+	model.deps.Mappings = store
+
+	model.handleAction(actionCopybook)
+	model.handleKey(keyPress('x', "x"))
+	if len(store.removed) != 0 {
+		t.Fatalf("removal flushed early: %#v", store.removed)
+	}
+	model.mappingView = nil
+	model.handleAction(actionQuit)
+	if len(store.removed) != 1 || store.removed[0] != "HQ.DATA" {
+		t.Fatalf("quit did not flush pending writes: %#v", store.removed)
+	}
+}
+
+func TestSupersededDebounceTimerDoesNotFlushEarly(t *testing.T) {
+	store := &fakeMappingStore{mappings: []dsnmap.Mapping{
+		{Pattern: "HQ.DATA", Local: "hq.cpy", Format: "free"},
+		{Pattern: "HQ.*", Local: "wild.cpy", Format: "free"},
+	}}
+	model := recordViewModel(t)
+	model.deps.Mappings = store
+
+	model.handleAction(actionCopybook)
+	model.handleKey(keyPress('x', "x"))
+	staleSeq := model.mappingSeq
+	model.handleKey(keyPress('x', "x"))
+
+	applyMessage(t, model, mappingFlushMsg{Seq: staleSeq})
+	if len(store.removed) != 0 {
+		t.Fatalf("stale timer flushed ops: %#v", store.removed)
+	}
+	flushMappings(t, model)
+	if len(store.removed) != 2 {
+		t.Fatalf("removed = %#v", store.removed)
 	}
 }

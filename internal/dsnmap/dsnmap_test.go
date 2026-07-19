@@ -319,3 +319,67 @@ func TestRegexPersistenceRoundTrip(t *testing.T) {
 		t.Fatalf("regex mapping mangled after reload: %+v", mapping)
 	}
 }
+
+func TestMatchesReturnsAllMatchesMostPreciseFirst(t *testing.T) {
+	store, _ := testStore(t)
+	for _, mapping := range []Mapping{
+		{Pattern: "PROD.*", Local: "wild.cpy"},
+		{Pattern: "PROD.CUSTOMER.DATA", Local: "exact.cpy"},
+		{Pattern: `/prod\.customer\..*/`, Local: "regex.cpy"},
+		{Pattern: "OTHER.*", Local: "other.cpy"},
+	} {
+		if err := store.Put(mapping); err != nil {
+			t.Fatal(err)
+		}
+	}
+	matches := store.Matches("PROD.CUSTOMER.DATA")
+	if len(matches) != 3 {
+		t.Fatalf("matches = %+v", matches)
+	}
+	want := []string{"PROD.CUSTOMER.DATA", "PROD.*", `/prod\.customer\..*/`}
+	for i, pattern := range want {
+		if matches[i].Pattern != pattern {
+			t.Fatalf("matches[%d] = %q, want %q (all: %+v)", i, matches[i].Pattern, pattern, matches)
+		}
+	}
+	if got := store.Matches("UNRELATED.DSN"); len(got) != 0 {
+		t.Fatalf("unrelated name matched: %+v", got)
+	}
+}
+
+func TestLoadSkipsSourcelessAndDuplicateEntries(t *testing.T) {
+	store, path := testStore(t)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	state := `{"mappings":[
+		{"pattern":"A.ORPHAN","created":"2026-01-01T00:00:00Z","lastUsed":"2026-01-01T00:00:00Z"},
+		{"pattern":"a.data","local":"first.cpy"},
+		{"pattern":"A.DATA","local":"second.cpy"},
+		{"pattern":"A.KEEP","dsn":"HQ.COPYLIB(KEEP)"}
+	]}`
+	if err := os.WriteFile(path, []byte(state), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var diagnostics []string
+	store.Diagnostic = func(format string, args ...any) {
+		diagnostics = append(diagnostics, format)
+	}
+
+	mappings := store.Mappings()
+	if len(mappings) != 2 {
+		t.Fatalf("mappings = %+v", mappings)
+	}
+	if mappings[0].Pattern != "A.DATA" || mappings[0].Local != "first.cpy" {
+		t.Fatalf("duplicate resolution kept the wrong entry: %+v", mappings[0])
+	}
+	if mappings[1].Pattern != "A.KEEP" {
+		t.Fatalf("valid entry dropped: %+v", mappings)
+	}
+	if _, ok := store.Match("A.ORPHAN"); ok {
+		t.Fatal("sourceless orphan entry matched")
+	}
+	if len(diagnostics) != 2 {
+		t.Fatalf("diagnostics = %#v", diagnostics)
+	}
+}

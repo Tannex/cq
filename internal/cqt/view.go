@@ -41,12 +41,12 @@ func (m *Model) View() tea.View {
 	switch {
 	case m.visible <= 0 && !m.showHelp:
 		content = m.tinyView()
-	case m.dialog != nil:
-		content = m.dialogView()
+	case m.mappingView != nil:
+		content = m.mappingViewContent()
 	default:
 		content = m.mainView()
 	}
-	if m.showHelp && m.width >= MinTerminalWidth && m.visible > 0 && m.dialog == nil {
+	if m.showHelp && m.width >= MinTerminalWidth && m.visible > 0 && m.mappingView == nil {
 		content = m.overlayHelp(content)
 	}
 	view := tea.NewView(content)
@@ -198,7 +198,7 @@ func scrollWindow(lines []string, offset, capacity int) []string {
 // Every line is rendered through the supplied styles so all cells carry the
 // caller's background instead of falling back to the terminal default.
 func (m *Model) helpContent(accent, body lipgloss.Style) []string {
-	ctx := keyContext{Screen: m.screen, Mode: m.recordMode, InputFocused: m.inputFocused(), DialogOpen: m.dialog != nil, Tabs: m.hasTabs()}
+	ctx := keyContext{Screen: m.screen, Mode: m.recordMode, InputFocused: m.inputFocused(), DialogOpen: m.mappingView != nil, DialogFormFocused: m.mappingView != nil && m.mappingView.form != nil, Tabs: m.hasTabs()}
 	groups := m.keys.fullHelp(ctx, m.overlay != nil)
 	var lines []string
 	for i, group := range groups {
@@ -280,38 +280,85 @@ func (m *Model) overlayHelp(background string) string {
 	return canvas.Compose(compositor).Render()
 }
 
-func (m *Model) dialogView() string {
-	title := consolePalette.navy.Bold(true).Width(m.width).Render(" CQT  COPYBOOK OVERLAY ")
-	subtitle := consolePalette.panel.Width(m.width).Render(" READ-ONLY DISPLAY DEFINITION  choose local file or DSN; COPY uses cq/config.json search order ")
-	fields := []string{
-		m.dialog.local.View(),
-		m.dialog.dsn.View(),
-		m.dialog.format.View(),
-		m.dialog.record.View(),
-		m.dialog.pattern.View(),
-	}
-	lines := make([]string, 0, len(fields)+3)
-	for i, field := range fields {
-		marker := "   "
-		if i == m.dialog.focus {
-			marker = " " + consolePalette.cyan.Bold(true).Render(">") + " "
+// mappingViewContent renders the combined copybook mapping screen: the list
+// of persisted mappings matching the current data set (transparency for
+// unintentional matches) or the inline add/edit form. Persistence happens in
+// the background, so the footer advertises no save keys.
+func (m *Model) mappingViewContent() string {
+	view := m.mappingView
+	title := consolePalette.navy.Bold(true).Width(m.width).Render(" CQT  COPYBOOK MAPPINGS ")
+	subtitle := consolePalette.panel.Width(m.width).Render(" " + view.target + "  mappings are matched most precise first and saved automatically ")
+
+	var lines []string
+	var footer string
+	if form := view.form; form != nil {
+		for i, input := range form.inputs() {
+			marker := "   "
+			if i == form.focus {
+				marker = " " + consolePalette.cyan.Bold(true).Render(">") + " "
+			}
+			lines = append(lines, marker+input.View())
 		}
-		lines = append(lines, marker+field)
+		footer = "Enter apply (empty copybook removes the mapping)  Tab next  Esc back"
+	} else if len(view.entries) == 0 {
+		lines = append(lines, "   "+consolePalette.muted.Render("no mappings match "+view.target))
+		footer = "a add mapping  Esc close"
+	} else {
+		patternWidth := 0
+		copybookWidth := 0
+		for _, entry := range view.entries {
+			patternWidth = max(patternWidth, len(entry.Mapping.Pattern))
+			copybookWidth = max(copybookWidth, len(sourceDisplay(mappingSource(entry.Mapping))))
+		}
+		patternWidth = min(max(patternWidth, 7), 36)
+		copybookWidth = min(max(copybookWidth, 8), 44)
+		lines = append(lines, "   "+consolePalette.muted.Render(fmt.Sprintf("%-*s  %-*s  %s", patternWidth, "PATTERN", copybookWidth, "COPYBOOK", "RECORD")))
+		for i, entry := range view.entries {
+			marker := "   "
+			if i == view.selected {
+				marker = " " + consolePalette.cyan.Bold(true).Render(">") + " "
+			}
+			row := fmt.Sprintf("%-*s  %-*s  %s",
+				patternWidth, truncateCell(entry.Mapping.Pattern, patternWidth),
+				copybookWidth, truncateCell(sourceDisplay(mappingSource(entry.Mapping)), copybookWidth),
+				entry.Mapping.Record)
+			style := consolePalette.plain
+			if i == view.selected {
+				style = consolePalette.bright
+			}
+			rendered := style.Render(row)
+			if entry.Applied {
+				rendered += "  " + consolePalette.green.Render("applied")
+			}
+			lines = append(lines, marker+rendered)
+		}
+		footer = "Enter apply  a add  e edit  x remove  Esc close"
 	}
 	lines = append(lines, "")
-	if m.dialog.note != "" {
-		lines = append(lines, "   "+consolePalette.cyan.Render("MAPPING  "+m.dialog.note))
+	if view.note != "" {
+		lines = append(lines, "   "+consolePalette.cyan.Render("MAPPING  "+view.note))
 	}
-	if m.dialog.err != "" {
-		lines = append(lines, "   "+consolePalette.danger.Render("ERROR  "+m.dialog.err))
+	if view.err != "" {
+		lines = append(lines, "   "+consolePalette.danger.Render("ERROR  "+view.err))
 	} else {
-		lines = append(lines, "   "+consolePalette.muted.Render("Enter apply (empty clears overlay)  Ctrl+S apply+save mapping  Ctrl+R remove mapping  Tab next  Esc cancel"))
+		lines = append(lines, "   "+consolePalette.muted.Render(footer))
 	}
 	available := max(1, m.height-4)
 	body := lipgloss.Place(m.width, available, lipgloss.Left, lipgloss.Center, strings.Join(lines, "\n"), lipgloss.WithWhitespaceChars(" "))
 	statusLine := m.statusLine()
 	helpLine := m.helpLine()
 	return fitHeight(strings.Join([]string{title, subtitle, body, statusLine, helpLine}, "\n"), m.width, m.height)
+}
+
+// truncateCell clamps a plain (unstyled) cell to width with an ellipsis.
+func truncateCell(value string, width int) string {
+	if len(value) <= width {
+		return value
+	}
+	if width <= 1 {
+		return value[:width]
+	}
+	return value[:width-1] + "…"
 }
 
 func (m *Model) titleLine() string {
@@ -935,7 +982,7 @@ func recordPositionStatus(number int64, count int, more bool, numberWidth int) s
 }
 
 func (m *Model) helpLine() string {
-	ctx := keyContext{Screen: m.screen, Mode: m.recordMode, InputFocused: m.inputFocused(), DialogOpen: m.dialog != nil, ShowHelp: m.showHelp, Tabs: m.hasTabs()}
+	ctx := keyContext{Screen: m.screen, Mode: m.recordMode, InputFocused: m.inputFocused(), DialogOpen: m.mappingView != nil, DialogFormFocused: m.mappingView != nil && m.mappingView.form != nil, ShowHelp: m.showHelp, Tabs: m.hasTabs()}
 	line := m.help.ShortHelpView(m.keys.shortHelp(ctx, m.overlay != nil))
 	return consolePalette.muted.Width(m.width).Render(truncateStyled(" "+line, m.width))
 }

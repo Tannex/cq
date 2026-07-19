@@ -106,6 +106,7 @@ func (s *Store) load() {
 		return
 	}
 	mappings := make([]Mapping, 0, len(state.Mappings))
+	seen := make(map[string]struct{}, len(state.Mappings))
 	for _, mapping := range state.Mappings {
 		mapping.Pattern = NormalizePattern(mapping.Pattern)
 		if mapping.Pattern == "" {
@@ -115,6 +116,15 @@ func (s *Store) load() {
 			s.logf("dsnmap: skipping mapping %q: %v", mapping.Pattern, err)
 			continue
 		}
+		if strings.TrimSpace(mapping.Local) == "" && strings.TrimSpace(mapping.DSN) == "" {
+			s.logf("dsnmap: skipping mapping %q: no copybook source", mapping.Pattern)
+			continue
+		}
+		if _, dup := seen[mapping.Pattern]; dup {
+			s.logf("dsnmap: skipping duplicate mapping %q", mapping.Pattern)
+			continue
+		}
+		seen[mapping.Pattern] = struct{}{}
 		mappings = append(mappings, mapping)
 	}
 	s.mappings = mappings
@@ -170,6 +180,25 @@ func (s *Store) Match(name string) (Mapping, bool) {
 		return Mapping{}, false
 	}
 	return s.mappings[best], true
+}
+
+// Matches returns every stored mapping whose pattern matches the data set
+// name, ordered most precise first (the first entry is the one Match would
+// pick). The slice is a copy.
+func (s *Store) Matches(name string) []Mapping {
+	s.load()
+	name = strings.ToUpper(strings.TrimSpace(name))
+	if name == "" {
+		return nil
+	}
+	var matches []Mapping
+	for _, mapping := range s.mappings {
+		if MatchPattern(name, mapping.Pattern) {
+			matches = append(matches, mapping)
+		}
+	}
+	sort.SliceStable(matches, func(i, j int) bool { return morePrecise(matches[i].Pattern, matches[j].Pattern) })
+	return matches
 }
 
 // Put adds or replaces the mapping for its pattern. The created timestamp of a

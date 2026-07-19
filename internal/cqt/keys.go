@@ -48,8 +48,9 @@ const (
 	actionCancel
 	actionNextField
 	actionPreviousField
-	actionSaveMapping
-	actionRemoveMapping
+	actionMappingAdd
+	actionMappingEdit
+	actionMappingRemove
 	actionHelpUp
 	actionHelpDown
 	actionHelpPageUp
@@ -65,8 +66,11 @@ type keyContext struct {
 	Mode         RecordMode
 	InputFocused bool
 	DialogOpen   bool
-	ShowHelp     bool
-	Tabs         bool
+	// DialogFormFocused is set while the mapping view's inline form has focus,
+	// so printable keys reach the text inputs instead of the list bindings.
+	DialogFormFocused bool
+	ShowHelp          bool
+	Tabs              bool
 }
 
 // KeyMap is the single source of truth for application, input, dialog, and
@@ -96,8 +100,9 @@ type KeyMap struct {
 	Cancel          key.Binding
 	NextField       key.Binding
 	PreviousField   key.Binding
-	SaveMapping     key.Binding
-	RemoveMapping   key.Binding
+	MappingAdd      key.Binding
+	MappingEdit     key.Binding
+	MappingRemove   key.Binding
 	NextProfile     key.Binding
 	PreviousProfile key.Binding
 }
@@ -128,8 +133,9 @@ func DefaultKeyMap() KeyMap {
 		Cancel:          key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
 		NextField:       key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next field")),
 		PreviousField:   key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("shift+tab", "previous field")),
-		SaveMapping:     key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "apply+save mapping")),
-		RemoveMapping:   key.NewBinding(key.WithKeys("ctrl+r"), key.WithHelp("ctrl+r", "remove mapping")),
+		MappingAdd:      key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "add mapping")),
+		MappingEdit:     key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit mapping")),
+		MappingRemove:   key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "remove mapping")),
 		NextProfile:     key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next profile")),
 		PreviousProfile: key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("shift+tab", "previous profile")),
 	}
@@ -137,19 +143,35 @@ func DefaultKeyMap() KeyMap {
 
 func (k KeyMap) actionFor(msg tea.KeyPressMsg, ctx keyContext) action {
 	if ctx.DialogOpen {
+		if ctx.DialogFormFocused {
+			switch {
+			case key.Matches(msg, k.Accept):
+				return actionAccept
+			case key.Matches(msg, k.Cancel):
+				return actionCancel
+			case key.Matches(msg, k.NextField):
+				return actionNextField
+			case key.Matches(msg, k.PreviousField):
+				return actionPreviousField
+			default:
+				return actionNone
+			}
+		}
 		switch {
+		case key.Matches(msg, k.Up):
+			return actionUp
+		case key.Matches(msg, k.Down):
+			return actionDown
 		case key.Matches(msg, k.Accept):
 			return actionAccept
 		case key.Matches(msg, k.Cancel):
 			return actionCancel
-		case key.Matches(msg, k.NextField):
-			return actionNextField
-		case key.Matches(msg, k.PreviousField):
-			return actionPreviousField
-		case key.Matches(msg, k.SaveMapping):
-			return actionSaveMapping
-		case key.Matches(msg, k.RemoveMapping):
-			return actionRemoveMapping
+		case key.Matches(msg, k.MappingAdd):
+			return actionMappingAdd
+		case key.Matches(msg, k.MappingEdit):
+			return actionMappingEdit
+		case key.Matches(msg, k.MappingRemove):
+			return actionMappingRemove
 		default:
 			return actionNone
 		}
@@ -242,7 +264,14 @@ func (k KeyMap) shortHelp(ctx keyContext, overlay bool) []key.Binding {
 		return []key.Binding{k.Up, k.Down, k.PageUp, k.PageDown, k.Back, k.Help}
 	}
 	if ctx.DialogOpen {
-		return []key.Binding{k.Accept, k.SaveMapping, k.RemoveMapping, k.Cancel, k.NextField}
+		if ctx.DialogFormFocused {
+			apply := k.Accept
+			apply.SetHelp("enter", "apply+save")
+			return []key.Binding{apply, k.Cancel, k.NextField}
+		}
+		apply := k.Accept
+		apply.SetHelp("enter", "apply")
+		return []key.Binding{k.Up, k.Down, apply, k.MappingAdd, k.MappingEdit, k.MappingRemove, k.Cancel}
 	}
 	if ctx.InputFocused {
 		return []key.Binding{k.Accept, k.Cancel}

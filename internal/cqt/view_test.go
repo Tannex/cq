@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/Tannex/cq/internal/decode"
+	"github.com/Tannex/cq/internal/dsnmap"
 	"github.com/Tannex/cq/internal/record"
 	"github.com/Tannex/cq/internal/zosmf"
 )
@@ -391,30 +392,55 @@ func TestHelpPopupOverlaysMainViewWithGroupedBindings(t *testing.T) {
 	}
 }
 
-func TestCopybookDialogShowsFocusMarkerAndFitsTerminalWidth(t *testing.T) {
+func TestMappingFormShowsFocusMarkerAndFitsTerminalWidth(t *testing.T) {
 	model := recordViewModel(t)
-	model.dialog = newCopybookDialog(CopybookSource{Local: "customer.cpy"})
-	model.dialog.setWidth(model.width)
+	model.handleAction(actionCopybook)
+	if model.mappingView == nil || model.mappingView.form == nil {
+		t.Fatalf("mapping view did not open the add form: %#v", model.mappingView)
+	}
 
 	content := model.View().Content
 	stripped := ansi.Strip(content)
-	if !strings.Contains(stripped, "> LOCAL") {
-		t.Fatalf("dialog missing focused marker on LOCAL: %q", stripped)
+	if !strings.Contains(stripped, "> COPYBOOK") {
+		t.Fatalf("form missing focused marker on COPYBOOK: %q", stripped)
 	}
-	if strings.Contains(stripped, "> DSN") {
-		t.Fatalf("DSN should not be focused yet: %q", stripped)
+	if strings.Contains(stripped, "> PATTERN") {
+		t.Fatalf("PATTERN should not be focused yet: %q", stripped)
 	}
 
-	model.dialog.moveFocus(1)
+	model.mappingView.form.moveFocus(1)
 	content = model.View().Content
 	stripped = ansi.Strip(content)
-	if !strings.Contains(stripped, "> DSN") {
-		t.Fatalf("dialog focus did not move to DSN: %q", stripped)
+	if !strings.Contains(stripped, "> PATTERN") {
+		t.Fatalf("form focus did not move to PATTERN: %q", stripped)
 	}
 
 	for i, line := range strings.Split(content, "\n") {
 		if w := lipgloss.Width(line); w > model.width {
-			t.Fatalf("dialog line %d width = %d, want <= %d: %q", i, w, model.width, line)
+			t.Fatalf("form line %d width = %d, want <= %d: %q", i, w, model.width, line)
+		}
+	}
+}
+
+func TestMappingListShowsEntriesAppliedMarkerAndSelection(t *testing.T) {
+	model := recordViewModel(t)
+	model.deps.Mappings = &fakeMappingStore{mappings: []dsnmap.Mapping{
+		{Pattern: "HQ.DATA", DSN: "HQ.COPYLIB(EXACT)", Record: "EXACT-REC"},
+		{Pattern: "HQ.*", Local: "wild.cpy"},
+	}}
+	model.overlayMappedPattern = "HQ.DATA"
+	model.handleAction(actionCopybook)
+
+	content := model.View().Content
+	stripped := ansi.Strip(content)
+	for _, want := range []string{"COPYBOOK MAPPINGS", "PATTERN", "RECORD", "HQ.DATA", "HQ.COPYLIB(EXACT)", "EXACT-REC", "HQ.*", "wild.cpy", "applied", "> HQ.DATA"} {
+		if !strings.Contains(stripped, want) {
+			t.Fatalf("mapping list missing %q: %q", want, stripped)
+		}
+	}
+	for i, line := range strings.Split(content, "\n") {
+		if w := lipgloss.Width(line); w > model.width {
+			t.Fatalf("list line %d width = %d, want <= %d: %q", i, w, model.width, line)
 		}
 	}
 }
@@ -442,7 +468,7 @@ func TestStatePanelAlignsStatusAndDetailColumns(t *testing.T) {
 	}
 }
 
-func TestTinyLoadingEmptyErrorAndDialogViewsAreExplicit(t *testing.T) {
+func TestTinyLoadingEmptyErrorAndMappingViewsAreExplicit(t *testing.T) {
 	model := recordViewModel(t)
 	model.width = MinTerminalWidth - 1
 	model.height = 7
@@ -471,11 +497,11 @@ func TestTinyLoadingEmptyErrorAndDialogViewsAreExplicit(t *testing.T) {
 		t.Fatalf("error view = %q", content)
 	}
 
-	model.dialog = newCopybookDialog(CopybookSource{Local: "customer.cpy", Format: "free", Record: "CUSTOMER"})
+	model.handleAction(actionCopybook)
 	content := model.View().Content
-	for _, want := range []string{"COPYBOOK OVERLAY", "LOCAL", "DSN", "FORMAT", "RECORD", "empty clears overlay"} {
+	for _, want := range []string{"COPYBOOK MAPPINGS", "COPYBOOK", "PATTERN", "empty copybook removes the mapping"} {
 		if !strings.Contains(content, want) {
-			t.Fatalf("dialog view missing %q: %q", want, content)
+			t.Fatalf("mapping view missing %q: %q", want, content)
 		}
 	}
 }
