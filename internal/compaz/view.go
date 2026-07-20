@@ -58,8 +58,10 @@ var consolePalette = struct {
 	header:    lipgloss.NewStyle().Background(ayu.headerBg).Foreground(ayu.fgBright).Bold(true),
 	activeTab: lipgloss.NewStyle().Background(ayu.headerBg).Foreground(ayu.accent).Bold(true),
 	// popup paints no background of its own: View pins the terminal default
-	// to ayu.bg, so an unstyled fill matches the data area by construction.
-	// Popups are distinguished by border and title styling alone.
+	// to ayu.bg, so on terminals honoring OSC 11 an unstyled fill matches the
+	// data area by construction (elsewhere both fall back to the terminal's
+	// own default together). Popups are distinguished by border and title
+	// styling alone.
 	popup:       lipgloss.NewStyle().Foreground(ayu.fgBright),
 	popupBorder: lipgloss.NewStyle().Foreground(ayu.accent),
 	cyan:        lipgloss.NewStyle().Foreground(ayu.tag),
@@ -98,7 +100,9 @@ func (m *Model) View() tea.View {
 	// Pin the terminal's default colors to the palette so every cell the app
 	// does not style explicitly still renders on ayu instead of whatever the
 	// host terminal uses; individually styling each region proved impossible
-	// to keep complete (see the garish-defaults tui-shot captures).
+	// to keep complete. Terminals that ignore OSC 10/11 degrade to their own
+	// defaults for unstyled cells, and bubbletea resets the pinned colors on
+	// every controlled exit (only an unkillable crash leaves them behind).
 	view.BackgroundColor = ayu.bg
 	view.ForegroundColor = ayu.fg
 	return view
@@ -136,13 +140,17 @@ func (m *Model) chromeRule() string {
 }
 
 // profileStrip renders the profile switcher for the right edge of the status
-// line: active profile highlighted, others dimmed, unloaded ones marked with a
-// trailing dot. Empty in single-profile mode.
-func (m *Model) profileStrip() string {
-	if !m.hasTabs() {
+// line within the given width budget: active profile highlighted, others
+// dimmed, unloaded ones marked with a trailing dot. The active profile is
+// always visible; when the strip does not fit, neighbors are added while they
+// fit and an ellipsis stands in for whatever is dropped from either end (the
+// old tab bar's narrow-terminal behavior). Empty in single-profile mode.
+func (m *Model) profileStrip(budget int) string {
+	if !m.hasTabs() || budget < 1 {
 		return ""
 	}
 	parts := make([]string, len(m.profiles))
+	total := 0
 	for i, profile := range m.profiles {
 		label := profile
 		loaded := i == m.active || (i < len(m.workspaces) && m.workspaces[i].sessionReady)
@@ -154,8 +162,62 @@ func (m *Model) profileStrip() string {
 		} else {
 			parts[i] = consolePalette.muted.Render(label)
 		}
+		total += lipgloss.Width(parts[i])
 	}
-	return strings.Join(parts, " ")
+	total += len(parts) - 1
+	if total <= budget {
+		return strings.Join(parts, " ")
+	}
+
+	// Too wide: keep the active profile and expand outward while neighbors
+	// fit, reserving room for an ellipsis on each side that has profiles.
+	available := budget - lipgloss.Width(parts[m.active])
+	if m.active > 0 {
+		available -= 2
+	}
+	if m.active < len(parts)-1 {
+		available -= 2
+	}
+	if available < 0 {
+		return truncateStyled(parts[m.active], budget)
+	}
+	leftIdx, rightIdx := m.active-1, m.active+1
+	leftStop, rightStop := leftIdx < 0, rightIdx >= len(parts)
+	var leftParts, rightParts []string
+	for !leftStop || !rightStop {
+		if !rightStop {
+			if need := lipgloss.Width(parts[rightIdx]) + 1; need <= available {
+				available -= need
+				rightParts = append(rightParts, parts[rightIdx])
+				rightIdx++
+				rightStop = rightIdx >= len(parts)
+			} else {
+				rightStop = true
+			}
+		}
+		if !leftStop {
+			if need := lipgloss.Width(parts[leftIdx]) + 1; need <= available {
+				available -= need
+				leftParts = append([]string{parts[leftIdx]}, leftParts...)
+				leftIdx--
+				leftStop = leftIdx < 0
+			} else {
+				leftStop = true
+			}
+		}
+	}
+	ellipsis := consolePalette.muted.Render("…")
+	var out []string
+	if leftIdx >= 0 {
+		out = append(out, ellipsis)
+	}
+	out = append(out, leftParts...)
+	out = append(out, parts[m.active])
+	out = append(out, rightParts...)
+	if rightIdx < len(parts) {
+		out = append(out, ellipsis)
+	}
+	return strings.Join(out, " ")
 }
 
 // scrollWindow clamps offset to the scrollable range and returns the visible
@@ -934,16 +996,24 @@ func (m *Model) statusLine() string {
 		indicator = consolePalette.amber.Render(m.spinner.View())
 	}
 	label := m.renderStatusLabel(level)
-	right := m.profileStrip()
 
-	const minWidthForPosition = 40
-	if m.width < minWidthForPosition || right == "" {
+	const minWidthForStrip = 40
+	if m.width < minWidthForStrip {
 		line := fmt.Sprintf(" %s %s  %s", indicator, label, text)
 		return truncateStyled(line, m.width)
 	}
 
 	prefix := fmt.Sprintf(" %s %s  ", indicator, label)
 	prefixWidth := lipgloss.Width(prefix)
+	// The strip gets whatever remains after the prefix and a minimum
+	// status-text allowance, so the active profile stays visible even on
+	// narrow terminals.
+	right := m.profileStrip(m.width - prefixWidth - 10)
+	if right == "" {
+		line := fmt.Sprintf(" %s %s  %s", indicator, label, text)
+		return truncateStyled(line, m.width)
+	}
+
 	rightWidth := lipgloss.Width(right)
 	maxTextWidth := m.width - prefixWidth - rightWidth
 	if maxTextWidth < 10 {
