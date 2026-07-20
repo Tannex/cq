@@ -1738,6 +1738,16 @@ func (m *Model) handleDataSetsResult(ws *workspace, msg dataSetsResultMsg) tea.C
 		return nil
 	}
 	ws.finishBrowse()
+	// The favorites "open" action queues at most one auto-open, bound to the
+	// fetch that armed it; an accepted result from any other generation means
+	// that fetch was superseded, so the queue clears without firing.
+	autoOpen := ""
+	if ws.autoOpen != "" {
+		if msg.Meta.Generation == ws.autoOpenGeneration {
+			autoOpen = ws.autoOpen
+		}
+		ws.autoOpen = ""
+	}
 	if msg.Err != nil {
 		ws.status = status{Level: statusError, Text: msg.Err.Error()}
 		return nil
@@ -1765,7 +1775,19 @@ func (m *Model) handleDataSetsResult(ws *workspace, msg dataSetsResultMsg) tea.C
 		}
 	}
 	if ws != &m.workspace {
+		// A backgrounded profile cannot change screens; leave the favorite
+		// selected so switching back shows it instead of silently dropping
+		// the open.
+		if autoOpen != "" {
+			ws.datasetPage.selectKey(autoOpen)
+		}
 		return nil
+	}
+	if autoOpen != "" {
+		if ws.datasetPage.selectKey(autoOpen) {
+			return m.openSelection()
+		}
+		ws.status = status{Level: statusWarn, Text: "favorite " + autoOpen + " was not found"}
 	}
 	return m.maybePrefetch(ws)
 }

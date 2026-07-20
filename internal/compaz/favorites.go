@@ -156,6 +156,8 @@ func (m *Model) handleFavoritesKey(msg tea.KeyPressMsg, selected action) tea.Cmd
 		return m.beginFavoritePattern(true)
 	case actionFavoriteEdit:
 		return m.beginFavoritePattern(false)
+	case actionFavoriteOpen:
+		return m.openFavorite()
 	case actionFavoriteRemove:
 		m.removePopupFavorite()
 		return nil
@@ -315,6 +317,28 @@ func (m *Model) jumpToFavorite() tea.Cmd {
 	return m.startDataSets(ws, ws.datasetPage.initialPlan(""))
 }
 
+// openFavorite opens an exact favorite directly: the jump fetch runs with the
+// data set queued for auto-open once the listing lands, so the normal
+// openSelection path (PS/PO routing, migrated-recall suggestion, usage
+// tracking) applies. Pattern favorites have nothing unambiguous to open and
+// degrade to the set-as-filter jump.
+func (m *Model) openFavorite() tea.Cmd {
+	popup := m.favPopup
+	entry, ok := popup.selectedEntry()
+	if !ok {
+		return nil
+	}
+	command := m.jumpToFavorite()
+	// Arm the queue only when the jump actually dispatched its fetch (a zero
+	// row budget dispatches nothing), and bind it to that fetch's generation.
+	if command != nil && !entry.Wildcard() {
+		ws := m.ws()
+		ws.autoOpen = entry.Pattern
+		ws.autoOpenGeneration = ws.browseGeneration
+	}
+	return command
+}
+
 // favoriteMarker returns the row marker for a data set name: an exact or
 // wildcard favorite shows the star.
 func (m *Model) favoriteMarker(name string) string {
@@ -377,7 +401,7 @@ func (m *Model) favoritesContent(accent, body, muted lipgloss.Style, width int) 
 // favoritesPanel is the tiny-terminal fallback: a full-area panel in the data
 // region, mirroring helpPanel.
 func (m *Model) favoritesPanel() string {
-	lines := []string{consolePalette.panel.Bold(true).Width(m.width).Render("  FAVORITES  enter jump  a add  e edit  n note  x remove  esc close")}
+	lines := []string{consolePalette.panel.Bold(true).Width(m.width).Render("  FAVORITES  enter jump  o open  a add  e edit  n note  x remove  esc close")}
 	lines = append(lines, m.favoritesContent(consolePalette.selected, consolePalette.plain, consolePalette.muted, m.width)...)
 	capacity := m.visible + 1
 	offset := max(0, len(lines)-capacity)
@@ -423,7 +447,7 @@ func (m *Model) overlayFavorites(background string) string {
 	for len(innerLines) < contentHeight+1 {
 		innerLines = append(innerLines, fill.Render(""))
 	}
-	footer := muted.Render("enter jump  a add  e edit  n note  x remove  esc close")
+	footer := muted.Render("enter jump  o open  a add  e edit  n note  x remove  esc close")
 	innerLines = append(innerLines, fill.Render(strings.Repeat(" ", max(0, (innerWidth-lipgloss.Width(footer))/2))+footer))
 
 	popupStyle := consolePalette.popup.
