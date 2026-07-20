@@ -48,11 +48,10 @@ type workspace struct {
 	// watch gives up.
 	recalls map[string]string
 
-	// The job owner filter is not user-editable in v1 (mirrors the
-	// "<Zowe user>.*" data set default precedent) so it is always ws.user,
-	// not a separate copy that could drift out of sync. jobPrefix defaults
-	// to "*" and is edited via a dedicated search-line input, the same way
-	// ws.prefix is.
+	// jobOwner defaults once from the session user at session load (mirrors
+	// the "<Zowe user>.*" data set default precedent) but, like jobPrefix,
+	// is editable via a dedicated search-line input.
+	jobOwner  string
 	jobPrefix string
 	jobs      []zosmf.Job
 	jobPage   pager[string]
@@ -245,7 +244,7 @@ func (ws *workspace) recordIdentity() string {
 }
 
 func (ws *workspace) jobIdentity() string {
-	return ws.user + "|" + ws.jobPrefix
+	return ws.jobOwner + "|" + ws.jobPrefix
 }
 
 func (ws *workspace) spoolFileListIdentity() string {

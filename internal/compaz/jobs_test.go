@@ -41,8 +41,8 @@ func TestJobsOpenDefaultsOwnerAndPrefix(t *testing.T) {
 		return zosmf.JobPage{Items: []zosmf.Job{{JobID: "JOB00001", JobName: "NIGHTBAT", Status: "OUTPUT"}}}, nil
 	}}
 	model := readyModel(t, Options{Prefix: "A*"}, browser, "IBMUSER", "", 90, 16)
-	if model.user != "IBMUSER" || model.jobPrefix != "*" {
-		t.Fatalf("job filter defaults owner=%q prefix=%q", model.user, model.jobPrefix)
+	if model.jobOwner != "IBMUSER" || model.jobPrefix != "*" {
+		t.Fatalf("job filter defaults owner=%q prefix=%q", model.jobOwner, model.jobPrefix)
 	}
 
 	executeCommand(t, model, model.handleAction(actionJobs))
@@ -85,6 +85,68 @@ func TestJobsPrefixFilterRefetches(t *testing.T) {
 	}
 	if len(model.jobs) != 1 || model.jobs[0].JobName != "NIGHT*1" {
 		t.Fatalf("jobs after refetch = %#v", model.jobs)
+	}
+}
+
+func TestJobsOwnerFilterEditableViaTabFromPrefix(t *testing.T) {
+	browser := &fakeBrowser{listJobs: func(_ context.Context, request zosmf.ListJobsRequest) (zosmf.JobPage, error) {
+		return zosmf.JobPage{Items: []zosmf.Job{{JobID: "JOB00001", JobName: request.Owner + "-" + request.Prefix}}}, nil
+	}}
+	model := readyModel(t, Options{}, browser, "IBMUSER", "", 90, 16)
+	executeCommand(t, model, model.handleAction(actionJobs))
+
+	executeCommand(t, model, model.handleAction(actionSearch))
+	if !model.jobFilterInput.Focused() {
+		t.Fatal("actionSearch did not focus the prefix field first")
+	}
+	if model.jobOwnerInput.Value() != "IBMUSER" {
+		t.Fatalf("owner field prefill = %q, want IBMUSER", model.jobOwnerInput.Value())
+	}
+
+	executeCommand(t, model, model.moveJobFilterFocus(1))
+	if !model.jobOwnerInput.Focused() || model.jobFilterInput.Focused() {
+		t.Fatal("tab did not move focus from prefix to owner")
+	}
+	model.jobOwnerInput.SetValue("OTHERUSR")
+
+	executeCommand(t, model, model.moveJobFilterFocus(-1))
+	if !model.jobFilterInput.Focused() || model.jobOwnerInput.Focused() {
+		t.Fatal("shift+tab did not move focus back to prefix")
+	}
+	model.jobFilterInput.SetValue("NIGHT*")
+
+	// Enter commits both fields regardless of which currently has focus.
+	executeCommand(t, model, model.acceptSearch())
+	if model.jobOwnerInput.Focused() || model.jobFilterInput.Focused() {
+		t.Fatal("acceptSearch left a job field focused")
+	}
+	if model.jobOwner != "OTHERUSR" || model.jobPrefix != "NIGHT*" {
+		t.Fatalf("committed filter owner=%q prefix=%q, want OTHERUSR/NIGHT*", model.jobOwner, model.jobPrefix)
+	}
+	last := browser.jobRequests[len(browser.jobRequests)-1]
+	if last.Owner != "OTHERUSR" || last.Prefix != "NIGHT*" {
+		t.Fatalf("refetch request = %#v", last)
+	}
+	if len(model.jobs) != 1 || model.jobs[0].JobName != "OTHERUSR-NIGHT*" {
+		t.Fatalf("jobs after refetch = %#v", model.jobs)
+	}
+}
+
+func TestJobsOwnerFilterEmptyResetsToSessionUser(t *testing.T) {
+	browser := &fakeBrowser{listJobs: func(_ context.Context, request zosmf.ListJobsRequest) (zosmf.JobPage, error) {
+		return zosmf.JobPage{Items: []zosmf.Job{{JobID: "JOB00001", JobName: request.Owner}}}, nil
+	}}
+	model := readyModel(t, Options{}, browser, "IBMUSER", "", 90, 16)
+	executeCommand(t, model, model.handleAction(actionJobs))
+	model.jobOwner = "OTHERUSR"
+
+	executeCommand(t, model, model.handleAction(actionSearch))
+	executeCommand(t, model, model.moveJobFilterFocus(1))
+	model.jobOwnerInput.SetValue("")
+	executeCommand(t, model, model.acceptSearch())
+
+	if model.jobOwner != "IBMUSER" {
+		t.Fatalf("job owner = %q, want session user IBMUSER when cleared", model.jobOwner)
 	}
 }
 

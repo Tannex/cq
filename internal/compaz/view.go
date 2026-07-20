@@ -418,7 +418,7 @@ func (m *Model) titleLine() string {
 		body = m.modeName()
 	case ScreenJobs:
 		screenName = "JOBS"
-		body = fmt.Sprintf("owner %s  filter %s", displayOr(m.user, "*"), displayOr(m.jobPrefix, "*"))
+		body = fmt.Sprintf("owner %s  filter %s", displayOr(m.jobOwner, "*"), displayOr(m.jobPrefix, "*"))
 	case ScreenSpoolFiles:
 		screenName = m.job.JobName + "(" + m.job.JobID + ")"
 		body = "spool files"
@@ -498,10 +498,13 @@ func (m *Model) searchLine() string {
 		line = label.Render("CODEPAGE") + "  " + value.Render(m.codepageName) +
 			"  " + label.Render("COPYBOOK") + "  " + value.Render(overlayText)
 	case ScreenJobs:
-		if m.jobFilterInput.Focused() {
-			line = m.jobFilterInput.View()
-		} else {
-			line = label.Render("OWNER") + "  " + value.Render(displayOr(m.user, "*")) +
+		switch {
+		case m.jobOwnerInput.Focused():
+			line = m.jobOwnerInput.View() + "    " + label.Render("PREFIX") + "  " + value.Render(displayOr(m.jobPrefix, "*"))
+		case m.jobFilterInput.Focused():
+			line = label.Render("OWNER") + "  " + value.Render(displayOr(m.jobOwner, "*")) + "    " + m.jobFilterInput.View()
+		default:
+			line = label.Render("OWNER") + "  " + value.Render(displayOr(m.jobOwner, "*")) +
 				"    " + label.Render("PREFIX") + "  " + value.Render(displayOr(m.jobPrefix, "*"))
 		}
 	case ScreenSpoolFiles:

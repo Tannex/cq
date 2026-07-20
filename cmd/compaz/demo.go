@@ -36,7 +36,13 @@ func loadDemoSession(ctx context.Context, profile string) (compaz.Session, error
 	}
 	user := "DEMOUSER"
 	if profile != "" {
+		// z/OSMF job owner IDs (and real TSO userids) are capped at 8
+		// characters; keep demo usernames within that so the jobs screen's
+		// owner field never has to silently truncate a prefilled value.
 		user = strings.ToUpper(profile) + "USR"
+		if len(user) > 8 {
+			user = user[:8]
+		}
 	}
 	return compaz.Session{
 		Browser:  &demoBrowser{user: user},

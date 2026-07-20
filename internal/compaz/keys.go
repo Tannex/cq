@@ -265,6 +265,13 @@ func (k KeyMap) actionFor(msg tea.KeyPressMsg, ctx keyContext) action {
 			return actionAccept
 		case key.Matches(msg, k.Cancel):
 			return actionCancel
+		// ScreenJobs is the only input-focused screen with two fields (owner
+		// and prefix) to cycle between; every other single-field screen has
+		// nothing for Tab/Shift+Tab to do here.
+		case ctx.Screen == ScreenJobs && key.Matches(msg, k.NextField):
+			return actionNextField
+		case ctx.Screen == ScreenJobs && key.Matches(msg, k.PreviousField):
+			return actionPreviousField
 		default:
 			return actionNone
 		}
@@ -454,6 +461,9 @@ func (k KeyMap) shortHelp(ctx keyContext, overlay bool) []key.Binding {
 		return []key.Binding{k.Up, k.Down, k.Accept, k.FavoriteOpen, k.FavoriteAdd, k.FavoriteEdit, k.FavoriteNote, k.FavoriteRemove, k.Cancel}
 	}
 	if ctx.InputFocused {
+		if ctx.Screen == ScreenJobs {
+			return []key.Binding{k.Accept, k.NextField, k.Cancel}
+		}
 		return []key.Binding{k.Accept, k.Cancel}
 	}
 	bindings := []key.Binding{k.Up, k.Down, k.Open}

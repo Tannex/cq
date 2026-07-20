@@ -293,6 +293,7 @@ type Model struct {
 	prefixInput    textinput.Model
 	memberInput    textinput.Model
 	locateInput    textinput.Model
+	jobOwnerInput  textinput.Model
 	jobFilterInput textinput.Model
 	mappingView    *mappingView
 	favPopup       *favoritesPopup
@@ -376,6 +377,13 @@ func NewModel(options Options, deps Dependencies) (*Model, error) {
 	locateStyles := locateInput.Styles()
 	locateStyles.Cursor.Blink = false
 	locateInput.SetStyles(locateStyles)
+	jobOwnerInput := textinput.New()
+	jobOwnerInput.Prompt = "OWNER   "
+	jobOwnerInput.CharLimit = 8
+	jobOwnerInput.SetWidth(24)
+	jobOwnerStyles := jobOwnerInput.Styles()
+	jobOwnerStyles.Cursor.Blink = false
+	jobOwnerInput.SetStyles(jobOwnerStyles)
 	jobFilterInput := textinput.New()
 	jobFilterInput.Prompt = "PREFIX  "
 	jobFilterInput.Placeholder = "*"
@@ -396,6 +404,7 @@ func NewModel(options Options, deps Dependencies) (*Model, error) {
 		prefixInput:    prefixInput,
 		memberInput:    memberInput,
 		locateInput:    locateInput,
+		jobOwnerInput:  jobOwnerInput,
 		jobFilterInput: jobFilterInput,
 		profiles:       []string{""},
 	}
@@ -460,6 +469,7 @@ func (m *Model) syncInputsFromWorkspace() {
 	m.prefixInput.SetValue(m.workspace.prefix)
 	m.memberInput.SetValue(m.workspace.memberPattern)
 	m.locateInput.SetValue("")
+	m.jobOwnerInput.SetValue(m.workspace.jobOwner)
 	m.jobFilterInput.SetValue(m.workspace.jobPrefix)
 }
 
@@ -679,6 +689,7 @@ func (m *Model) handleSessionResult(ws *workspace, msg sessionResultMsg) tea.Cmd
 	ws.user = strings.ToUpper(strings.TrimSpace(msg.Session.User))
 	ws.codepageName = cm.Name()
 	ws.charmap = cm
+	ws.jobOwner = ws.user
 	ws.jobPrefix = "*"
 
 	ws.prefix = strings.ToUpper(strings.TrimSpace(m.options.Prefix))
@@ -853,6 +864,10 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		case actionCancel:
 			m.cancelSearch()
 			return nil
+		case actionNextField:
+			return m.moveJobFilterFocus(1)
+		case actionPreviousField:
+			return m.moveJobFilterFocus(-1)
 		default:
 			input := m.focusedInput()
 			updated, cmd := input.Update(msg)
@@ -957,8 +972,11 @@ func (m *Model) handleAction(selected action) tea.Cmd {
 			return m.locateInput.Focus()
 		}
 		if ws.screen == ScreenJobs {
+			m.jobOwnerInput.SetValue(ws.jobOwner)
+			m.jobOwnerInput.CursorEnd()
 			m.jobFilterInput.SetValue(ws.jobPrefix)
 			m.jobFilterInput.CursorEnd()
+			// Prefix is the more commonly edited field; owner is one tab away.
 			return m.jobFilterInput.Focus()
 		}
 	case actionUp:
@@ -1302,7 +1320,7 @@ func mappingSource(mapping dsnmap.Mapping) CopybookSource {
 }
 
 func (m *Model) focusedInput() *textinput.Model {
-	for _, input := range []*textinput.Model{&m.prefixInput, &m.memberInput, &m.locateInput, &m.jobFilterInput} {
+	for _, input := range []*textinput.Model{&m.prefixInput, &m.memberInput, &m.locateInput, &m.jobOwnerInput, &m.jobFilterInput} {
 		if input.Focused() {
 			return input
 		}
@@ -1322,13 +1340,21 @@ func (m *Model) acceptSearch() tea.Cmd {
 	if m.locateInput.Focused() {
 		return m.acceptRecordLocation()
 	}
-	if m.jobFilterInput.Focused() {
+	if m.jobOwnerInput.Focused() || m.jobFilterInput.Focused() {
+		// Enter commits both fields regardless of which one currently has
+		// focus, since Tab may have moved focus after editing the other.
+		owner := strings.ToUpper(strings.TrimSpace(m.jobOwnerInput.Value()))
+		if owner == "" {
+			owner = ws.user
+		}
 		prefix := strings.ToUpper(strings.TrimSpace(m.jobFilterInput.Value()))
 		if prefix == "" {
 			prefix = "*"
 		}
+		m.jobOwnerInput.Blur()
 		m.jobFilterInput.Blur()
 		ws.cancelBrowse()
+		ws.jobOwner = owner
 		ws.jobPrefix = prefix
 		ws.resetJobsState()
 		if m.budget <= 0 {
@@ -1419,6 +1445,25 @@ func (m *Model) cancelSearch() {
 		input.Blur()
 		m.syncInputsFromWorkspace()
 	}
+}
+
+// moveJobFilterFocus cycles focus between the jobs screen's two search-line
+// fields (owner and prefix), the only input-focused screen with more than
+// one field to Tab between.
+func (m *Model) moveJobFilterFocus(delta int) tea.Cmd {
+	inputs := []*textinput.Model{&m.jobOwnerInput, &m.jobFilterInput}
+	current := 0
+	for i, input := range inputs {
+		if input.Focused() {
+			current = i
+			break
+		}
+	}
+	next := ((current+delta)%len(inputs) + len(inputs)) % len(inputs)
+	for _, input := range inputs {
+		input.Blur()
+	}
+	return inputs[next].Focus()
 }
 
 func (m *Model) activePager() pagerNavigator {
@@ -1830,6 +1875,7 @@ func (m *Model) handleResize(width, height int) tea.Cmd {
 	m.prefixInput.SetWidth(max(8, width-10))
 	m.memberInput.SetWidth(max(8, min(24, width-10)))
 	m.locateInput.SetWidth(max(8, min(24, width-10)))
+	m.jobOwnerInput.SetWidth(max(8, min(24, width-10)))
 	m.jobFilterInput.SetWidth(max(8, min(24, width-10)))
 	if m.mappingView != nil {
 		m.mappingView.setWidth(width)
@@ -1999,8 +2045,8 @@ func (m *Model) startJobs(ws *workspace, plan pagePlan[string]) tea.Cmd {
 	ws.browsePending = &meta
 	ctx, cancel := context.WithTimeout(context.Background(), m.deps.Timeout)
 	ws.browseCancel = cancel
-	ws.status = status{Level: statusLoading, Text: fmt.Sprintf("listing jobs for %s owned by %s", displayOr(ws.jobPrefix, "*"), displayOr(ws.user, "any"))}
-	request := zosmf.ListJobsRequest{Owner: ws.user, Prefix: ws.jobPrefix, MaxItems: m.budget}
+	ws.status = status{Level: statusLoading, Text: fmt.Sprintf("listing jobs for %s owned by %s", displayOr(ws.jobPrefix, "*"), displayOr(ws.jobOwner, "any"))}
+	request := zosmf.ListJobsRequest{Owner: ws.jobOwner, Prefix: ws.jobPrefix, MaxItems: m.budget}
 	return m.loadingCommand(func() tea.Msg {
 		page, err := jobs.ListJobs(ctx, request)
 		return jobsResultMsg{Meta: meta, Page: page, Err: err}
