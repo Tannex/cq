@@ -297,23 +297,10 @@ func TestProfileSwitchRestartsSpinnerForPendingRecalls(t *testing.T) {
 }
 
 func commandYieldsSpinnerTick(command tea.Cmd) bool {
-	queue := []tea.Cmd{command}
-	for len(queue) > 0 {
-		current := queue[0]
-		queue = queue[1:]
-		if current == nil {
-			continue
-		}
-		message := current()
-		if batch, ok := message.(tea.BatchMsg); ok {
-			queue = append(queue, batch...)
-			continue
-		}
-		if _, ok := message.(spinner.TickMsg); ok {
-			return true
-		}
-	}
-	return false
+	return walkMessages(command, func(message tea.Msg) (tea.Cmd, bool) {
+		_, ok := message.(spinner.TickMsg)
+		return nil, ok
+	})
 }
 
 func readyModelWithProfiles(t *testing.T, options Options, browser zosmf.Browser, profiles []string) *Model {
