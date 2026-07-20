@@ -91,8 +91,11 @@ func applyMessage(t *testing.T, model *Model, message tea.Msg) tea.Cmd {
 	return cmd
 }
 
-func executeCommand(t *testing.T, model *Model, command tea.Cmd) {
-	t.Helper()
+// walkMessages executes a command tree breadth-first, unwrapping batches and
+// invoking visit for every produced message. visit returns follow-up commands
+// to keep draining (or nil) and whether to stop early; walkMessages reports
+// whether the walk stopped early.
+func walkMessages(command tea.Cmd, visit func(tea.Msg) (tea.Cmd, bool)) bool {
 	queue := []tea.Cmd{command}
 	for len(queue) > 0 {
 		current := queue[0]
@@ -105,10 +108,22 @@ func executeCommand(t *testing.T, model *Model, command tea.Cmd) {
 			queue = append(queue, batch...)
 			continue
 		}
-		if next := applyMessage(t, model, message); next != nil {
+		next, stop := visit(message)
+		if stop {
+			return true
+		}
+		if next != nil {
 			queue = append(queue, next)
 		}
 	}
+	return false
+}
+
+func executeCommand(t *testing.T, model *Model, command tea.Cmd) {
+	t.Helper()
+	walkMessages(command, func(message tea.Msg) (tea.Cmd, bool) {
+		return applyMessage(t, model, message), false
+	})
 }
 
 func browseResultMessage(t *testing.T, command tea.Cmd) tea.Msg {

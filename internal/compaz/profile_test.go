@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/Tannex/cq/internal/zosmf"
@@ -276,6 +277,30 @@ func TestProfileSwitchDoesNothingInSingleProfileMode(t *testing.T) {
 	if cmd := model.handleAction(actionNextProfile); cmd != nil {
 		t.Fatalf("next profile dispatched a command in single-profile mode: %v", cmd)
 	}
+}
+
+func TestProfileSwitchRestartsSpinnerForPendingRecalls(t *testing.T) {
+	browser := &fakeBrowser{listDataSets: func(_ context.Context, request zosmf.ListDataSetsRequest) (zosmf.DataSetPage, error) {
+		return zosmf.DataSetPage{Items: []zosmf.DataSet{{Name: "A.DATA", Organization: "PS"}}}, nil
+	}}
+	model := readyModelWithProfiles(t, Options{Prefix: "A*"}, browser, []string{"alpha", "beta"})
+	model.ws().markRecall("A.DATA")
+
+	executeCommand(t, model, model.handleAction(actionNextProfile))
+	if model.ws().hasRecalls() {
+		t.Fatal("recall leaked into the beta workspace")
+	}
+	command := model.handleAction(actionPreviousProfile)
+	if !commandYieldsSpinnerTick(command) {
+		t.Fatal("switching back to a recalling workspace did not restart the spinner tick loop")
+	}
+}
+
+func commandYieldsSpinnerTick(command tea.Cmd) bool {
+	return walkMessages(command, func(message tea.Msg) (tea.Cmd, bool) {
+		_, ok := message.(spinner.TickMsg)
+		return nil, ok
+	})
 }
 
 func readyModelWithProfiles(t *testing.T, options Options, browser zosmf.Browser, profiles []string) *Model {
