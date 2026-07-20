@@ -988,8 +988,8 @@ func (m *Model) statusLine() string {
 	}
 	label := m.renderStatusLabel(level)
 
-	const minWidthForPosition = 40
-	if m.width < minWidthForPosition {
+	const minWidthForStrip = 40
+	if m.width < minWidthForStrip {
 		line := fmt.Sprintf(" %s %s  %s", indicator, label, text)
 		return truncateStyled(line, m.width)
 	}
