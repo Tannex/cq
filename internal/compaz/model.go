@@ -528,15 +528,7 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case recordsResultMsg:
 		if ws := m.targetWorkspace(msg.Meta.Profile); ws != nil {
-			// acceptBrowse is checked before handleRecordsResult clears the
-			// pending request, so a running query search only continues (or
-			// stops on error) for the page it was actually waiting on.
-			accepted := ws.acceptBrowse(msg.Meta, m.budget, ws.screen)
-			command := m.handleRecordsResult(ws, msg)
-			if accepted {
-				command = tea.Batch(command, m.queryAfterFetch(ws, msg.Err))
-			}
-			return m, command
+			return m, m.handleRecordsResult(ws, msg)
 		}
 	case overlayResultMsg:
 		if ws := m.targetWorkspace(msg.Profile); ws != nil {
@@ -573,6 +565,8 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handleEditSaveResult(msg)
 	case queryEvalMsg:
 		return m, m.handleQueryEval(msg)
+	case queryBulkMsg:
+		return m, m.handleQueryBulk(msg)
 	case spinner.TickMsg:
 		var commands []tea.Cmd
 		if m.query != nil && m.query.running {
@@ -819,6 +813,13 @@ func (m *Model) handleAction(selected action) tea.Cmd {
 		return nil
 	case actionQuit:
 		m.flushMappingOps()
+		if m.query != nil {
+			m.query.stopSearch()
+		}
+		m.workspace.dropBulkRecords()
+		for _, ws := range m.workspaces {
+			ws.dropBulkRecords()
+		}
 		m.cancelAll()
 		return tea.Quit
 	case actionHelp:
@@ -968,10 +969,18 @@ func (m *Model) switchProfile(delta int) tea.Cmd {
 	ws := m.ws()
 	m.syncInputsFromWorkspace()
 	m.helpVertical = 0
+	var command tea.Cmd
 	if !ws.sessionReady && ws.sessionCancel == nil {
-		return m.loadActiveSession()
+		command = m.loadActiveSession()
+	} else {
+		command = m.ensureActivePage()
 	}
-	return m.ensureActivePage()
+	// The tick loop stops once the outgoing workspace goes idle; restart it so
+	// the incoming workspace's RECALL indicators keep animating.
+	if ws.hasRecalls() {
+		command = tea.Batch(command, m.spinner.Tick)
+	}
+	return command
 }
 
 func (m *Model) clearOverlay() {
@@ -1417,6 +1426,9 @@ func (m *Model) refresh() tea.Cmd {
 	case ScreenRecords:
 		plan := ws.recordPage.refreshPlan()
 		ws.cancelDecode()
+		// A refresh means the data may have changed on the host; any cached
+		// bulk download is stale.
+		ws.dropBulkRecords()
 		ws.records = nil
 		ws.rawLongest = 0
 		ws.syntaxKind = sourcePlain

@@ -1,7 +1,11 @@
 package compaz
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
+	"io"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -41,21 +45,38 @@ func executeQuery(t *testing.T, model *Model, command tea.Cmd) {
 }
 
 // queryModel builds a model on the records screen of a PS data set with a
-// copybook overlay applied, backed by the supplied record pages.
-func queryModel(t *testing.T, pages map[int64]zosmf.RecordPage) (*Model, *fakeBrowser) {
+// copybook overlay applied, backed by the supplied record pages. The bulk
+// stream serves the same records as frames, page order preserved.
+func queryModel(t *testing.T, pages map[int64]zosmf.RecordPage) (*Model, *fakeStreamBrowser) {
 	t.Helper()
 	return queryModelWithCopybook(t, "01 REC.\n 05 NAME PIC X(3).\n", pages)
 }
 
-func queryModelWithCopybook(t *testing.T, copybook string, pages map[int64]zosmf.RecordPage) (*Model, *fakeBrowser) {
+func queryModelWithCopybook(t *testing.T, copybook string, pages map[int64]zosmf.RecordPage) (*Model, *fakeStreamBrowser) {
 	t.Helper()
-	browser := &fakeBrowser{
-		listDataSets: func(context.Context, zosmf.ListDataSetsRequest) (zosmf.DataSetPage, error) {
-			return zosmf.DataSetPage{Items: []zosmf.DataSet{{Name: "A.CUSTOMER.DATA", Organization: "PS"}}}, nil
-		},
-		readRecords: func(_ context.Context, request zosmf.ReadRecordsRequest) (zosmf.RecordPage, error) {
-			return pages[request.Start], nil
-		},
+	browser := &fakeStreamBrowser{}
+	browser.listDataSets = func(context.Context, zosmf.ListDataSetsRequest) (zosmf.DataSetPage, error) {
+		return zosmf.DataSetPage{Items: []zosmf.DataSet{{Name: "A.CUSTOMER.DATA", Organization: "PS"}}}, nil
+	}
+	browser.readRecords = func(_ context.Context, request zosmf.ReadRecordsRequest) (zosmf.RecordPage, error) {
+		return pages[request.Start], nil
+	}
+	browser.stream = func(context.Context, string) (io.ReadCloser, error) {
+		starts := make([]int64, 0, len(pages))
+		for start := range pages {
+			starts = append(starts, start)
+		}
+		slices.Sort(starts)
+		var buffer bytes.Buffer
+		for _, start := range starts {
+			for _, record := range pages[start].Records {
+				var header [4]byte
+				binary.BigEndian.PutUint32(header[:], uint32(len(record.Data)))
+				buffer.Write(header[:])
+				buffer.Write(record.Data)
+			}
+		}
+		return io.NopCloser(&buffer), nil
 	}
 	model, err := NewModel(Options{Prefix: "A*", Codepage: "latin1", Copybook: "cust.cpy"}, Dependencies{
 		LoadSession: func(context.Context, string) (Session, error) {
@@ -98,22 +119,22 @@ func runQueryExpr(t *testing.T, model *Model, expr string) {
 	executeQuery(t, model, applyMessage(t, model, keyPress(tea.KeyEnter, "")))
 }
 
-func TestQueryStreamsResultsOverCachedRecords(t *testing.T) {
+func TestQueryEvaluatesWholeDataSetAsOneArray(t *testing.T) {
 	model, _ := queryModel(t, singleRecordPage(
 		zosmf.Record{Number: 1, Data: []byte("ABC")},
 		zosmf.Record{Number: 2, Data: []byte("XYZ")},
 	))
 	openQuery(t, model)
-	runQueryExpr(t, model, ".NAME")
+	runQueryExpr(t, model, ".[].NAME")
 
 	popup := model.query
 	if !popup.done || popup.running {
-		t.Fatalf("search not finished: done=%v running=%v err=%q", popup.done, popup.running, popup.err)
+		t.Fatalf("query not finished: done=%v running=%v err=%q", popup.done, popup.running, popup.err)
 	}
 	if popup.searched != 2 || popup.matches != 2 {
 		t.Fatalf("searched=%d matches=%d, want 2/2", popup.searched, popup.matches)
 	}
-	if len(popup.lines) != 2 || popup.lines[0] != `    1 │ "ABC"` || popup.lines[1] != `    2 │ "XYZ"` {
+	if len(popup.lines) != 2 || popup.lines[0] != `"ABC"` || popup.lines[1] != `"XYZ"` {
 		t.Fatalf("lines = %#v", popup.lines)
 	}
 }
@@ -145,10 +166,10 @@ func TestQueryRequiresOverlay(t *testing.T) {
 	}
 }
 
-func TestQueryLazyFetchContinuesToEndOfRecords(t *testing.T) {
+func TestQueryCoversRecordsBeyondTheBrowseCache(t *testing.T) {
 	// The first page is deep enough (14 = the row budget at 90×12) that the
-	// browse prefetch is not triggered, so the remaining records can only be
-	// reached by the query's own lazy fetch.
+	// browse prefetch is not triggered; the query still sees records 15-16
+	// because the bulk download always covers the whole data set.
 	first := make([]zosmf.Record, 14)
 	for i := range first {
 		first[i] = zosmf.Record{Number: int64(i + 1), Data: []byte("AAA")}
@@ -164,23 +185,23 @@ func TestQueryLazyFetchContinuesToEndOfRecords(t *testing.T) {
 	fetchesBefore := len(browser.recordRequests)
 
 	openQuery(t, model)
-	runQueryExpr(t, model, `select(.NAME == "ABC") | .NAME`)
+	runQueryExpr(t, model, `.[] | select(.NAME == "ABC") | .NAME`)
 
 	popup := model.query
 	if !popup.done {
-		t.Fatalf("search did not reach end of records: %+v err=%q", popup, popup.err)
+		t.Fatalf("query did not finish: %+v err=%q", popup, popup.err)
 	}
 	if popup.searched != 16 {
-		t.Fatalf("searched = %d, want 16 (lazy fetch to EOF)", popup.searched)
+		t.Fatalf("searched = %d, want 16 (whole data set)", popup.searched)
 	}
-	if len(browser.recordRequests) <= fetchesBefore {
-		t.Fatal("no forward page was fetched for the search")
+	if len(browser.recordRequests) != fetchesBefore {
+		t.Fatal("query paged through browse fetches instead of the download")
 	}
-	if len(popup.lines) != 1 || popup.lines[0] != `   16 │ "ABC"` {
+	if len(browser.streamRequests) != 1 {
+		t.Fatalf("stream requests = %v, want one bulk download", browser.streamRequests)
+	}
+	if len(popup.lines) != 1 || popup.lines[0] != `"ABC"` {
 		t.Fatalf("lines = %#v", popup.lines)
-	}
-	if len(model.records) != 16 {
-		t.Fatalf("workspace cache = %d records, want 16 (shared cache)", len(model.records))
 	}
 }
 
@@ -222,8 +243,8 @@ func TestQueryResultCapStopsSearch(t *testing.T) {
 	runQueryExpr(t, model, "range(600) | tostring")
 
 	popup := model.query
-	if !popup.capped || popup.running {
-		t.Fatalf("cap did not stop search: capped=%v running=%v", popup.capped, popup.running)
+	if !popup.done || popup.running {
+		t.Fatalf("query not finished: done=%v running=%v", popup.done, popup.running)
 	}
 	if len(popup.lines) != queryResultCap {
 		t.Fatalf("retained lines = %d, want cap %d", len(popup.lines), queryResultCap)
@@ -231,8 +252,8 @@ func TestQueryResultCapStopsSearch(t *testing.T) {
 	if popup.matches != 600 {
 		t.Fatalf("matches = %d, want 600 (counted past the cap)", popup.matches)
 	}
-	if popup.searched != 1 {
-		t.Fatalf("searched = %d, want 1 (second record not evaluated)", popup.searched)
+	if footer := model.queryFooter(); !strings.Contains(footer, "first 500 shown") {
+		t.Fatalf("footer missing cap note: %q", footer)
 	}
 }
 
@@ -242,16 +263,16 @@ func TestQuerySkipsDecodeErrorRecords(t *testing.T) {
 		zosmf.Record{Number: 2, Data: []byte("ABC")},
 	))
 	openQuery(t, model)
-	runQueryExpr(t, model, ".NAME")
+	runQueryExpr(t, model, ".[].NAME")
 
 	popup := model.query
 	if !popup.done {
-		t.Fatalf("search did not finish: %+v", popup)
+		t.Fatalf("query did not finish: %+v", popup)
 	}
 	if popup.errored != 1 || popup.matches != 1 {
 		t.Fatalf("errored=%d matches=%d, want 1/1", popup.errored, popup.matches)
 	}
-	if len(popup.lines) != 1 || popup.lines[0] != `    2 │ "ABC"` {
+	if len(popup.lines) != 1 || popup.lines[0] != `"ABC"` {
 		t.Fatalf("lines = %#v", popup.lines)
 	}
 	if footer := model.queryFooter(); !strings.Contains(footer, "1 records skipped") {
@@ -297,40 +318,25 @@ func TestQueryKeyRouting(t *testing.T) {
 	}
 }
 
-func TestQueryFallsBackToArrayMode(t *testing.T) {
+func TestQueryAggregatesOverTheWholeArray(t *testing.T) {
 	model, _ := queryModel(t, singleRecordPage(
 		zosmf.Record{Number: 1, Data: []byte("XYZ")},
 		zosmf.Record{Number: 2, Data: []byte("ABC")},
 		zosmf.Record{Number: 3, Data: []byte("ABC")},
 	))
 	openQuery(t, model)
-	// map/unique need the whole data set as one array; per-record evaluation
-	// errors on every record with zero matches, triggering the fallback.
+	// map/unique see the whole data set as one array directly.
 	runQueryExpr(t, model, "map(.NAME) | unique")
 
 	popup := model.query
 	if !popup.done || popup.running {
-		t.Fatalf("search not finished: done=%v running=%v err=%q lastErr=%q", popup.done, popup.running, popup.err, popup.lastErr)
-	}
-	if !popup.arrayMode {
-		t.Fatal("array-mode fallback did not run")
+		t.Fatalf("query not finished: done=%v running=%v err=%q lastErr=%q", popup.done, popup.running, popup.err, popup.lastErr)
 	}
 	if len(popup.lines) != 1 || popup.lines[0] != `["ABC","XYZ"]` {
 		t.Fatalf("lines = %#v", popup.lines)
 	}
 	if popup.errored != 0 || popup.lastErr != "" {
-		t.Fatalf("fallback left errors visible: errored=%d lastErr=%q", popup.errored, popup.lastErr)
-	}
-}
-
-func TestQueryStreamingStillWinsWhenItMatches(t *testing.T) {
-	model, _ := queryModel(t, singleRecordPage(
-		zosmf.Record{Number: 1, Data: []byte("ABC")},
-	))
-	openQuery(t, model)
-	runQueryExpr(t, model, ".NAME")
-	if model.query.arrayMode {
-		t.Fatal("array fallback ran despite streaming matches")
+		t.Fatalf("errors left visible: errored=%d lastErr=%q", popup.errored, popup.lastErr)
 	}
 }
 
@@ -358,7 +364,7 @@ func TestQuerySingleQuoteExpressionRuns(t *testing.T) {
 		zosmf.Record{Number: 2, Data: []byte("XYZ")},
 	))
 	openQuery(t, model)
-	runQueryExpr(t, model, `select(.NAME == 'ABC') | .NAME`)
+	runQueryExpr(t, model, `.[] | select(.NAME == 'ABC') | .NAME`)
 	popup := model.query
 	if popup.err != "" || popup.matches != 1 {
 		t.Fatalf("err=%q matches=%d", popup.err, popup.matches)
@@ -547,7 +553,7 @@ func TestQueryCopyPutsResultsOnClipboardWithFooterNotice(t *testing.T) {
 	if cmd := applyMessage(t, model, tea.KeyPressMsg(tea.Key{Code: 'y', Mod: tea.ModCtrl})); cmd != nil {
 		t.Fatal("copy with no results dispatched a command")
 	}
-	runQueryExpr(t, model, ".NAME")
+	runQueryExpr(t, model, ".[].NAME")
 	cmd := applyMessage(t, model, tea.KeyPressMsg(tea.Key{Code: 'y', Mod: tea.ModCtrl}))
 	if cmd == nil {
 		t.Fatal("copy dispatched no clipboard command")
@@ -556,7 +562,7 @@ func TestQueryCopyPutsResultsOnClipboardWithFooterNotice(t *testing.T) {
 		t.Fatalf("footer missing copy notice: %q", footer)
 	}
 	// A new run clears the stale notice.
-	runQueryExpr(t, model, ".NAME")
+	runQueryExpr(t, model, ".[].NAME")
 	if footer := model.queryFooter(); strings.Contains(footer, "copied") {
 		t.Fatalf("copy notice survived a new run: %q", footer)
 	}
