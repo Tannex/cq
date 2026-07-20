@@ -104,15 +104,18 @@ type pendingMappingSave struct {
 
 // FavoriteStore persists data set favorites across sessions. A nil store
 // disables favorites.
+// FavoriteStore persists data set favorites keyed by z/OSMF profile; the
+// empty profile holds entries shared across profiles (single-profile
+// sessions and favorites saved before profile keying).
 type FavoriteStore interface {
-	Favorites() []favorites.Favorite
-	Matches(name string) bool
-	Toggle(name string) (bool, error)
-	Add(pattern string) error
-	Rename(oldPattern, newPattern string) error
-	SetNote(pattern, note string) error
-	Remove(pattern string) (bool, error)
-	Touch(pattern string) error
+	Favorites(profile string) []favorites.Favorite
+	Matches(profile, name string) bool
+	Toggle(profile, name string) (bool, error)
+	Add(profile, pattern string) error
+	Rename(profile, oldPattern, newPattern string) error
+	SetNote(profile, pattern, note string) error
+	Remove(profile, pattern string) (bool, error)
+	Touch(profile, pattern string) error
 }
 
 // EventRecorder appends local usage events — data set opens and executed jq
