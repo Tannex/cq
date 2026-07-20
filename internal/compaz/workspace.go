@@ -3,6 +3,7 @@ package compaz
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/Tannex/cq/internal/decode"
 	"github.com/Tannex/cq/internal/zosmf"
@@ -38,6 +39,13 @@ type workspace struct {
 	// The value holds the most recent catalog-check error, surfaced if the
 	// watch gives up.
 	recalls map[string]string
+
+	// bulkRecordsPath caches a whole-data-set record download (jq bulk
+	// search) keyed by bulkRecordsIdentity, so closing and reopening the
+	// query console does not re-download. Dropped when the identity changes,
+	// on refresh, after a successful edit save, and at quit.
+	bulkRecordsPath     string
+	bulkRecordsIdentity string
 
 	records []recordRow
 	// rawLongest caches the widest rendered raw line across the cached
@@ -118,6 +126,29 @@ func (ws *workspace) clearRecall(name string) {
 
 func (ws *workspace) hasRecalls() bool {
 	return len(ws.recalls) > 0
+}
+
+// bulkRecords returns the cached whole-data-set download for the records
+// currently browsed, lazily dropping a file that belongs to other records.
+func (ws *workspace) bulkRecords() string {
+	if ws.bulkRecordsPath != "" && ws.bulkRecordsIdentity != ws.recordIdentity() {
+		ws.dropBulkRecords()
+	}
+	return ws.bulkRecordsPath
+}
+
+func (ws *workspace) setBulkRecords(path string) {
+	ws.dropBulkRecords()
+	ws.bulkRecordsPath = path
+	ws.bulkRecordsIdentity = ws.recordIdentity()
+}
+
+func (ws *workspace) dropBulkRecords() {
+	if ws.bulkRecordsPath != "" {
+		_ = os.Remove(ws.bulkRecordsPath)
+		ws.bulkRecordsPath = ""
+	}
+	ws.bulkRecordsIdentity = ""
 }
 
 func (ws *workspace) sessionStatusText() string {
