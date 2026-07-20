@@ -20,32 +20,42 @@ type fakeFavoriteStore struct {
 	noteErr error
 }
 
-func (f *fakeFavoriteStore) Favorites() []favorites.Favorite {
-	return append([]favorites.Favorite(nil), f.entries...)
+func visibleTo(entry favorites.Favorite, profile string) bool {
+	return entry.Profile == "" || entry.Profile == profile
 }
 
-func (f *fakeFavoriteStore) Matches(name string) bool {
+func (f *fakeFavoriteStore) Favorites(profile string) []favorites.Favorite {
+	visible := make([]favorites.Favorite, 0, len(f.entries))
 	for _, entry := range f.entries {
-		if dsnmap.MatchPattern(name, entry.Pattern) {
+		if visibleTo(entry, profile) {
+			visible = append(visible, entry)
+		}
+	}
+	return visible
+}
+
+func (f *fakeFavoriteStore) Matches(profile, name string) bool {
+	for _, entry := range f.entries {
+		if visibleTo(entry, profile) && dsnmap.MatchPattern(name, entry.Pattern) {
 			return true
 		}
 	}
 	return false
 }
 
-func (f *fakeFavoriteStore) Toggle(name string) (bool, error) {
+func (f *fakeFavoriteStore) Toggle(profile, name string) (bool, error) {
 	name = strings.ToUpper(strings.TrimSpace(name))
 	for i, entry := range f.entries {
-		if entry.Pattern == name {
+		if visibleTo(entry, profile) && entry.Pattern == name {
 			f.entries = append(f.entries[:i], f.entries[i+1:]...)
 			return false, nil
 		}
 	}
-	f.entries = append(f.entries, favorites.Favorite{Pattern: name})
+	f.entries = append(f.entries, favorites.Favorite{Pattern: name, Profile: profile})
 	return true, nil
 }
 
-func (f *fakeFavoriteStore) Add(pattern string) error {
+func (f *fakeFavoriteStore) Add(profile, pattern string) error {
 	pattern = dsnmap.NormalizePattern(pattern)
 	if pattern == "" {
 		return errors.New("favorite pattern must not be empty")
@@ -54,21 +64,21 @@ func (f *fakeFavoriteStore) Add(pattern string) error {
 		return err
 	}
 	for _, entry := range f.entries {
-		if entry.Pattern == pattern {
+		if visibleTo(entry, profile) && entry.Pattern == pattern {
 			return errors.New("favorite " + pattern + " already exists")
 		}
 	}
-	f.entries = append(f.entries, favorites.Favorite{Pattern: pattern})
+	f.entries = append(f.entries, favorites.Favorite{Pattern: pattern, Profile: profile})
 	return nil
 }
 
-func (f *fakeFavoriteStore) Rename(oldPattern, newPattern string) error {
+func (f *fakeFavoriteStore) Rename(profile, oldPattern, newPattern string) error {
 	newPattern = dsnmap.NormalizePattern(newPattern)
 	if err := dsnmap.ValidatePattern(newPattern); err != nil {
 		return err
 	}
 	for i, entry := range f.entries {
-		if entry.Pattern == dsnmap.NormalizePattern(oldPattern) {
+		if visibleTo(entry, profile) && entry.Pattern == dsnmap.NormalizePattern(oldPattern) {
 			f.entries[i].Pattern = newPattern
 			return nil
 		}
@@ -76,22 +86,22 @@ func (f *fakeFavoriteStore) Rename(oldPattern, newPattern string) error {
 	return errors.New("no favorite stored for " + oldPattern)
 }
 
-func (f *fakeFavoriteStore) SetNote(pattern, note string) error {
+func (f *fakeFavoriteStore) SetNote(profile, pattern, note string) error {
 	if f.noteErr != nil {
 		return f.noteErr
 	}
 	f.noted = append(f.noted, [2]string{pattern, note})
 	for i, entry := range f.entries {
-		if entry.Pattern == pattern {
+		if visibleTo(entry, profile) && entry.Pattern == pattern {
 			f.entries[i].Note = note
 		}
 	}
 	return nil
 }
 
-func (f *fakeFavoriteStore) Remove(pattern string) (bool, error) {
+func (f *fakeFavoriteStore) Remove(profile, pattern string) (bool, error) {
 	for i, entry := range f.entries {
-		if entry.Pattern == pattern {
+		if visibleTo(entry, profile) && entry.Pattern == pattern {
 			f.entries = append(f.entries[:i], f.entries[i+1:]...)
 			return true, nil
 		}
@@ -99,7 +109,7 @@ func (f *fakeFavoriteStore) Remove(pattern string) (bool, error) {
 	return false, nil
 }
 
-func (f *fakeFavoriteStore) Touch(pattern string) error {
+func (f *fakeFavoriteStore) Touch(profile, pattern string) error {
 	f.touched = append(f.touched, pattern)
 	return nil
 }
@@ -510,5 +520,43 @@ func TestOpenFavoriteQueueDiesWithItsFetch(t *testing.T) {
 	}
 	if model.ws().autoOpen != "" {
 		t.Fatal("stale queue not cleared by the superseding result")
+	}
+}
+
+func TestFavoritesFollowTheActiveProfile(t *testing.T) {
+	store := &fakeFavoriteStore{}
+	browser := &fakeBrowser{listDataSets: func(_ context.Context, request zosmf.ListDataSetsRequest) (zosmf.DataSetPage, error) {
+		return zosmf.DataSetPage{Items: []zosmf.DataSet{{Name: "A.DATA", Organization: "PS"}}}, nil
+	}}
+	model, err := NewModel(Options{Prefix: "A*"}, Dependencies{
+		ListProfiles: func(context.Context) ([]string, error) { return []string{"alpha", "beta"}, nil },
+		LoadSession: func(context.Context, string) (Session, error) {
+			return Session{Browser: browser, User: "U", Encoding: "latin1"}, nil
+		},
+		Favorites: store,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	applyMessage(t, model, tea.WindowSizeMsg{Width: 90, Height: 20})
+	executeCommand(t, model, model.Init())
+
+	// Favorite A.DATA under alpha; the row is starred there.
+	executeCommand(t, model, model.handleKey(keyPress('f', "f")))
+	if len(store.entries) != 1 || store.entries[0].Profile != "alpha" {
+		t.Fatalf("entries = %#v, want one keyed to alpha", store.entries)
+	}
+	if model.favoriteMarker("A.DATA") != favoriteMark {
+		t.Fatal("alpha row not starred")
+	}
+
+	// Beta sees neither the marker nor the popup entry.
+	executeCommand(t, model, model.handleAction(actionNextProfile))
+	if model.favoriteMarker("A.DATA") == favoriteMark {
+		t.Fatal("beta row starred by alpha's favorite")
+	}
+	executeCommand(t, model, model.handleKey(keyPress('F', "F")))
+	if len(model.favPopup.entries) != 0 {
+		t.Fatalf("beta popup entries = %#v", model.favPopup.entries)
 	}
 }

@@ -83,7 +83,7 @@ func (m *Model) openFavoritesPopup() {
 		m.ws().status = status{Level: statusWarn, Text: "favorites persistence is unavailable"}
 		return
 	}
-	m.favPopup = newFavoritesPopup(m.deps.Favorites.Favorites(), m.width)
+	m.favPopup = newFavoritesPopup(m.deps.Favorites.Favorites(m.activeProfile()), m.width)
 }
 
 // toggleFavorite favorites the selected data set by exact name, or removes the
@@ -99,7 +99,7 @@ func (m *Model) toggleFavorite() {
 		return
 	}
 	name := strings.ToUpper(strings.TrimSpace(ws.datasets[index].Name))
-	added, err := m.deps.Favorites.Toggle(name)
+	added, err := m.deps.Favorites.Toggle(m.activeProfile(), name)
 	if err != nil {
 		ws.status = status{Level: statusError, Text: err.Error()}
 		return
@@ -109,7 +109,7 @@ func (m *Model) toggleFavorite() {
 		return
 	}
 	text := "removed favorite " + name
-	if m.deps.Favorites.Matches(name) {
+	if m.deps.Favorites.Matches(m.activeProfile(), name) {
 		text += " (still covered by a wildcard favorite)"
 	}
 	ws.status = status{Level: statusReady, Text: text}
@@ -208,7 +208,7 @@ func (m *Model) saveFavoritePattern() {
 	pattern := dsnmap.NormalizePattern(typed)
 	var err error
 	if popup.adding {
-		err = m.deps.Favorites.Add(typed)
+		err = m.deps.Favorites.Add(m.activeProfile(), typed)
 	} else {
 		entry, ok := popup.selectedEntry()
 		if !ok {
@@ -216,13 +216,13 @@ func (m *Model) saveFavoritePattern() {
 			popup.pattern.Blur()
 			return
 		}
-		err = m.deps.Favorites.Rename(entry.Pattern, typed)
+		err = m.deps.Favorites.Rename(m.activeProfile(), entry.Pattern, typed)
 	}
 	if err != nil {
 		popup.err = err.Error()
 		return
 	}
-	popup.entries = m.deps.Favorites.Favorites()
+	popup.entries = m.deps.Favorites.Favorites(m.activeProfile())
 	for i, entry := range popup.entries {
 		if entry.Pattern == pattern {
 			popup.selected = i
@@ -257,7 +257,7 @@ func (m *Model) saveFavoriteNote() {
 		return
 	}
 	note := strings.TrimSpace(popup.note.Value())
-	if err := m.deps.Favorites.SetNote(entry.Pattern, note); err != nil {
+	if err := m.deps.Favorites.SetNote(m.activeProfile(), entry.Pattern, note); err != nil {
 		popup.err = err.Error()
 		return
 	}
@@ -273,7 +273,7 @@ func (m *Model) removePopupFavorite() {
 	if !ok {
 		return
 	}
-	removed, err := m.deps.Favorites.Remove(entry.Pattern)
+	removed, err := m.deps.Favorites.Remove(m.activeProfile(), entry.Pattern)
 	if err != nil {
 		popup.err = err.Error()
 		return
@@ -297,7 +297,7 @@ func (m *Model) jumpToFavorite() tea.Cmd {
 		return nil
 	}
 	m.favPopup = nil
-	_ = m.deps.Favorites.Touch(entry.Pattern)
+	_ = m.deps.Favorites.Touch(m.activeProfile(), entry.Pattern)
 
 	ws := m.ws()
 	m.cancelSearch()
@@ -342,7 +342,7 @@ func (m *Model) openFavorite() tea.Cmd {
 // favoriteMarker returns the row marker for a data set name: an exact or
 // wildcard favorite shows the star.
 func (m *Model) favoriteMarker(name string) string {
-	if m.deps.Favorites != nil && m.deps.Favorites.Matches(name) {
+	if m.deps.Favorites != nil && m.deps.Favorites.Matches(m.activeProfile(), name) {
 		return favoriteMark
 	}
 	return " "
