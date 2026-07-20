@@ -383,7 +383,7 @@ func TestModelPrefetchesNamesOneVisiblePageBeforeCacheEnd(t *testing.T) {
 		}
 		return zosmf.DataSetPage{Items: []zosmf.DataSet{{Name: "G"}, {Name: "H"}, {Name: "I"}, {Name: "J"}, {Name: "K"}, {Name: "L"}}, MoreRows: true}, nil
 	}}
-	model := readyModel(t, Options{Prefix: "A*"}, browser, "A", "", 90, MinTerminalHeight(false))
+	model := readyModel(t, Options{Prefix: "A*"}, browser, "A", "", 90, MinTerminalHeight())
 	if model.visible != 3 || model.budget != 6 {
 		t.Fatalf("visible/budget = %d/%d", model.visible, model.budget)
 	}
@@ -410,7 +410,7 @@ func TestCachedBackwardNavigationDoesNotRefetch(t *testing.T) {
 		}
 		return zosmf.DataSetPage{Items: []zosmf.DataSet{{Name: "G"}, {Name: "H"}, {Name: "I"}, {Name: "J"}, {Name: "K"}, {Name: "L"}}}, nil
 	}}
-	model := readyModel(t, Options{Prefix: "A*"}, browser, "A", "", 90, MinTerminalHeight(false))
+	model := readyModel(t, Options{Prefix: "A*"}, browser, "A", "", 90, MinTerminalHeight())
 	executeCommand(t, model, model.moveSelection(3))
 	requests := len(browser.dataSetRequests)
 	if requests != 2 || len(model.datasets) != 12 {
@@ -428,7 +428,7 @@ func TestRepeatedMovementDoesNotRestartPendingPrefetch(t *testing.T) {
 	browser := &fakeBrowser{listDataSets: func(_ context.Context, request zosmf.ListDataSetsRequest) (zosmf.DataSetPage, error) {
 		return zosmf.DataSetPage{Items: []zosmf.DataSet{{Name: "A"}, {Name: "B"}, {Name: "C"}, {Name: "D"}, {Name: "E"}, {Name: "F"}}, MoreRows: true}, nil
 	}}
-	model := readyModel(t, Options{Prefix: "A*"}, browser, "A", "", 90, MinTerminalHeight(false))
+	model := readyModel(t, Options{Prefix: "A*"}, browser, "A", "", 90, MinTerminalHeight())
 	pending := model.moveSelection(3)
 	if pending == nil || model.browsePending == nil {
 		t.Fatal("test requires pending prefetch")
@@ -821,7 +821,7 @@ func TestRecordPrefetchUsesLastCachedNumberAndExactBudget(t *testing.T) {
 			return zosmf.RecordPage{Records: records, MoreRows: request.Start == 0}, nil
 		},
 	}
-	model := readyModel(t, Options{Prefix: "A*", Codepage: "latin1"}, browser, "A", "", 90, MinTerminalHeight(false))
+	model := readyModel(t, Options{Prefix: "A*", Codepage: "latin1"}, browser, "A", "", 90, MinTerminalHeight())
 	executeCommand(t, model, model.openSelection())
 	if len(model.records) != 6 {
 		t.Fatalf("initial record cache=%d", len(model.records))

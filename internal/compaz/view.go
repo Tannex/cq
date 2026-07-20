@@ -103,16 +103,13 @@ func (m *Model) tinyView() string {
 	width := max(1, m.width)
 	height := max(1, m.height)
 	title := consolePalette.navy.Bold(true).Width(width).Render(" COMPA/Z  z/OSMF DATA SET CONSOLE ")
-	message := fmt.Sprintf("TERMINAL TOO SMALL\nresize to at least %d columns × %d rows\ncurrent %d × %d\nno row request dispatched", MinTerminalWidth, MinTerminalHeight(m.hasTabs()), m.width, m.height)
+	message := fmt.Sprintf("TERMINAL TOO SMALL\nresize to at least %d columns × %d rows\ncurrent %d × %d\nno row request dispatched", MinTerminalWidth, MinTerminalHeight(), m.width, m.height)
 	body := lipgloss.Place(width, max(1, height-1), lipgloss.Center, lipgloss.Center, consolePalette.amber.Render(message))
 	return fitHeight(title+"\n"+body, width, height)
 }
 
 func (m *Model) mainView() string {
 	var lines []string
-	if m.hasTabs() {
-		lines = append(lines, m.tabBar())
-	}
 	data := m.dataView()
 	if m.showHelp && (m.width < MinTerminalWidth || m.visible <= 0) {
 		// Tiny-terminal fallback: full-area help panel so every binding stays
@@ -127,110 +124,91 @@ func (m *Model) mainView() string {
 	return fitHeight(strings.Join(lines, "\n"), m.width, m.height)
 }
 
-// chromeRule is the bordered filler line separating the meta rows (tabs,
-// title, search) from the data area, echoing the │ gutter language.
+// chromeRule is the bordered filler line separating the meta rows (title,
+// search) from the data area, echoing the │ gutter language.
 func (m *Model) chromeRule() string {
 	return consolePalette.muted.Render(strings.Repeat("─", max(0, m.width)))
 }
 
-// tabBar renders the profile tab strip. The active tab is always visible;
-// inactive tabs are dropped from either end when the bar is too narrow.
-func (m *Model) tabBar() string {
-	if !m.hasTabs() {
-		return strings.Repeat(" ", max(0, m.width))
+// profileStrip renders the profile switcher for the right edge of the status
+// line within the given width budget: active profile highlighted, others
+// dimmed, unloaded ones marked with a trailing dot. The active profile is
+// always visible; when the strip does not fit, neighbors are added while they
+// fit and an ellipsis stands in for whatever is dropped from either end (the
+// old tab bar's narrow-terminal behavior). Empty in single-profile mode.
+func (m *Model) profileStrip(budget int) string {
+	if !m.hasTabs() || budget < 1 {
+		return ""
 	}
-	activeStyle := consolePalette.activeTab
-	inactiveStyle := consolePalette.panel
-	separator := consolePalette.panel.Render("│")
-
-	type tab struct {
-		label  string
-		width  int
-		render string
-	}
-	tabs := make([]tab, len(m.profiles))
-	totalWidth := 0
+	parts := make([]string, len(m.profiles))
+	total := 0
 	for i, profile := range m.profiles {
-		label := " " + profile + " "
+		label := profile
 		loaded := i == m.active || (i < len(m.workspaces) && m.workspaces[i].sessionReady)
 		if !loaded {
-			label += "· "
+			label += "·"
 		}
-		var rendered string
 		if i == m.active {
-			rendered = activeStyle.Render(label)
+			parts[i] = consolePalette.activeTab.Render(" " + label + " ")
 		} else {
-			rendered = inactiveStyle.Render(label)
+			parts[i] = consolePalette.muted.Render(label)
 		}
-		w := lipgloss.Width(rendered)
-		tabs[i] = tab{label: label, width: w, render: rendered}
-		totalWidth += w
-		if i > 0 {
-			totalWidth += lipgloss.Width(separator)
-		}
+		total += lipgloss.Width(parts[i])
 	}
-	if totalWidth <= m.width {
-		var parts []string
-		for i, t := range tabs {
-			if i > 0 {
-				parts = append(parts, separator)
-			}
-			parts = append(parts, t.render)
-		}
-		return consolePalette.panel.Width(m.width).Render(strings.Join(parts, ""))
+	total += len(parts) - 1
+	if total <= budget {
+		return strings.Join(parts, " ")
 	}
 
-	// Narrow terminal: keep the active tab and add neighbors while they fit.
-	ellipsis := consolePalette.panel.Render("…")
-	ellipsisWidth := lipgloss.Width(ellipsis)
-	available := m.width - tabs[m.active].width
+	// Too wide: keep the active profile and expand outward while neighbors
+	// fit, reserving room for an ellipsis on each side that has profiles.
+	available := budget - lipgloss.Width(parts[m.active])
 	if m.active > 0 {
-		available -= ellipsisWidth
+		available -= 2
 	}
-	if m.active < len(tabs)-1 {
-		available -= ellipsisWidth
+	if m.active < len(parts)-1 {
+		available -= 2
 	}
-
-	left := m.active - 1
-	right := m.active + 1
-	for left >= 0 {
-		need := tabs[left].width
-		if left < m.active-1 || right < len(tabs) {
-			need += lipgloss.Width(separator)
+	if available < 0 {
+		return truncateStyled(parts[m.active], budget)
+	}
+	leftIdx, rightIdx := m.active-1, m.active+1
+	leftStop, rightStop := leftIdx < 0, rightIdx >= len(parts)
+	var leftParts, rightParts []string
+	for !leftStop || !rightStop {
+		if !rightStop {
+			if need := lipgloss.Width(parts[rightIdx]) + 1; need <= available {
+				available -= need
+				rightParts = append(rightParts, parts[rightIdx])
+				rightIdx++
+				rightStop = rightIdx >= len(parts)
+			} else {
+				rightStop = true
+			}
 		}
-		if available < need {
-			break
+		if !leftStop {
+			if need := lipgloss.Width(parts[leftIdx]) + 1; need <= available {
+				available -= need
+				leftParts = append([]string{parts[leftIdx]}, leftParts...)
+				leftIdx--
+				leftStop = leftIdx < 0
+			} else {
+				leftStop = true
+			}
 		}
-		available -= need
-		left--
 	}
-	for right < len(tabs) {
-		need := tabs[right].width
-		if right > m.active+1 || left >= 0 {
-			need += lipgloss.Width(separator)
-		}
-		if available < need {
-			break
-		}
-		available -= need
-		right++
+	ellipsis := consolePalette.muted.Render("…")
+	var out []string
+	if leftIdx >= 0 {
+		out = append(out, ellipsis)
 	}
-
-	var parts []string
-	if left >= 0 {
-		parts = append(parts, ellipsis)
+	out = append(out, leftParts...)
+	out = append(out, parts[m.active])
+	out = append(out, rightParts...)
+	if rightIdx < len(parts) {
+		out = append(out, ellipsis)
 	}
-	for i := left + 1; i < right; i++ {
-		if len(parts) > 0 {
-			parts = append(parts, separator)
-		}
-		parts = append(parts, tabs[i].render)
-	}
-	if right < len(tabs) {
-		parts = append(parts, ellipsis)
-	}
-	bar := strings.Join(parts, "")
-	return consolePalette.panel.Width(m.width).Render(bar)
+	return strings.Join(out, " ")
 }
 
 // scrollWindow clamps offset to the scrollable range and returns the visible
@@ -430,10 +408,14 @@ func (m *Model) titleLine() string {
 		}
 		body = m.modeName()
 	}
-	if profile := m.activeProfile(); profile != "" {
-		chip = profile
-	} else if m.user != "" {
-		chip = m.user
+	// Multi-profile sessions show the profile strip in the status line
+	// instead of a title chip.
+	if !m.hasTabs() {
+		if profile := m.activeProfile(); profile != "" {
+			chip = profile
+		} else if m.user != "" {
+			chip = m.user
+		}
 	}
 
 	accent := consolePalette.cyan.Bold(true).Inherit(consolePalette.navy)
@@ -1005,34 +987,52 @@ func (m *Model) statusLine() string {
 		indicator = consolePalette.amber.Render(m.spinner.View())
 	}
 	label := m.renderStatusLabel(level)
-	position := m.windowStatus()
 
 	const minWidthForPosition = 40
-	if m.width < minWidthForPosition || position == "" {
+	if m.width < minWidthForPosition {
 		line := fmt.Sprintf(" %s %s  %s", indicator, label, text)
 		return truncateStyled(line, m.width)
 	}
 
 	prefix := fmt.Sprintf(" %s %s  ", indicator, label)
 	prefixWidth := lipgloss.Width(prefix)
-	posWidth := lipgloss.Width(position)
-	maxTextWidth := m.width - prefixWidth - posWidth
+	right := m.windowStatus()
+	// The strip gets whatever remains after the prefix, the position text,
+	// and a minimum status-text allowance, so the active profile stays
+	// visible even on narrow terminals.
+	budget := m.width - prefixWidth - lipgloss.Width(right) - 10
+	if right != "" {
+		budget -= 2
+	}
+	if strip := m.profileStrip(budget); strip != "" {
+		if right != "" {
+			right += "  "
+		}
+		right += strip
+	}
+	if right == "" {
+		line := fmt.Sprintf(" %s %s  %s", indicator, label, text)
+		return truncateStyled(line, m.width)
+	}
+
+	rightWidth := lipgloss.Width(right)
+	maxTextWidth := m.width - prefixWidth - rightWidth
 	if maxTextWidth < 10 {
 		line := fmt.Sprintf(" %s %s  %s", indicator, label, text)
 		return truncateStyled(line, m.width)
 	}
 
 	truncatedText := truncateStyled(text, maxTextWidth)
-	used := prefixWidth + lipgloss.Width(truncatedText) + posWidth
+	used := prefixWidth + lipgloss.Width(truncatedText) + rightWidth
 	padding := m.width - used
 	if padding < 1 {
 		padding = 1
 		truncatedText = truncateStyled(text, maxTextWidth-1)
-		used = prefixWidth + lipgloss.Width(truncatedText) + posWidth
+		used = prefixWidth + lipgloss.Width(truncatedText) + rightWidth
 		padding = m.width - used
 	}
 
-	return prefix + truncatedText + strings.Repeat(" ", padding) + position
+	return prefix + truncatedText + strings.Repeat(" ", padding) + right
 }
 
 func (m *Model) effectiveStatus() (statusLevel, string) {

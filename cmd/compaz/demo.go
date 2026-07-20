@@ -37,8 +37,8 @@ func loadDemoSession(ctx context.Context, profile string) (compaz.Session, error
 	}, nil
 }
 
-// listDemoProfiles exposes multiple fake profiles so the tab bar and
-// per-profile workspace behavior can be demoed offline.
+// listDemoProfiles exposes multiple fake profiles so the status-line profile
+// strip and per-profile workspace behavior can be demoed offline.
 func listDemoProfiles(ctx context.Context) ([]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

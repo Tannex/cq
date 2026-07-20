@@ -8,33 +8,22 @@ import (
 const (
 	// The row budget is computed after the fixed title, search/breadcrumb,
 	// chrome rule, table header, status/detail, and help lines.
-	fixedChromeRows        = 6
-	fixedChromeRowsWithTab = fixedChromeRows + 1
-	MinTerminalWidth       = 52
+	fixedChromeRows  = 6
+	MinTerminalWidth = 52
 )
 
-// MinTerminalHeight returns the smallest usable terminal height. The extra
-// chrome row for the tab bar is accounted for only when tabs are shown so that
-// single-profile mode keeps its previous minimum.
-func MinTerminalHeight(tabBar bool) int {
-	if tabBar {
-		return fixedChromeRowsWithTab + 3
-	}
+// MinTerminalHeight returns the smallest usable terminal height.
+func MinTerminalHeight() int {
 	return fixedChromeRows + 3
 }
 
 // VisibleRows returns the number of data rows available in the terminal. A
 // non-positive result is a hard boundary: callers must not issue a row fetch.
-// When tabBar is true one extra row is reserved for the profile tab bar.
-func VisibleRows(width, height int, tabBar bool) int {
-	chrome := fixedChromeRows
-	if tabBar {
-		chrome = fixedChromeRowsWithTab
-	}
-	if width < MinTerminalWidth || height < MinTerminalHeight(tabBar) {
+func VisibleRows(width, height int) int {
+	if width < MinTerminalWidth || height < MinTerminalHeight() {
 		return 0
 	}
-	rows := height - chrome
+	rows := height - fixedChromeRows
 	if rows < 1 {
 		return 0
 	}
