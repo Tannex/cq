@@ -9,19 +9,40 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/Tannex/cq/internal/zosmf"
 	"github.com/Tannex/cq/internal/zowe"
 )
 
+func TestJobsOpenBeforeSessionReadyDoesNotClaimUnsupported(t *testing.T) {
+	browser := &fakeBrowser{}
+	model := newTestModel(t, Options{}, browser, "IBMUSER", "")
+	// Deliberately not applying model.Init()'s command yet: the session
+	// (and ws.browser) is still loading, matching the real race window
+	// between window-size-driven Init() and its async result landing.
+	if model.sessionReady {
+		t.Fatal("test requires an unready session")
+	}
+	if command := model.handleAction(actionJobs); command != nil {
+		t.Fatal("opening jobs before the session is ready dispatched a command")
+	}
+	if model.screen == ScreenJobs {
+		t.Fatal("opened the jobs screen before the session was ready")
+	}
+	if model.status.Level != statusWarn || strings.Contains(model.status.Text, "cannot browse jobs") {
+		t.Fatalf("status = %#v, want a transient 'still connecting' warning, not a permanent capability claim", model.status)
+	}
+}
+
 func TestJobsOpenDefaultsOwnerAndPrefix(t *testing.T) {
 	browser := &fakeBrowser{listJobs: func(_ context.Context, request zosmf.ListJobsRequest) (zosmf.JobPage, error) {
 		return zosmf.JobPage{Items: []zosmf.Job{{JobID: "JOB00001", JobName: "NIGHTBAT", Status: "OUTPUT"}}}, nil
 	}}
 	model := readyModel(t, Options{Prefix: "A*"}, browser, "IBMUSER", "", 90, 16)
-	if model.jobOwner != "IBMUSER" || model.jobPrefix != "*" {
-		t.Fatalf("job filter defaults owner=%q prefix=%q", model.jobOwner, model.jobPrefix)
+	if model.user != "IBMUSER" || model.jobPrefix != "*" {
+		t.Fatalf("job filter defaults owner=%q prefix=%q", model.user, model.jobPrefix)
 	}
 
 	executeCommand(t, model, model.handleAction(actionJobs))
@@ -151,6 +172,34 @@ func TestJobsBackNavigationChain(t *testing.T) {
 	// data set list itself would be if it had a parent screen.
 	if len(model.jobs) != 1 {
 		t.Fatalf("jobs cache was cleared on back-to-parent: %#v", model.jobs)
+	}
+}
+
+func TestSpoolFilesOverBudgetWarnsInsteadOfSilentlyTruncating(t *testing.T) {
+	browser := &fakeBrowser{
+		listJobs: func(context.Context, zosmf.ListJobsRequest) (zosmf.JobPage, error) {
+			return zosmf.JobPage{Items: []zosmf.Job{{JobID: "JOB00001", JobName: "NIGHTBAT"}}}, nil
+		},
+		listSpoolFiles: func(context.Context, string, string) ([]zosmf.SpoolFile, error) {
+			// budget is 6 at 90x16 (RowBudget of 3 visible rows); returning 6
+			// real files plus the synthetic JCL entry is one over budget.
+			items := make([]zosmf.SpoolFile, 6)
+			for i := range items {
+				items[i] = zosmf.SpoolFile{ID: i + 1, DDName: fmt.Sprintf("DD%d", i+1)}
+			}
+			return items, nil
+		},
+	}
+	model := readyModel(t, Options{}, browser, "IBMUSER", "", 90, MinTerminalHeight())
+	executeCommand(t, model, model.handleAction(actionJobs))
+	command := model.openSelection()
+	executeCommand(t, model, command)
+
+	if model.status.Level != statusWarn || !strings.Contains(model.status.Text, "more") {
+		t.Fatalf("status = %#v, want a warning that the spool file list was truncated", model.status)
+	}
+	if len(model.spoolFiles) != model.budget {
+		t.Fatalf("spool files = %d, want budget %d", len(model.spoolFiles), model.budget)
 	}
 }
 

@@ -48,11 +48,11 @@ type workspace struct {
 	// watch gives up.
 	recalls map[string]string
 
-	// jobOwner defaults once from the session user at session load and is
-	// not user-editable in v1 (mirrors the "<Zowe user>.*" data set default
-	// precedent). jobPrefix defaults to "*" and is edited via a dedicated
-	// search-line input, the same way ws.prefix is.
-	jobOwner  string
+	// The job owner filter is not user-editable in v1 (mirrors the
+	// "<Zowe user>.*" data set default precedent) so it is always ws.user,
+	// not a separate copy that could drift out of sync. jobPrefix defaults
+	// to "*" and is edited via a dedicated search-line input, the same way
+	// ws.prefix is.
 	jobPrefix string
 	jobs      []zosmf.Job
 	jobPage   pager[string]
@@ -245,7 +245,7 @@ func (ws *workspace) recordIdentity() string {
 }
 
 func (ws *workspace) jobIdentity() string {
-	return ws.jobOwner + "|" + ws.jobPrefix
+	return ws.user + "|" + ws.jobPrefix
 }
 
 func (ws *workspace) spoolFileListIdentity() string {
@@ -260,12 +260,19 @@ func (ws *workspace) spoolContentIdentity() string {
 	return fmt.Sprintf("%s|%s|%s", ws.job.JobName, ws.job.JobID, file)
 }
 
+// isSyntheticJCLFile reports whether file is the submitted-JCL entry compaz
+// prepends client-side (negative ID), as opposed to a real spool file z/OSMF
+// returned. This is the one place that convention is defined; every other
+// site should call this instead of re-checking file.ID's sign directly.
+func isSyntheticJCLFile(file zosmf.SpoolFile) bool {
+	return file.ID < 0
+}
+
 // spoolFileKey is the pager/identity key for a spool file: its numeric id,
-// or "JCL" for the synthetic submitted-JCL entry compaz prepends client-side
-// (ID < 0), which also doubles as the FileID z/OSMF expects for that pseudo
-// spool file.
+// or "JCL" for the synthetic entry, which also doubles as the FileID z/OSMF
+// expects for that pseudo spool file.
 func spoolFileKey(file zosmf.SpoolFile) string {
-	if file.ID < 0 {
+	if isSyntheticJCLFile(file) {
 		return "JCL"
 	}
 	return strconv.Itoa(file.ID)

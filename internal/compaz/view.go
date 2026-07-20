@@ -418,7 +418,7 @@ func (m *Model) titleLine() string {
 		body = m.modeName()
 	case ScreenJobs:
 		screenName = "JOBS"
-		body = fmt.Sprintf("owner %s  filter %s", displayOr(m.jobOwner, "*"), displayOr(m.jobPrefix, "*"))
+		body = fmt.Sprintf("owner %s  filter %s", displayOr(m.user, "*"), displayOr(m.jobPrefix, "*"))
 	case ScreenSpoolFiles:
 		screenName = m.job.JobName + "(" + m.job.JobID + ")"
 		body = "spool files"
@@ -501,7 +501,7 @@ func (m *Model) searchLine() string {
 		if m.jobFilterInput.Focused() {
 			line = m.jobFilterInput.View()
 		} else {
-			line = label.Render("OWNER") + "  " + value.Render(displayOr(m.jobOwner, "*")) +
+			line = label.Render("OWNER") + "  " + value.Render(displayOr(m.user, "*")) +
 				"    " + label.Render("PREFIX") + "  " + value.Render(displayOr(m.jobPrefix, "*"))
 		}
 	case ScreenSpoolFiles:
@@ -874,7 +874,7 @@ func (m *Model) spoolFileTableView() string {
 		}
 		if showRecords {
 			records := ""
-			if file.ID >= 0 {
+			if !isSyntheticJCLFile(file) {
 				records = rightAligned(strconv.FormatInt(file.RecordCount, 10), 8)
 			}
 			row = append(row, styledCell(records, consolePalette.muted, onCursor))

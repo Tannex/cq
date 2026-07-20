@@ -264,6 +264,24 @@ func TestReadSpoolContentEmptyBodyYieldsNoLines(t *testing.T) {
 	}
 }
 
+func TestReadSpoolContentSingleBlankLineIsNotConflatedWithEmpty(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "\n")
+	}))
+	defer server.Close()
+
+	client := New(sessionForServer(t, server), nil)
+	page, err := client.ReadSpoolContent(context.Background(), ReadSpoolContentRequest{
+		JobName: "A", JobID: "B", FileID: "1", MaxItems: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Lines) != 1 || page.Lines[0] != "" {
+		t.Fatalf("lines = %#v, want one blank line", page.Lines)
+	}
+}
+
 func TestReadSpoolContentBoundsOversizedResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, strings.Repeat("x", maxSpoolContentBytes+1))

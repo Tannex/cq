@@ -679,7 +679,6 @@ func (m *Model) handleSessionResult(ws *workspace, msg sessionResultMsg) tea.Cmd
 	ws.user = strings.ToUpper(strings.TrimSpace(msg.Session.User))
 	ws.codepageName = cm.Name()
 	ws.charmap = cm
-	ws.jobOwner = ws.user
 	ws.jobPrefix = "*"
 
 	ws.prefix = strings.ToUpper(strings.TrimSpace(m.options.Prefix))
@@ -1969,6 +1968,13 @@ func (m *Model) startRecords(ws *workspace, plan pagePlan[int64]) tea.Cmd {
 // screen's cache: ensureActivePage only fetches when nothing is cached yet.
 func (m *Model) openJobs() tea.Cmd {
 	ws := m.ws()
+	if !ws.sessionReady {
+		// The session (and ws.browser) may still be loading; that is not the
+		// same as a session that genuinely lacks job-browsing support, and
+		// should not be reported as if it were permanent.
+		ws.status = status{Level: statusWarn, Text: "still connecting; try again once the session is ready"}
+		return nil
+	}
 	if _, ok := ws.browser.(zosmf.JobBrowser); !ok {
 		ws.status = status{Level: statusWarn, Text: "this session cannot browse jobs"}
 		return nil
@@ -1993,8 +1999,8 @@ func (m *Model) startJobs(ws *workspace, plan pagePlan[string]) tea.Cmd {
 	ws.browsePending = &meta
 	ctx, cancel := context.WithTimeout(context.Background(), m.deps.Timeout)
 	ws.browseCancel = cancel
-	ws.status = status{Level: statusLoading, Text: fmt.Sprintf("listing jobs for %s owned by %s", displayOr(ws.jobPrefix, "*"), displayOr(ws.jobOwner, "any"))}
-	request := zosmf.ListJobsRequest{Owner: ws.jobOwner, Prefix: ws.jobPrefix, MaxItems: m.budget}
+	ws.status = status{Level: statusLoading, Text: fmt.Sprintf("listing jobs for %s owned by %s", displayOr(ws.jobPrefix, "*"), displayOr(ws.user, "any"))}
+	request := zosmf.ListJobsRequest{Owner: ws.user, Prefix: ws.jobPrefix, MaxItems: m.budget}
 	return m.loadingCommand(func() tea.Msg {
 		page, err := jobs.ListJobs(ctx, request)
 		return jobsResultMsg{Meta: meta, Page: page, Err: err}
@@ -2061,7 +2067,7 @@ func (m *Model) handleJobsResult(ws *workspace, msg jobsResultMsg) tea.Cmd {
 	}
 	ws.jobs, _, _ = applyBrowsePage(
 		ws.jobs, msg.Page.Items, &ws.jobPage, nil, nil,
-		false, msg.Meta.Budget, msg.Meta.NamePlan,
+		msg.Page.MoreRows, msg.Meta.Budget, msg.Meta.NamePlan,
 		func(item zosmf.Job) string { return strings.ToUpper(strings.TrimSpace(item.JobID)) },
 	)
 	ws.statusForCount(len(ws.jobs), "jobs")
@@ -2086,7 +2092,8 @@ func (m *Model) handleSpoolFilesResult(ws *workspace, msg spoolFilesResultMsg) t
 	// over budget can never flip the pager's "more" flag true — there is no
 	// forward page this screen could ever fetch to satisfy it.
 	files := append([]zosmf.SpoolFile{{JobName: ws.job.JobName, JobID: ws.job.JobID, ID: -1, DDName: "JCL"}}, msg.Files...)
-	if msg.Meta.Budget > 0 && len(files) > msg.Meta.Budget {
+	truncated := msg.Meta.Budget > 0 && len(files) > msg.Meta.Budget
+	if truncated {
 		files = files[:msg.Meta.Budget]
 	}
 	ws.spoolFiles, _, _ = applyBrowsePage(
@@ -2094,7 +2101,14 @@ func (m *Model) handleSpoolFilesResult(ws *workspace, msg spoolFilesResultMsg) t
 		false, msg.Meta.Budget, msg.Meta.NamePlan,
 		func(item zosmf.SpoolFile) string { return spoolFileKey(item) },
 	)
-	ws.statusForCount(len(ws.spoolFiles), "spool files")
+	if truncated {
+		// The pager's "more" flag is deliberately never set for this screen
+		// (there is no forward page to fetch), so silently truncating here
+		// would otherwise look identical to a complete list. Say so instead.
+		ws.status = status{Level: statusWarn, Text: fmt.Sprintf("showing the first %d spool files; the job has more", msg.Meta.Budget-1)}
+	} else {
+		ws.statusForCount(len(ws.spoolFiles), "spool files")
+	}
 	if ws != &m.workspace {
 		return nil
 	}
@@ -2121,7 +2135,10 @@ func (m *Model) handleSpoolContentResult(ws *workspace, msg spoolContentResultMs
 		func(line spoolLine) string { return strconv.FormatInt(line.Number, 10) },
 	)
 	if msg.Meta.RecordPlan.Direction == pageForward {
-		ws.spoolLongest = max(ws.spoolLongest, longestSpoolLineWidth(incoming))
+		// Forward pages only append; scanning just the incoming rows keeps the
+		// running maximum without rescanning the whole cache on every fetch.
+		bounded, _ := boundedWindow(incoming, msg.Meta.Budget)
+		ws.spoolLongest = max(ws.spoolLongest, longestSpoolLineWidth(bounded))
 	} else {
 		ws.spoolLongest = longestSpoolLineWidth(ws.spoolContent)
 	}

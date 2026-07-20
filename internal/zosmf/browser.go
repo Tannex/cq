@@ -393,6 +393,10 @@ func invalidBrowseName(value string) bool {
 	if strings.ContainsAny(value, "()/\\") {
 		return true
 	}
+	return hasControlChar(value)
+}
+
+func hasControlChar(value string) bool {
 	for _, r := range value {
 		if unicode.IsControl(r) {
 			return true

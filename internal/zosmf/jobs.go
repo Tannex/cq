@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"unicode"
 )
 
 const (
@@ -337,7 +336,10 @@ func (z *Client) ReadSpoolContent(ctx context.Context, request ReadSpoolContentR
 	}
 	text := strings.TrimSuffix(string(body), "\n")
 	var lines []string
-	if text != "" {
+	// A body of just "\n" (one blank output line) trims to "", identical to
+	// a genuinely empty body; check the untrimmed body length instead of the
+	// trimmed text so the two aren't conflated into the same zero-line result.
+	if len(body) > 0 {
 		lines = strings.Split(text, "\n")
 	}
 	// The server is documented to honor X-IBM-Record-Range, but a server
@@ -359,10 +361,8 @@ func (z *Client) ReadSpoolContent(ctx context.Context, request ReadSpoolContentR
 // restriction.
 func normalizeJobFilterValue(field, value string) (string, error) {
 	trimmed := strings.ToUpper(strings.TrimSpace(value))
-	for _, r := range trimmed {
-		if unicode.IsControl(r) {
-			return "", &RequestError{Field: field, Message: "contains invalid control characters"}
-		}
+	if hasControlChar(trimmed) {
+		return "", &RequestError{Field: field, Message: "contains invalid control characters"}
 	}
 	if len(trimmed) > 8 {
 		return "", &RequestError{Field: field, Message: "must not exceed 8 characters"}
