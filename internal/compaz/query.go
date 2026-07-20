@@ -691,7 +691,8 @@ func (m *Model) queryAfterFetch(ws *workspace, fetchErr error) tea.Cmd {
 }
 
 // queryFooter is the progress/result summary under the results pane, e.g.
-// "⠸ 1.42s searched 400 of 118+ records… — 12 matches".
+// "⠸ 1.42s searched 400 of 118+ records… — 12 matches" while running and
+// just "1.42s — 12 matches" once done.
 func (m *Model) queryFooter() string {
 	popup := m.query
 	ws := m.ws()
@@ -910,8 +911,15 @@ func (m *Model) overlayQuery(background string) string {
 	// results instead of displacing them. The input renders at top+2 (border
 	// plus title row); the list hangs directly under it, anchored to the
 	// token being completed.
-	if box, offset := m.queryCompletionBox(innerWidth, max(1, min(6, m.height-top-6))); box != "" {
-		compX := min(x+2+offset, x+popupWidth-lipgloss.Width(strings.SplitN(box, "\n", 2)[0])-1)
+	// Row budget: the box (rows + 2 border lines) starts at top+3 and must
+	// end above the popup's bottom border at m.height-3, so rows are capped
+	// at m.height-top-7.
+	if box, offset := m.queryCompletionBox(innerWidth, max(1, min(6, m.height-top-7))); box != "" {
+		// offset is the token's rune index, which drifts from the rendered
+		// column once the input scrolls horizontally; clamping to the input
+		// area keeps the box anchored to the field text in that case.
+		offset = min(offset, 4+m.query.input.Width())
+		compX := min(x+2+offset, x+popupWidth-lipgloss.Width(box)-1)
 		layers = append(layers, lipgloss.NewLayer(box).X(max(x+1, compX)).Y(top+3).Z(2))
 	}
 	compositor := lipgloss.NewCompositor(layers...)
