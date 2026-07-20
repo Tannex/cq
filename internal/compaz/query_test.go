@@ -12,6 +12,7 @@ import (
 
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/Tannex/cq/internal/zosmf"
 )
@@ -510,5 +511,87 @@ func TestQueryPopupKeepsTableHeaderVisible(t *testing.T) {
 	}
 	if !strings.Contains(lines[4], "─") {
 		t.Fatalf("popup border expected on the row below the header: %q", lines[4])
+	}
+}
+
+func TestQueryPlaceholderBuiltFromOverlayFields(t *testing.T) {
+	model, _ := queryModelWithCopybook(t, dashedCopybook, singleRecordPage(zosmf.Record{Number: 1, Data: []byte("ABC")}))
+	openQuery(t, model)
+
+	placeholder := model.query.input.Placeholder
+	if placeholder == "" || strings.Contains(placeholder, "{f") {
+		t.Fatalf("placeholder = %q", placeholder)
+	}
+	if strings.Contains(placeholder, ".FIELD") {
+		t.Fatalf("placeholder still the static template: %q", placeholder)
+	}
+	// Every generated example references real overlay fields in quoted jq
+	// form, except the bare `length` aggregate.
+	for range 100 {
+		example := examplePlaceholder(model.query.fields)
+		if example != "length" && !strings.Contains(example, `."CUST-GRP"`) {
+			t.Fatalf("example %q does not reference an overlay field", example)
+		}
+		if strings.Contains(example, "{f") {
+			t.Fatalf("template slot left unfilled: %q", example)
+		}
+	}
+	// Without an overlay the static fallback remains.
+	if got := examplePlaceholder(nil); got != `select(.FIELD == "VALUE") | .FIELD` {
+		t.Fatalf("fallback placeholder = %q", got)
+	}
+}
+
+func TestQueryCopyPutsResultsOnClipboardWithFooterNotice(t *testing.T) {
+	model, _ := queryModel(t, singleRecordPage(
+		zosmf.Record{Number: 1, Data: []byte("ABC")},
+		zosmf.Record{Number: 2, Data: []byte("XYZ")},
+	))
+	openQuery(t, model)
+
+	// Nothing to copy yet: no command, no notice.
+	if cmd := applyMessage(t, model, tea.KeyPressMsg(tea.Key{Code: 'y', Mod: tea.ModCtrl})); cmd != nil {
+		t.Fatal("copy with no results dispatched a command")
+	}
+	runQueryExpr(t, model, ".NAME")
+	cmd := applyMessage(t, model, tea.KeyPressMsg(tea.Key{Code: 'y', Mod: tea.ModCtrl}))
+	if cmd == nil {
+		t.Fatal("copy dispatched no clipboard command")
+	}
+	if footer := model.queryFooter(); !strings.Contains(footer, "copied 2 lines") {
+		t.Fatalf("footer missing copy notice: %q", footer)
+	}
+	// A new run clears the stale notice.
+	runQueryExpr(t, model, ".NAME")
+	if footer := model.queryFooter(); strings.Contains(footer, "copied") {
+		t.Fatalf("copy notice survived a new run: %q", footer)
+	}
+}
+
+func TestQueryCompletionRendersAsPopOverLayer(t *testing.T) {
+	model, _ := queryModelWithCopybook(t, dashedCopybook, singleRecordPage(zosmf.Record{Number: 1, Data: []byte("ABC")}))
+	applyMessage(t, model, tea.WindowSizeMsg{Width: 90, Height: 24})
+	openQuery(t, model)
+
+	applyMessage(t, model, ctrlSpace())
+	if model.query.comp == nil {
+		t.Fatal("completion did not open")
+	}
+	view := ansi.Strip(model.overlayQuery(model.mainView()))
+	lines := strings.Split(view, "\n")
+	if len(lines) != model.height {
+		t.Fatalf("composited view has %d lines, want %d (pop-over must not displace layout)", len(lines), model.height)
+	}
+	if !strings.Contains(view, "> CUST-GRP.CUST-TYPE") || !strings.Contains(view, "CUST-GRP.NAME") {
+		t.Fatalf("completion candidates not rendered:\n%s", view)
+	}
+	// Two rounded borders on screen: the popup and the completion pop-over.
+	if corners := strings.Count(view, "╭"); corners != 2 {
+		t.Fatalf("border corners = %d, want popup + completion layer\n%s", corners, view)
+	}
+	// The list hangs under the input row (input at index 6: 4 chrome rows,
+	// popup border, title), overlapping the results pane.
+	if boxTop := strings.Index(view, "╭"); boxTop < 0 {
+		t.Fatal("no border found")
 	}
 }
