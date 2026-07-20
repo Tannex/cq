@@ -2,6 +2,7 @@ package compaz
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -42,6 +43,37 @@ func (f *fakeFavoriteStore) Toggle(name string) (bool, error) {
 	}
 	f.entries = append(f.entries, favorites.Favorite{Pattern: name})
 	return true, nil
+}
+
+func (f *fakeFavoriteStore) Add(pattern string) error {
+	pattern = dsnmap.NormalizePattern(pattern)
+	if pattern == "" {
+		return errors.New("favorite pattern must not be empty")
+	}
+	if err := dsnmap.ValidatePattern(pattern); err != nil {
+		return err
+	}
+	for _, entry := range f.entries {
+		if entry.Pattern == pattern {
+			return errors.New("favorite " + pattern + " already exists")
+		}
+	}
+	f.entries = append(f.entries, favorites.Favorite{Pattern: pattern})
+	return nil
+}
+
+func (f *fakeFavoriteStore) Rename(oldPattern, newPattern string) error {
+	newPattern = dsnmap.NormalizePattern(newPattern)
+	if err := dsnmap.ValidatePattern(newPattern); err != nil {
+		return err
+	}
+	for i, entry := range f.entries {
+		if entry.Pattern == dsnmap.NormalizePattern(oldPattern) {
+			f.entries[i].Pattern = newPattern
+			return nil
+		}
+	}
+	return errors.New("no favorite stored for " + oldPattern)
 }
 
 func (f *fakeFavoriteStore) SetNote(pattern, note string) error {
@@ -285,5 +317,102 @@ func TestFavoritesPopupEmptyState(t *testing.T) {
 	executeCommand(t, model, model.handleKey(keyPress('x', "x")))
 	if model.favPopup == nil || model.favPopup.editing {
 		t.Fatalf("empty popup state changed: %#v", model.favPopup)
+	}
+}
+
+func TestFavoritesPopupAddsPatternFavorites(t *testing.T) {
+	store := &fakeFavoriteStore{}
+	model, _ := favoriteModel(t, store)
+
+	executeCommand(t, model, model.handleKey(keyPress('F', "F")))
+	executeCommand(t, model, model.handleKey(keyPress('a', "a")))
+	if !model.favPopup.patternEditing || !model.favPopup.adding {
+		t.Fatal("a did not open the add-pattern input")
+	}
+	for _, r := range `/^prod\.cust/` {
+		executeCommand(t, model, model.handleKey(keyPress(r, string(r))))
+	}
+	executeCommand(t, model, model.handleKey(keyPress(tea.KeyEnter, "")))
+	if model.favPopup.patternEditing {
+		t.Fatalf("input still open: err=%q", model.favPopup.err)
+	}
+	if len(store.entries) != 1 || store.entries[0].Pattern != `/^prod\.cust/` {
+		t.Fatalf("entries = %#v", store.entries)
+	}
+	if entry, ok := model.favPopup.selectedEntry(); !ok || entry.Pattern != `/^prod\.cust/` {
+		t.Fatalf("new favorite not selected: %#v", model.favPopup.entries)
+	}
+	if !entry(model).Wildcard() {
+		t.Fatal("regex favorite should report as a pattern")
+	}
+}
+
+func entry(m *Model) favorites.Favorite {
+	e, _ := m.favPopup.selectedEntry()
+	return e
+}
+
+func TestFavoritesPopupRejectsInvalidRegexInline(t *testing.T) {
+	store := &fakeFavoriteStore{}
+	model, _ := favoriteModel(t, store)
+
+	executeCommand(t, model, model.handleKey(keyPress('F', "F")))
+	executeCommand(t, model, model.handleKey(keyPress('a', "a")))
+	model.favPopup.pattern.SetValue(`/bad(/`)
+	executeCommand(t, model, model.handleKey(keyPress(tea.KeyEnter, "")))
+	if !model.favPopup.patternEditing {
+		t.Fatal("invalid pattern should keep the input open")
+	}
+	if model.favPopup.err == "" {
+		t.Fatal("validation error not surfaced")
+	}
+	if len(store.entries) != 0 {
+		t.Fatalf("invalid pattern stored: %#v", store.entries)
+	}
+	// esc leaves the input without closing the popup.
+	executeCommand(t, model, model.handleKey(keyPress(tea.KeyEscape, "")))
+	if model.favPopup == nil || model.favPopup.patternEditing {
+		t.Fatal("esc should close only the input")
+	}
+}
+
+func TestFavoritesPopupEditsPatternPreservingNote(t *testing.T) {
+	store := &fakeFavoriteStore{entries: []favorites.Favorite{
+		{Pattern: "A.ONE", Note: "keep me"},
+	}}
+	model, _ := favoriteModel(t, store)
+
+	executeCommand(t, model, model.handleKey(keyPress('F', "F")))
+	executeCommand(t, model, model.handleKey(keyPress('e', "e")))
+	if !model.favPopup.patternEditing || model.favPopup.adding {
+		t.Fatal("e did not open the edit input")
+	}
+	if model.favPopup.pattern.Value() != "A.ONE" {
+		t.Fatalf("edit input not prefilled: %q", model.favPopup.pattern.Value())
+	}
+	model.favPopup.pattern.SetValue("A.ONE.*")
+	executeCommand(t, model, model.handleKey(keyPress(tea.KeyEnter, "")))
+	if len(store.entries) != 1 || store.entries[0].Pattern != "A.ONE.*" || store.entries[0].Note != "keep me" {
+		t.Fatalf("entries = %#v", store.entries)
+	}
+	if e, _ := model.favPopup.selectedEntry(); e.Pattern != "A.ONE.*" {
+		t.Fatalf("selection lost after rename: %#v", model.favPopup.entries)
+	}
+}
+
+func TestFavoritesNoteInputStillTypesAandE(t *testing.T) {
+	store := &fakeFavoriteStore{entries: []favorites.Favorite{{Pattern: "A.ONE"}}}
+	model, _ := favoriteModel(t, store)
+
+	executeCommand(t, model, model.handleKey(keyPress('F', "F")))
+	executeCommand(t, model, model.handleKey(keyPress('n', "n")))
+	for _, r := range "ae" {
+		executeCommand(t, model, model.handleKey(keyPress(r, string(r))))
+	}
+	if model.favPopup.patternEditing {
+		t.Fatal("typing a/e in the note opened the pattern input")
+	}
+	if model.favPopup.note.Value() != "ae" {
+		t.Fatalf("note input = %q", model.favPopup.note.Value())
 	}
 }
