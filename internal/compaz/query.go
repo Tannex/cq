@@ -680,7 +680,8 @@ func (m *Model) queryAfterFetch(ws *workspace, fetchErr error) tea.Cmd {
 }
 
 // queryFooter is the progress/result summary under the results pane, e.g.
-// "⠸ 1.42s searched 400 of 118+ records… — 12 matches".
+// "⠸ 1.42s searched 400 of 118+ records… — 12 matches" while running and
+// just "1.42s — 12 matches" once done.
 func (m *Model) queryFooter() string {
 	popup := m.query
 	ws := m.ws()
