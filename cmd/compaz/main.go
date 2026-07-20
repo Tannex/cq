@@ -16,6 +16,7 @@ import (
 	"github.com/Tannex/cq/internal/buildinfo"
 	"github.com/Tannex/cq/internal/compaz"
 	"github.com/Tannex/cq/internal/dsnmap"
+	"github.com/Tannex/cq/internal/events"
 	"github.com/Tannex/cq/internal/favorites"
 	"github.com/Tannex/cq/internal/zosmf"
 	"github.com/Tannex/cq/internal/zowe"
@@ -135,6 +136,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		ListProfiles:  listProfiles,
 		Mappings:      dsnmap.DefaultStore(nil),
 		Favorites:     favorites.DefaultStore(nil),
+		Events:        events.DefaultStore(nil),
 	}
 	if demoMode {
 		deps.LoadSession = loadDemoSession

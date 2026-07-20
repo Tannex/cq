@@ -429,21 +429,28 @@ func (m *Model) runQuery() tea.Cmd {
 		popup.err = queryNeedsOverlay
 		return nil
 	}
-	expr := strings.TrimSpace(popup.input.Value())
-	if expr == "" {
+	typed := strings.TrimSpace(popup.input.Value())
+	if typed == "" {
 		popup.err = "enter a jq expression"
 		return nil
 	}
-	expr, err := normalizeQueryExpression(expr)
+	expr, err := normalizeQueryExpression(typed)
 	if err != nil {
+		// A rejected expression supersedes any search still running; without
+		// this the old run keeps mutating results behind the error banner.
+		popup.stopSearch()
 		popup.err = err.Error()
+		m.recordQuery(typed, false)
 		return nil
 	}
 	compiled, err := query.Compile(expr)
 	if err != nil {
+		popup.stopSearch()
 		popup.err = err.Error()
+		m.recordQuery(typed, false)
 		return nil
 	}
+	m.recordQuery(typed, true)
 	popup.stopSearch()
 	popup.comp = nil
 	popup.generation++
@@ -467,6 +474,14 @@ func (m *Model) runQuery() tea.Cmd {
 		return nil
 	}
 	return tea.Batch(popup.spin.Tick, m.startQueryBulkDownload(ws, streamer))
+}
+
+// recordQuery tracks an executed expression — as typed, before quote
+// normalization — with its compile outcome for the local usage log.
+func (m *Model) recordQuery(expr string, ok bool) {
+	if m.deps.Events != nil {
+		m.deps.Events.RecordQuery(expr, ok)
+	}
 }
 
 // decodeQueryValue turns raw record bytes into the jq input value, counting
