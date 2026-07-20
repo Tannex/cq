@@ -291,12 +291,14 @@ func (ws *workspace) activePager() pagerNavigator {
 	}
 }
 
+// statusForCount reports an empty result; a non-empty table speaks for itself,
+// so the status text stays blank.
 func (ws *workspace) statusForCount(count int, noun string) {
 	if count == 0 {
 		ws.status = status{Level: statusEmpty, Text: "no " + noun + " returned"}
 		return
 	}
-	ws.status = status{Level: statusReady, Text: fmt.Sprintf("%d %s", count, noun)}
+	ws.status = status{Level: statusReady}
 }
 
 func (ws *workspace) recordRange() (int64, int64) {

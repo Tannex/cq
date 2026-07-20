@@ -504,7 +504,8 @@ func (m *Model) handleQueryEval(msg queryEvalMsg) tea.Cmd {
 }
 
 // queryFooter is the progress/result summary under the results pane, e.g.
-// "1.42s 118 records as one array — 12 results".
+// "⠸ 1.42s downloading the whole data set…" while running and just
+// "1.42s — 12 results" once done.
 func (m *Model) queryFooter() string {
 	popup := m.query
 	ws := m.ws()
@@ -518,7 +519,7 @@ func (m *Model) queryFooter() string {
 	case popup.cancelled:
 		state = fmt.Sprintf("%s cancelled", clock)
 	case popup.done:
-		state = fmt.Sprintf("%s %d records as one array — %d results", clock, popup.searched, popup.matches)
+		state = fmt.Sprintf("%s — %d results", clock, popup.matches)
 		if popup.matches > len(popup.lines) {
 			state += fmt.Sprintf(", first %d shown", len(popup.lines))
 		}

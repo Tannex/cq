@@ -506,35 +506,14 @@ func TestTinyLoadingEmptyErrorAndMappingViewsAreExplicit(t *testing.T) {
 	}
 }
 
-func TestStatusLineShowsPositionFlushRightWithMoreIndicator(t *testing.T) {
-	model := recordViewModel(t)
-	model.screen = ScreenDataSets
-	model.datasets = []zosmf.DataSet{
-		{Name: "A"}, {Name: "B"}, {Name: "C"}, {Name: "D"}, {Name: "E"},
-	}
-	model.datasetPage.reset(model.visible, model.budget)
-	model.datasetPage.apply([]string{"A", "B", "C", "D", "E"}, true, model.datasetPage.initialPlan(""))
-	model.datasetPage.move(2)
-	model.status = status{Level: statusReady, Text: "5 data sets"}
-
-	line := ansi.Strip(model.statusLine())
-	if !strings.Contains(line, "row 3 of 5+") {
-		t.Fatalf("status line missing position indicator: %q", line)
-	}
-	trimmed := strings.TrimRight(line, " ")
-	if !strings.HasSuffix(trimmed, "5+") {
-		t.Fatalf("position not flush right: %q", line)
-	}
-}
-
-func TestStatusLineRecordPositionUsesActualRecordNumber(t *testing.T) {
+func TestStatusLineOmitsPositionText(t *testing.T) {
 	model := recordWindowModel(t, 5, 10)
 	model.recordPage.move(3)
-	model.status = status{Level: statusReady, Text: "10 records"}
+	model.status = status{Level: statusReady}
 
 	line := ansi.Strip(model.statusLine())
-	if !strings.Contains(line, "record 00000104 of 10") {
-		t.Fatalf("status line missing record position: %q", line)
+	if strings.Contains(line, " of ") {
+		t.Fatalf("status line still renders a position indicator: %q", line)
 	}
 }
 
