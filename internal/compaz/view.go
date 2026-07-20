@@ -58,8 +58,10 @@ var consolePalette = struct {
 	header:    lipgloss.NewStyle().Background(ayu.headerBg).Foreground(ayu.fgBright).Bold(true),
 	activeTab: lipgloss.NewStyle().Background(ayu.headerBg).Foreground(ayu.accent).Bold(true),
 	// popup paints no background of its own: View pins the terminal default
-	// to ayu.bg, so an unstyled fill matches the data area by construction.
-	// Popups are distinguished by border and title styling alone.
+	// to ayu.bg, so on terminals honoring OSC 11 an unstyled fill matches the
+	// data area by construction (elsewhere both fall back to the terminal's
+	// own default together). Popups are distinguished by border and title
+	// styling alone.
 	popup:       lipgloss.NewStyle().Foreground(ayu.fgBright),
 	popupBorder: lipgloss.NewStyle().Foreground(ayu.accent),
 	cyan:        lipgloss.NewStyle().Foreground(ayu.tag),
@@ -98,7 +100,9 @@ func (m *Model) View() tea.View {
 	// Pin the terminal's default colors to the palette so every cell the app
 	// does not style explicitly still renders on ayu instead of whatever the
 	// host terminal uses; individually styling each region proved impossible
-	// to keep complete (see the garish-defaults tui-shot captures).
+	// to keep complete. Terminals that ignore OSC 10/11 degrade to their own
+	// defaults for unstyled cells, and bubbletea resets the pinned colors on
+	// every controlled exit (only an unkillable crash leaves them behind).
 	view.BackgroundColor = ayu.bg
 	view.ForegroundColor = ayu.fg
 	return view
