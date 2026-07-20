@@ -136,13 +136,17 @@ func (m *Model) chromeRule() string {
 }
 
 // profileStrip renders the profile switcher for the right edge of the status
-// line: active profile highlighted, others dimmed, unloaded ones marked with a
-// trailing dot. Empty in single-profile mode.
-func (m *Model) profileStrip() string {
-	if !m.hasTabs() {
+// line within the given width budget: active profile highlighted, others
+// dimmed, unloaded ones marked with a trailing dot. The active profile is
+// always visible; when the strip does not fit, neighbors are added while they
+// fit and an ellipsis stands in for whatever is dropped from either end (the
+// old tab bar's narrow-terminal behavior). Empty in single-profile mode.
+func (m *Model) profileStrip(budget int) string {
+	if !m.hasTabs() || budget < 1 {
 		return ""
 	}
 	parts := make([]string, len(m.profiles))
+	total := 0
 	for i, profile := range m.profiles {
 		label := profile
 		loaded := i == m.active || (i < len(m.workspaces) && m.workspaces[i].sessionReady)
@@ -154,8 +158,62 @@ func (m *Model) profileStrip() string {
 		} else {
 			parts[i] = consolePalette.muted.Render(label)
 		}
+		total += lipgloss.Width(parts[i])
 	}
-	return strings.Join(parts, " ")
+	total += len(parts) - 1
+	if total <= budget {
+		return strings.Join(parts, " ")
+	}
+
+	// Too wide: keep the active profile and expand outward while neighbors
+	// fit, reserving room for an ellipsis on each side that has profiles.
+	available := budget - lipgloss.Width(parts[m.active])
+	if m.active > 0 {
+		available -= 2
+	}
+	if m.active < len(parts)-1 {
+		available -= 2
+	}
+	if available < 0 {
+		return truncateStyled(parts[m.active], budget)
+	}
+	leftIdx, rightIdx := m.active-1, m.active+1
+	leftStop, rightStop := leftIdx < 0, rightIdx >= len(parts)
+	var leftParts, rightParts []string
+	for !leftStop || !rightStop {
+		if !rightStop {
+			if need := lipgloss.Width(parts[rightIdx]) + 1; need <= available {
+				available -= need
+				rightParts = append(rightParts, parts[rightIdx])
+				rightIdx++
+				rightStop = rightIdx >= len(parts)
+			} else {
+				rightStop = true
+			}
+		}
+		if !leftStop {
+			if need := lipgloss.Width(parts[leftIdx]) + 1; need <= available {
+				available -= need
+				leftParts = append([]string{parts[leftIdx]}, leftParts...)
+				leftIdx--
+				leftStop = leftIdx < 0
+			} else {
+				leftStop = true
+			}
+		}
+	}
+	ellipsis := consolePalette.muted.Render("…")
+	var out []string
+	if leftIdx >= 0 {
+		out = append(out, ellipsis)
+	}
+	out = append(out, leftParts...)
+	out = append(out, parts[m.active])
+	out = append(out, rightParts...)
+	if rightIdx < len(parts) {
+		out = append(out, ellipsis)
+	}
+	return strings.Join(out, " ")
 }
 
 // scrollWindow clamps offset to the scrollable range and returns the visible
@@ -934,16 +992,24 @@ func (m *Model) statusLine() string {
 		indicator = consolePalette.amber.Render(m.spinner.View())
 	}
 	label := m.renderStatusLabel(level)
-	right := m.profileStrip()
 
-	const minWidthForPosition = 40
-	if m.width < minWidthForPosition || right == "" {
+	const minWidthForStrip = 40
+	if m.width < minWidthForStrip {
 		line := fmt.Sprintf(" %s %s  %s", indicator, label, text)
 		return truncateStyled(line, m.width)
 	}
 
 	prefix := fmt.Sprintf(" %s %s  ", indicator, label)
 	prefixWidth := lipgloss.Width(prefix)
+	// The strip gets whatever remains after the prefix and a minimum
+	// status-text allowance, so the active profile stays visible even on
+	// narrow terminals.
+	right := m.profileStrip(m.width - prefixWidth - 10)
+	if right == "" {
+		line := fmt.Sprintf(" %s %s  %s", indicator, label, text)
+		return truncateStyled(line, m.width)
+	}
+
 	rightWidth := lipgloss.Width(right)
 	maxTextWidth := m.width - prefixWidth - rightWidth
 	if maxTextWidth < 10 {
