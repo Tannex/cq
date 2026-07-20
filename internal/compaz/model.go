@@ -108,14 +108,14 @@ type pendingMappingSave struct {
 // empty profile holds entries shared across profiles (single-profile
 // sessions and favorites saved before profile keying).
 type FavoriteStore interface {
-	Favorites(profile string) []favorites.Favorite
-	Matches(profile, name string) bool
-	Toggle(profile, name string) (bool, error)
-	Add(profile, pattern string) error
-	Rename(profile, oldPattern, newPattern string) error
-	SetNote(profile, pattern, note string) error
-	Remove(profile, pattern string) (bool, error)
-	Touch(profile, pattern string) error
+	Favorites(profile string, kind favorites.Kind) []favorites.Favorite
+	Matches(profile string, kind favorites.Kind, name string) bool
+	Toggle(profile string, kind favorites.Kind, name string) (bool, error)
+	Add(profile string, kind favorites.Kind, pattern string) error
+	Rename(profile string, kind favorites.Kind, oldPattern, newPattern string) error
+	SetNote(profile string, kind favorites.Kind, pattern, note string) error
+	Remove(profile string, kind favorites.Kind, pattern string) (bool, error)
+	Touch(profile string, kind favorites.Kind, pattern string) error
 }
 
 // EventRecorder appends local usage events — data set opens and executed jq

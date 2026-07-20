@@ -24,38 +24,38 @@ func visibleTo(entry favorites.Favorite, profile string) bool {
 	return entry.Profile == "" || entry.Profile == profile
 }
 
-func (f *fakeFavoriteStore) Favorites(profile string) []favorites.Favorite {
+func (f *fakeFavoriteStore) Favorites(profile string, kind favorites.Kind) []favorites.Favorite {
 	visible := make([]favorites.Favorite, 0, len(f.entries))
 	for _, entry := range f.entries {
-		if visibleTo(entry, profile) {
+		if visibleTo(entry, profile) && entry.Kind == kind {
 			visible = append(visible, entry)
 		}
 	}
 	return visible
 }
 
-func (f *fakeFavoriteStore) Matches(profile, name string) bool {
+func (f *fakeFavoriteStore) Matches(profile string, kind favorites.Kind, name string) bool {
 	for _, entry := range f.entries {
-		if visibleTo(entry, profile) && dsnmap.MatchPattern(name, entry.Pattern) {
+		if visibleTo(entry, profile) && entry.Kind == kind && dsnmap.MatchPattern(name, entry.Pattern) {
 			return true
 		}
 	}
 	return false
 }
 
-func (f *fakeFavoriteStore) Toggle(profile, name string) (bool, error) {
+func (f *fakeFavoriteStore) Toggle(profile string, kind favorites.Kind, name string) (bool, error) {
 	name = strings.ToUpper(strings.TrimSpace(name))
 	for i, entry := range f.entries {
-		if visibleTo(entry, profile) && entry.Pattern == name {
+		if visibleTo(entry, profile) && entry.Kind == kind && entry.Pattern == name {
 			f.entries = append(f.entries[:i], f.entries[i+1:]...)
 			return false, nil
 		}
 	}
-	f.entries = append(f.entries, favorites.Favorite{Pattern: name, Profile: profile})
+	f.entries = append(f.entries, favorites.Favorite{Pattern: name, Kind: kind, Profile: profile})
 	return true, nil
 }
 
-func (f *fakeFavoriteStore) Add(profile, pattern string) error {
+func (f *fakeFavoriteStore) Add(profile string, kind favorites.Kind, pattern string) error {
 	pattern = dsnmap.NormalizePattern(pattern)
 	if pattern == "" {
 		return errors.New("favorite pattern must not be empty")
@@ -64,21 +64,21 @@ func (f *fakeFavoriteStore) Add(profile, pattern string) error {
 		return err
 	}
 	for _, entry := range f.entries {
-		if visibleTo(entry, profile) && entry.Pattern == pattern {
+		if visibleTo(entry, profile) && entry.Kind == kind && entry.Pattern == pattern {
 			return errors.New("favorite " + pattern + " already exists")
 		}
 	}
-	f.entries = append(f.entries, favorites.Favorite{Pattern: pattern, Profile: profile})
+	f.entries = append(f.entries, favorites.Favorite{Pattern: pattern, Kind: kind, Profile: profile})
 	return nil
 }
 
-func (f *fakeFavoriteStore) Rename(profile, oldPattern, newPattern string) error {
+func (f *fakeFavoriteStore) Rename(profile string, kind favorites.Kind, oldPattern, newPattern string) error {
 	newPattern = dsnmap.NormalizePattern(newPattern)
 	if err := dsnmap.ValidatePattern(newPattern); err != nil {
 		return err
 	}
 	for i, entry := range f.entries {
-		if visibleTo(entry, profile) && entry.Pattern == dsnmap.NormalizePattern(oldPattern) {
+		if visibleTo(entry, profile) && entry.Kind == kind && entry.Pattern == dsnmap.NormalizePattern(oldPattern) {
 			f.entries[i].Pattern = newPattern
 			return nil
 		}
@@ -86,22 +86,22 @@ func (f *fakeFavoriteStore) Rename(profile, oldPattern, newPattern string) error
 	return errors.New("no favorite stored for " + oldPattern)
 }
 
-func (f *fakeFavoriteStore) SetNote(profile, pattern, note string) error {
+func (f *fakeFavoriteStore) SetNote(profile string, kind favorites.Kind, pattern, note string) error {
 	if f.noteErr != nil {
 		return f.noteErr
 	}
 	f.noted = append(f.noted, [2]string{pattern, note})
 	for i, entry := range f.entries {
-		if visibleTo(entry, profile) && entry.Pattern == pattern {
+		if visibleTo(entry, profile) && entry.Kind == kind && entry.Pattern == pattern {
 			f.entries[i].Note = note
 		}
 	}
 	return nil
 }
 
-func (f *fakeFavoriteStore) Remove(profile, pattern string) (bool, error) {
+func (f *fakeFavoriteStore) Remove(profile string, kind favorites.Kind, pattern string) (bool, error) {
 	for i, entry := range f.entries {
-		if visibleTo(entry, profile) && entry.Pattern == pattern {
+		if visibleTo(entry, profile) && entry.Kind == kind && entry.Pattern == pattern {
 			f.entries = append(f.entries[:i], f.entries[i+1:]...)
 			return true, nil
 		}
@@ -109,7 +109,7 @@ func (f *fakeFavoriteStore) Remove(profile, pattern string) (bool, error) {
 	return false, nil
 }
 
-func (f *fakeFavoriteStore) Touch(profile, pattern string) error {
+func (f *fakeFavoriteStore) Touch(profile string, kind favorites.Kind, pattern string) error {
 	f.touched = append(f.touched, pattern)
 	return nil
 }

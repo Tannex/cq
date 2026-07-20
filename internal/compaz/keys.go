@@ -388,9 +388,9 @@ func (k KeyMap) actionFor(msg tea.KeyPressMsg, ctx keyContext) action {
 		return actionSearch
 	case key.Matches(msg, k.Refresh):
 		return actionRefresh
-	case key.Matches(msg, k.ToggleFavorite) && ctx.Screen == ScreenDataSets:
+	case key.Matches(msg, k.ToggleFavorite) && (ctx.Screen == ScreenDataSets || ctx.Screen == ScreenJobs):
 		return actionToggleFavorite
-	case key.Matches(msg, k.Favorites) && ctx.Screen == ScreenDataSets:
+	case key.Matches(msg, k.Favorites) && (ctx.Screen == ScreenDataSets || ctx.Screen == ScreenJobs):
 		return actionFavorites
 	case key.Matches(msg, k.Recall) && ctx.Screen == ScreenDataSets:
 		return actionRecall
@@ -478,7 +478,7 @@ func (k KeyMap) shortHelp(ctx keyContext, overlay bool) []key.Binding {
 			bindings = append(bindings, k.Query, k.ToggleOverlay, k.ToggleView, k.ClearOverlay)
 		}
 	case ScreenJobs:
-		bindings = append(bindings, k.Search)
+		bindings = append(bindings, k.Search, k.ToggleFavorite, k.Favorites)
 	case ScreenSpoolContent:
 		bindings = append(bindings, k.Locate, k.WideLeft, k.WideRight)
 	}
@@ -515,7 +515,7 @@ func (k KeyMap) fullHelp(ctx keyContext, overlay bool) []helpGroup {
 			actions = append(actions, k.ToggleOverlay, k.ToggleView, k.Diagnostics, k.ClearOverlay)
 		}
 	case ScreenJobs:
-		actions = append(actions, k.Search)
+		actions = append(actions, k.Search, k.ToggleFavorite, k.Favorites)
 	case ScreenSpoolContent:
 		actions = append(actions, k.Locate, k.WideLeft, k.WideRight)
 	}

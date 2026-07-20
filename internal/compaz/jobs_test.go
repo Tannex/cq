@@ -12,6 +12,9 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+
+	"github.com/Tannex/cq/internal/favorites"
 	"github.com/Tannex/cq/internal/zosmf"
 	"github.com/Tannex/cq/internal/zowe"
 )
@@ -535,5 +538,91 @@ func TestModelEndToEndBrowsesJobsSpoolFilesAndContent(t *testing.T) {
 	}
 	if !foundJobsRequest || !foundSpoolContentRequest {
 		t.Fatalf("request log missing expected endpoints: %#v", requestLog)
+	}
+}
+
+// jobFavoriteModel builds a ready model on the jobs screen with a fake
+// favorites store wired in, mirroring favoriteModel's shape in
+// favorites_test.go but for the jobs browser rather than data sets.
+func jobFavoriteModel(t *testing.T, store FavoriteStore) (*Model, *fakeBrowser) {
+	t.Helper()
+	browser := &fakeBrowser{listJobs: func(_ context.Context, request zosmf.ListJobsRequest) (zosmf.JobPage, error) {
+		return zosmf.JobPage{Items: []zosmf.Job{{JobID: "JOB00001", JobName: request.Owner + "-" + request.Prefix}}}, nil
+	}}
+	model, err := NewModel(Options{}, Dependencies{
+		LoadSession: func(context.Context, string) (Session, error) {
+			return Session{Browser: browser, User: "IBMUSER", Encoding: "latin1"}, nil
+		},
+		Favorites: store,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	applyMessage(t, model, tea.WindowSizeMsg{Width: 90, Height: 20})
+	executeCommand(t, model, model.Init())
+	executeCommand(t, model, model.handleAction(actionJobs))
+	return model, browser
+}
+
+func TestJobsToggleFavoriteAddsAndRemovesFilterBookmark(t *testing.T) {
+	store := &fakeFavoriteStore{}
+	model, _ := jobFavoriteModel(t, store)
+
+	executeCommand(t, model, model.handleKey(keyPress('f', "f")))
+	if len(store.entries) != 1 || store.entries[0].Pattern != "IBMUSER|*" || store.entries[0].Kind != favorites.KindJob {
+		t.Fatalf("entries after toggle = %#v", store.entries)
+	}
+	if !strings.Contains(model.status.Text, "favorited IBMUSER / *") {
+		t.Fatalf("status = %q", model.status.Text)
+	}
+
+	executeCommand(t, model, model.handleKey(keyPress('f', "f")))
+	if len(store.entries) != 0 {
+		t.Fatalf("entries after second toggle = %#v", store.entries)
+	}
+	if !strings.Contains(model.status.Text, "removed favorite") {
+		t.Fatalf("status = %q", model.status.Text)
+	}
+}
+
+func TestJobsFavoritesPopupIsScopedToJobKind(t *testing.T) {
+	store := &fakeFavoriteStore{entries: []favorites.Favorite{
+		{Pattern: "A.CUSTOMER.*", Kind: favorites.KindDataSet},
+		{Pattern: "IBMUSER|NIGHT*", Kind: favorites.KindJob},
+	}}
+	model, _ := jobFavoriteModel(t, store)
+
+	executeCommand(t, model, model.handleKey(keyPress('F', "F")))
+	if model.favPopup == nil || len(model.favPopup.entries) != 1 || model.favPopup.entries[0].Pattern != "IBMUSER|NIGHT*" {
+		t.Fatalf("job favorites popup entries = %#v", model.favPopup)
+	}
+}
+
+func TestJobsFavoritesPopupJumpAppliesOwnerAndPrefix(t *testing.T) {
+	store := &fakeFavoriteStore{entries: []favorites.Favorite{
+		{Pattern: "OTHERUSR|NIGHT*", Kind: favorites.KindJob},
+	}}
+	model, browser := jobFavoriteModel(t, store)
+	requestsBefore := len(browser.jobRequests)
+
+	executeCommand(t, model, model.handleKey(keyPress('F', "F")))
+	command := model.handleFavoritesKey(keyPress(tea.KeyEnter, ""), actionAccept)
+	executeCommand(t, model, command)
+
+	if model.favPopup != nil {
+		t.Fatal("jump did not close the popup")
+	}
+	if model.screen != ScreenJobs || model.jobOwner != "OTHERUSR" || model.jobPrefix != "NIGHT*" {
+		t.Fatalf("jobs filter after jump: screen=%d owner=%q prefix=%q", model.screen, model.jobOwner, model.jobPrefix)
+	}
+	if len(browser.jobRequests) != requestsBefore+1 {
+		t.Fatalf("jump did not refetch: requests=%d", len(browser.jobRequests))
+	}
+	last := browser.jobRequests[len(browser.jobRequests)-1]
+	if last.Owner != "OTHERUSR" || last.Prefix != "NIGHT*" {
+		t.Fatalf("jump request = %#v", last)
+	}
+	if len(store.touched) != 1 || store.touched[0] != "OTHERUSR|NIGHT*" {
+		t.Fatalf("touched = %#v", store.touched)
 	}
 }
