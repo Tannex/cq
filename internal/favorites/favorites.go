@@ -201,8 +201,23 @@ func (s *Store) Toggle(name string) (bool, error) {
 	}
 	now := s.now()
 	s.favorites = append(s.favorites, Favorite{Pattern: name, Created: now, LastUsed: now})
-	sort.SliceStable(s.favorites, func(i, j int) bool { return s.favorites[i].Pattern < s.favorites[j].Pattern })
+	sortByPattern(s.favorites)
 	return true, s.save()
+}
+
+// sortByPattern keeps the persisted order deterministic; display order is
+// MRU via Favorites().
+func sortByPattern(favorites []Favorite) {
+	sort.SliceStable(favorites, func(i, j int) bool { return favorites[i].Pattern < favorites[j].Pattern })
+}
+
+func (s *Store) has(pattern string) bool {
+	for _, favorite := range s.favorites {
+		if favorite.Pattern == pattern {
+			return true
+		}
+	}
+	return false
 }
 
 // Add stores a new favorite under the normalized pattern — exact name,
@@ -216,14 +231,12 @@ func (s *Store) Add(pattern string) error {
 	if err := dsnmap.ValidatePattern(pattern); err != nil {
 		return err
 	}
-	for _, favorite := range s.favorites {
-		if favorite.Pattern == pattern {
-			return fmt.Errorf("favorite %s already exists", pattern)
-		}
+	if s.has(pattern) {
+		return fmt.Errorf("favorite %s already exists", pattern)
 	}
 	now := s.now()
 	s.favorites = append(s.favorites, Favorite{Pattern: pattern, Created: now, LastUsed: now})
-	sort.SliceStable(s.favorites, func(i, j int) bool { return s.favorites[i].Pattern < s.favorites[j].Pattern })
+	sortByPattern(s.favorites)
 	return s.save()
 }
 
@@ -239,17 +252,13 @@ func (s *Store) Rename(oldPattern, newPattern string) error {
 	if err := dsnmap.ValidatePattern(newPattern); err != nil {
 		return err
 	}
-	if newPattern != oldPattern {
-		for _, favorite := range s.favorites {
-			if favorite.Pattern == newPattern {
-				return fmt.Errorf("favorite %s already exists", newPattern)
-			}
-		}
+	if newPattern != oldPattern && s.has(newPattern) {
+		return fmt.Errorf("favorite %s already exists", newPattern)
 	}
 	for i, favorite := range s.favorites {
 		if favorite.Pattern == oldPattern {
 			s.favorites[i].Pattern = newPattern
-			sort.SliceStable(s.favorites, func(i, j int) bool { return s.favorites[i].Pattern < s.favorites[j].Pattern })
+			sortByPattern(s.favorites)
 			return s.save()
 		}
 	}
