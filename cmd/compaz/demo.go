@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
+	"io"
 	"net/http"
 	"sort"
 	"strings"
@@ -94,6 +97,23 @@ func (d *demoBrowser) ReadRecords(ctx context.Context, request zosmf.ReadRecords
 		ReturnedRows: len(records),
 		MoreRows:     end < int64(len(all)),
 	}, nil
+}
+
+// OpenRecords serves the whole demo data set as z/OSMF record frames, so the
+// jq console's bulk download works offline too.
+func (d *demoBrowser) OpenRecords(ctx context.Context, dsn string) (io.ReadCloser, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	dataSet, member, _ := splitDemoTarget(dsn)
+	var buffer bytes.Buffer
+	for _, record := range demoRecords(dataSet, member) {
+		var header [4]byte
+		binary.BigEndian.PutUint32(header[:], uint32(len(record.Data)))
+		buffer.Write(header[:])
+		buffer.Write(record.Data)
+	}
+	return io.NopCloser(&buffer), nil
 }
 
 func (d *demoBrowser) FetchText(_ context.Context, _ string) ([]byte, error) {

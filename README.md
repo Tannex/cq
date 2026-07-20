@@ -242,8 +242,9 @@ the cached range and the current per-request fetch budget. Its spinner occupies
 a permanently reserved cell, so loading transitions do not shift status text.
 
 Record browsing uses only z/OSMF record ranges. Unlike the `cq --data-dsn`
-streaming optimization, `compaz` never falls back to a whole-data-set download,
-because doing so would violate the request cap. Copybook source files are
+streaming optimization, browsing never falls back to a whole-data-set download,
+because doing so would violate the request cap; only the jq query console
+downloads the full data set, in a single request. Copybook source files are
 metadata for the display overlay and are not record-cache rows.
 
 ### Copybook and display modes
@@ -257,6 +258,17 @@ the top-level copybook is local. When the top-level copybook DSN itself is not
 found (404), its member name — from `DSN(MEMBER)` or a bare member-sized
 name — is searched through the same libraries, so mappings survive a copybook
 moving to another library.
+
+With an overlay active, `:` opens the jq query console over the records
+screen; `ctrl+space` completes field names with the quoting jq needs (dashes
+in COBOL names become `."CUST-TYPE"`). A query always evaluates the whole
+data set as one JSON array — write `.[] | select(…)` to filter records, or
+aggregate directly with `map`, `unique`, `group_by`, and friends. The records
+are downloaded once, in a single record-mode request to a temporary file, and
+every run evaluates from that file. The download is kept while the same
+records are browsed — re-running, editing the query, or reopening the console
+reuses it — and it is dropped when the browsed data set changes, on refresh
+with `r`, after saving an edit, and at quit.
 
 A valid overlay persists while browsing data sets and members. If a replacement
 copybook fails to load or parse, the previous valid overlay remains active.
