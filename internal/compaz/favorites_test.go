@@ -487,3 +487,28 @@ func TestOpenFavoriteSuggestsRecallForMigratedDataSets(t *testing.T) {
 		t.Fatalf("status = %+v", model.status)
 	}
 }
+
+func TestOpenFavoriteQueueDiesWithItsFetch(t *testing.T) {
+	store := &fakeFavoriteStore{entries: []favorites.Favorite{{Pattern: "A.CUSTOMER.DATA"}}}
+	model, _ := favoriteModel(t, store)
+
+	executeCommand(t, model, model.handleKey(keyPress('F', "F")))
+	// Arm the queue but never let the armed fetch land: the command is
+	// dropped, then a superseding browse for the same prefix runs instead.
+	_ = model.handleKey(keyPress('o', "o"))
+	ws := model.ws()
+	if ws.autoOpen == "" {
+		t.Fatal("o did not arm the auto-open queue")
+	}
+	ws.cancelBrowse()
+	executeCommand(t, model, model.startDataSets(ws, ws.datasetPage.initialPlan("")))
+
+	// The superseding listing contains the same data set name; a stale queue
+	// would have auto-opened it.
+	if model.screen != ScreenDataSets {
+		t.Fatalf("superseding listing fired a stale auto-open: screen=%d", model.screen)
+	}
+	if model.ws().autoOpen != "" {
+		t.Fatal("stale queue not cleared by the superseding result")
+	}
+}

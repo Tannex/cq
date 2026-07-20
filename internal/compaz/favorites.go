@@ -329,8 +329,12 @@ func (m *Model) openFavorite() tea.Cmd {
 		return nil
 	}
 	command := m.jumpToFavorite()
-	if !entry.Wildcard() {
-		m.ws().autoOpen = entry.Pattern
+	// Arm the queue only when the jump actually dispatched its fetch (a zero
+	// row budget dispatches nothing), and bind it to that fetch's generation.
+	if command != nil && !entry.Wildcard() {
+		ws := m.ws()
+		ws.autoOpen = entry.Pattern
+		ws.autoOpenGeneration = ws.browseGeneration
 	}
 	return command
 }
