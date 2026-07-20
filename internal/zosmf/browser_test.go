@@ -1,6 +1,7 @@
 package zosmf
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/binary"
@@ -690,5 +691,40 @@ func TestRecordNumbersRemainExactAtLargeOffsets(t *testing.T) {
 	}
 	if got := page.Records[0].Number; got != start+1 {
 		t.Fatalf("record number = %d, want %d", got, start+1)
+	}
+}
+
+func TestOpenRecordsStreamsWholeDataSetInRecordMode(t *testing.T) {
+	var payload bytes.Buffer
+	for _, value := range []string{"ONE", "TWO"} {
+		_ = binary.Write(&payload, binary.BigEndian, uint32(len(value)))
+		payload.WriteString(value)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/zosmf/restfiles/ds/A.B(MEM)" {
+			t.Errorf("path = %s", r.URL.Path)
+		}
+		if got := r.Header.Get("X-IBM-Data-Type"); got != "record" {
+			t.Errorf("data type = %q", got)
+		}
+		if got := r.Header.Get("X-IBM-Record-Range"); got != "" {
+			t.Errorf("bulk stream sent a record range %q", got)
+		}
+		_, _ = w.Write(payload.Bytes())
+	}))
+	defer server.Close()
+	client := New(sessionForServer(t, server), nil)
+
+	stream, err := client.OpenRecords(context.Background(), "A.B(MEM)")
+	if err != nil {
+		t.Fatalf("OpenRecords() error = %v", err)
+	}
+	defer stream.Close()
+	body, err := io.ReadAll(stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(body, payload.Bytes()) {
+		t.Fatalf("body = %x, want frames passed through untouched", body)
 	}
 }
