@@ -1349,12 +1349,16 @@ func (m *Model) openSelection() tea.Cmd {
 		ws.member = &selected
 		ws.screen = ScreenRecords
 		ws.resetRecordState()
+		m.recordOpen(fmt.Sprintf("%s(%s)", ws.dataSet.Name, selected.Name))
 		return tea.Batch(m.startRecords(ws, ws.recordPage.initialPlan(0)), m.autoApplyMapping(ws))
 	}
 	return nil
 }
 
-// recordOpen tracks a successful data set open for the local usage log.
+// recordOpen tracks a data set or member open for the local usage log. It
+// records the navigation, not the fetch outcome: an open whose read later
+// fails still reflects what the user reached for, which is what a
+// suggestion engine should rank.
 func (m *Model) recordOpen(name string) {
 	if m.deps.Events != nil {
 		m.deps.Events.RecordOpen(strings.ToUpper(strings.TrimSpace(name)))

@@ -451,12 +451,16 @@ func (m *Model) runQuery() tea.Cmd {
 	}
 	expr, err := normalizeQueryExpression(typed)
 	if err != nil {
+		// A rejected expression supersedes any search still running; without
+		// this the old run keeps mutating results behind the error banner.
+		popup.stopSearch()
 		popup.err = err.Error()
 		m.recordQuery(typed, false)
 		return nil
 	}
 	compiled, err := query.Compile(expr)
 	if err != nil {
+		popup.stopSearch()
 		popup.err = err.Error()
 		m.recordQuery(typed, false)
 		return nil

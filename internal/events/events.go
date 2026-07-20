@@ -4,6 +4,15 @@
 // the query console's command history. Nothing recorded ever leaves the
 // machine, and the file stays human-readable so the user can audit exactly
 // what is tracked.
+//
+// Concurrency contract: appends from several instances interleave safely
+// (single O_APPEND writes). Compaction is a read-then-rename without file
+// locking, so an event another instance appends inside that window can be
+// lost, and each instance counts only its own appends after seeding from the
+// file, so compaction can trigger late while several instances run. Both are
+// accepted: the log is usage telemetry, not a ledger, the loss window is a
+// few milliseconds every ~1000 events, and every freshly started instance
+// re-seeds from the real file size and compacts the backlog.
 package events
 
 import (
@@ -237,12 +246,23 @@ func (s *Store) read(path string) (events []Event, ok bool) {
 	return events, true
 }
 
+// countLines streams the file instead of loading it, so a log left oversized
+// by concurrent instances does not balloon startup memory.
 func countLines(path string) int {
-	b, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return 0
 	}
-	return bytes.Count(b, []byte("\n"))
+	defer f.Close()
+	count := 0
+	buf := make([]byte, 64*1024)
+	for {
+		n, err := f.Read(buf)
+		count += bytes.Count(buf[:n], []byte("\n"))
+		if err != nil {
+			return count
+		}
+	}
 }
 
 func (s *Store) logf(format string, args ...any) {
