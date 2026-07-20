@@ -553,7 +553,7 @@ func TestQueryCopyPutsResultsOnClipboardWithFooterNotice(t *testing.T) {
 	if cmd := applyMessage(t, model, tea.KeyPressMsg(tea.Key{Code: 'y', Mod: tea.ModCtrl})); cmd != nil {
 		t.Fatal("copy with no results dispatched a command")
 	}
-	runQueryExpr(t, model, ".NAME")
+	runQueryExpr(t, model, ".[].NAME")
 	cmd := applyMessage(t, model, tea.KeyPressMsg(tea.Key{Code: 'y', Mod: tea.ModCtrl}))
 	if cmd == nil {
 		t.Fatal("copy dispatched no clipboard command")
@@ -562,7 +562,7 @@ func TestQueryCopyPutsResultsOnClipboardWithFooterNotice(t *testing.T) {
 		t.Fatalf("footer missing copy notice: %q", footer)
 	}
 	// A new run clears the stale notice.
-	runQueryExpr(t, model, ".NAME")
+	runQueryExpr(t, model, ".[].NAME")
 	if footer := model.queryFooter(); strings.Contains(footer, "copied") {
 		t.Fatalf("copy notice survived a new run: %q", footer)
 	}
