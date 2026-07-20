@@ -194,6 +194,24 @@ type recordsResultMsg struct {
 	Err  error
 }
 
+type jobsResultMsg struct {
+	Meta requestMeta
+	Page zosmf.JobPage
+	Err  error
+}
+
+type spoolFilesResultMsg struct {
+	Meta  requestMeta
+	Files []zosmf.SpoolFile
+	Err   error
+}
+
+type spoolContentResultMsg struct {
+	Meta requestMeta
+	Page zosmf.SpoolContentPage
+	Err  error
+}
+
 type recallResultMsg struct {
 	Profile string
 	DSN     string
@@ -243,6 +261,14 @@ type recordRow struct {
 	Err     error
 }
 
+// spoolLine is one line of spool/DD text content, keyed by its zero-based
+// line number so the pager can track selection/identity the same way it
+// does for records (by number, never by content — spool lines repeat).
+type spoolLine struct {
+	Number int64
+	Text   string
+}
+
 // Model is the Bubble Tea state machine. It is read-only: actions can only
 // navigate, filter, fetch, decode, or change presentation.
 //
@@ -264,13 +290,14 @@ type Model struct {
 	visible int
 	budget  int
 
-	prefixInput textinput.Model
-	memberInput textinput.Model
-	locateInput textinput.Model
-	mappingView *mappingView
-	favPopup    *favoritesPopup
-	editor      *editorState
-	query       *queryPopup
+	prefixInput    textinput.Model
+	memberInput    textinput.Model
+	locateInput    textinput.Model
+	jobFilterInput textinput.Model
+	mappingView    *mappingView
+	favPopup       *favoritesPopup
+	editor         *editorState
+	query          *queryPopup
 
 	editGeneration uint64
 	editCancel     context.CancelFunc
@@ -349,19 +376,28 @@ func NewModel(options Options, deps Dependencies) (*Model, error) {
 	locateStyles := locateInput.Styles()
 	locateStyles.Cursor.Blink = false
 	locateInput.SetStyles(locateStyles)
+	jobFilterInput := textinput.New()
+	jobFilterInput.Prompt = "PREFIX  "
+	jobFilterInput.Placeholder = "*"
+	jobFilterInput.CharLimit = 8
+	jobFilterInput.SetWidth(24)
+	jobFilterStyles := jobFilterInput.Styles()
+	jobFilterStyles.Cursor.Blink = false
+	jobFilterInput.SetStyles(jobFilterStyles)
 
 	ws := newWorkspace("")
 	m := &Model{
-		workspace:   ws,
-		options:     options,
-		deps:        deps,
-		keys:        DefaultKeyMap(),
-		help:        help.New(),
-		spinner:     newStatusSpinner(),
-		prefixInput: prefixInput,
-		memberInput: memberInput,
-		locateInput: locateInput,
-		profiles:    []string{""},
+		workspace:      ws,
+		options:        options,
+		deps:           deps,
+		keys:           DefaultKeyMap(),
+		help:           help.New(),
+		spinner:        newStatusSpinner(),
+		prefixInput:    prefixInput,
+		memberInput:    memberInput,
+		locateInput:    locateInput,
+		jobFilterInput: jobFilterInput,
+		profiles:       []string{""},
 	}
 	m.workspaces = []*workspace{&m.workspace}
 	return m, nil
@@ -424,6 +460,7 @@ func (m *Model) syncInputsFromWorkspace() {
 	m.prefixInput.SetValue(m.workspace.prefix)
 	m.memberInput.SetValue(m.workspace.memberPattern)
 	m.locateInput.SetValue("")
+	m.jobFilterInput.SetValue(m.workspace.jobPrefix)
 }
 
 // Init loads the Zowe session in a typed command. Window-size handling remains
@@ -535,6 +572,18 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if ws := m.targetWorkspace(msg.Meta.Profile); ws != nil {
 			return m, m.handleRecordsResult(ws, msg)
 		}
+	case jobsResultMsg:
+		if ws := m.targetWorkspace(msg.Meta.Profile); ws != nil {
+			return m, m.handleJobsResult(ws, msg)
+		}
+	case spoolFilesResultMsg:
+		if ws := m.targetWorkspace(msg.Meta.Profile); ws != nil {
+			return m, m.handleSpoolFilesResult(ws, msg)
+		}
+	case spoolContentResultMsg:
+		if ws := m.targetWorkspace(msg.Meta.Profile); ws != nil {
+			return m, m.handleSpoolContentResult(ws, msg)
+		}
 	case overlayResultMsg:
 		if ws := m.targetWorkspace(msg.Profile); ws != nil {
 			return m, m.handleOverlayResult(ws, msg)
@@ -630,6 +679,8 @@ func (m *Model) handleSessionResult(ws *workspace, msg sessionResultMsg) tea.Cmd
 	ws.user = strings.ToUpper(strings.TrimSpace(msg.Session.User))
 	ws.codepageName = cm.Name()
 	ws.charmap = cm
+	ws.jobOwner = ws.user
+	ws.jobPrefix = "*"
 
 	ws.prefix = strings.ToUpper(strings.TrimSpace(m.options.Prefix))
 	if ws.prefix == "" && ws.user != "" {
@@ -895,8 +946,21 @@ func (m *Model) handleAction(selected action) tea.Cmd {
 			return m.memberInput.Focus()
 		}
 		if ws.screen == ScreenRecords {
+			m.locateInput.Prompt = "RECORD  "
+			m.locateInput.Placeholder = "record number"
 			m.locateInput.SetValue("")
 			return m.locateInput.Focus()
+		}
+		if ws.screen == ScreenSpoolContent {
+			m.locateInput.Prompt = "LINE  "
+			m.locateInput.Placeholder = "line number"
+			m.locateInput.SetValue("")
+			return m.locateInput.Focus()
+		}
+		if ws.screen == ScreenJobs {
+			m.jobFilterInput.SetValue(ws.jobPrefix)
+			m.jobFilterInput.CursorEnd()
+			return m.jobFilterInput.Focus()
 		}
 	case actionUp:
 		return m.moveSelection(-1)
@@ -931,6 +995,8 @@ func (m *Model) handleAction(selected action) tea.Cmd {
 		return nil
 	case actionRecall:
 		return m.startRecall()
+	case actionJobs:
+		return m.openJobs()
 	case actionEdit:
 		return m.beginEdit()
 	case actionQuery:
@@ -1237,7 +1303,7 @@ func mappingSource(mapping dsnmap.Mapping) CopybookSource {
 }
 
 func (m *Model) focusedInput() *textinput.Model {
-	for _, input := range []*textinput.Model{&m.prefixInput, &m.memberInput, &m.locateInput} {
+	for _, input := range []*textinput.Model{&m.prefixInput, &m.memberInput, &m.locateInput, &m.jobFilterInput} {
 		if input.Focused() {
 			return input
 		}
@@ -1251,8 +1317,25 @@ func (m *Model) inputFocused() bool {
 
 func (m *Model) acceptSearch() tea.Cmd {
 	ws := m.ws()
+	if ws.screen == ScreenSpoolContent && m.locateInput.Focused() {
+		return m.acceptSpoolLocation()
+	}
 	if m.locateInput.Focused() {
 		return m.acceptRecordLocation()
+	}
+	if m.jobFilterInput.Focused() {
+		prefix := strings.ToUpper(strings.TrimSpace(m.jobFilterInput.Value()))
+		if prefix == "" {
+			prefix = "*"
+		}
+		m.jobFilterInput.Blur()
+		ws.cancelBrowse()
+		ws.jobPrefix = prefix
+		ws.resetJobsState()
+		if m.budget <= 0 {
+			return nil
+		}
+		return m.startJobs(ws, ws.jobPage.initialPlan(""))
 	}
 	if m.prefixInput.Focused() {
 		prefix := strings.ToUpper(strings.TrimSpace(m.prefixInput.Value()))
@@ -1309,6 +1392,27 @@ func (m *Model) acceptRecordLocation() tea.Cmd {
 	ws.cancelDecode()
 	ws.resetRecordState()
 	return m.startRecords(ws, ws.recordPage.initialPlan(number))
+}
+
+// acceptSpoolLocation jumps the spool content viewer to a zero-based line
+// number, mirroring acceptRecordLocation.
+func (m *Model) acceptSpoolLocation() tea.Cmd {
+	ws := m.ws()
+	value := strings.TrimSpace(m.locateInput.Value())
+	number, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || number < 0 {
+		ws.status = status{Level: statusError, Text: "line number must be zero or greater"}
+		return nil
+	}
+	m.locateInput.Blur()
+	if ws.spoolContentPage.selectKey(strconv.FormatInt(number, 10)) {
+		ws.status = status{Level: statusReady, Text: fmt.Sprintf("located line %d", number)}
+		return m.maybePrefetch(ws)
+	}
+
+	ws.cancelBrowse()
+	ws.resetSpoolContentState()
+	return m.startSpoolContent(ws, ws.spoolContentPage.initialPlan(number))
 }
 
 func (m *Model) cancelSearch() {
@@ -1413,6 +1517,28 @@ func (m *Model) openSelection() tea.Cmd {
 		ws.resetRecordState()
 		m.recordOpen(fmt.Sprintf("%s(%s)", ws.dataSet.Name, selected.Name))
 		return tea.Batch(m.startRecords(ws, ws.recordPage.initialPlan(0)), m.autoApplyMapping(ws))
+	case ScreenJobs:
+		index := ws.jobPage.selectedIndex()
+		if index < 0 || index >= len(ws.jobs) {
+			return nil
+		}
+		selected := ws.jobs[index]
+		ws.cancelBrowse()
+		ws.job = selected
+		ws.resetSpoolFilesState()
+		ws.screen = ScreenSpoolFiles
+		return m.startSpoolFiles(ws, ws.spoolFilePage.initialPlan(""))
+	case ScreenSpoolFiles:
+		index := ws.spoolFilePage.selectedIndex()
+		if index < 0 || index >= len(ws.spoolFiles) {
+			return nil
+		}
+		selected := ws.spoolFiles[index]
+		ws.cancelBrowse()
+		ws.spoolFile = &selected
+		ws.resetSpoolContentState()
+		ws.screen = ScreenSpoolContent
+		return m.startSpoolContent(ws, ws.spoolContentPage.initialPlan(0))
 	}
 	return nil
 }
@@ -1453,6 +1579,24 @@ func (m *Model) navigateBack() tea.Cmd {
 		ws.dataSet = zosmf.DataSet{}
 		ws.statusForCount(len(ws.datasets), "data sets")
 		return m.ensureActivePage()
+	case ScreenSpoolContent:
+		ws.cancelBrowse()
+		ws.resetSpoolContentState()
+		ws.screen = ScreenSpoolFiles
+		ws.statusForCount(len(ws.spoolFiles), "spool files")
+		return m.ensureActivePage()
+	case ScreenSpoolFiles:
+		ws.cancelBrowse()
+		ws.resetSpoolFilesState()
+		ws.screen = ScreenJobs
+		ws.job = zosmf.Job{}
+		ws.statusForCount(len(ws.jobs), "jobs")
+		return m.ensureActivePage()
+	case ScreenJobs:
+		ws.cancelBrowse()
+		ws.screen = ScreenDataSets
+		ws.statusForCount(len(ws.datasets), "data sets")
+		return m.ensureActivePage()
 	}
 	return nil
 }
@@ -1488,6 +1632,22 @@ func (m *Model) refresh() tea.Cmd {
 		ws.syntaxSampled = 0
 		ws.recordPage.reset(m.visible, m.budget)
 		return m.startRecords(ws, plan)
+	case ScreenJobs:
+		plan := ws.jobPage.refreshPlan()
+		ws.jobs = nil
+		ws.jobPage.reset(m.visible, m.budget)
+		return m.startJobs(ws, plan)
+	case ScreenSpoolFiles:
+		plan := ws.spoolFilePage.refreshPlan()
+		ws.spoolFiles = nil
+		ws.spoolFilePage.reset(m.visible, m.budget)
+		return m.startSpoolFiles(ws, plan)
+	case ScreenSpoolContent:
+		plan := ws.spoolContentPage.refreshPlan()
+		ws.spoolContent = nil
+		ws.spoolLongest = 0
+		ws.spoolContentPage.reset(m.visible, m.budget)
+		return m.startSpoolContent(ws, plan)
 	}
 	return nil
 }
@@ -1645,6 +1805,18 @@ func (m *Model) ensureActivePage() tea.Cmd {
 		if len(ws.records) == 0 && ws.dataSet.Name != "" {
 			return m.startRecords(ws, ws.recordPage.initialPlan(0))
 		}
+	case ScreenJobs:
+		if len(ws.jobs) == 0 && ws.jobPrefix != "" {
+			return m.startJobs(ws, ws.jobPage.initialPlan(""))
+		}
+	case ScreenSpoolFiles:
+		if len(ws.spoolFiles) == 0 && ws.job.JobName != "" {
+			return m.startSpoolFiles(ws, ws.spoolFilePage.initialPlan(""))
+		}
+	case ScreenSpoolContent:
+		if len(ws.spoolContent) == 0 && ws.spoolFile != nil {
+			return m.startSpoolContent(ws, ws.spoolContentPage.initialPlan(0))
+		}
 	}
 	return m.maybePrefetch(ws)
 }
@@ -1659,6 +1831,7 @@ func (m *Model) handleResize(width, height int) tea.Cmd {
 	m.prefixInput.SetWidth(max(8, width-10))
 	m.memberInput.SetWidth(max(8, min(24, width-10)))
 	m.locateInput.SetWidth(max(8, min(24, width-10)))
+	m.jobFilterInput.SetWidth(max(8, min(24, width-10)))
 	if m.mappingView != nil {
 		m.mappingView.setWidth(width)
 	}
@@ -1709,6 +1882,13 @@ func (m *Model) maybePrefetch(ws *workspace) tea.Cmd {
 		if plan, ok := forwardRecordPlan(&ws.recordPage); ok {
 			return m.startRecords(ws, plan)
 		}
+	case ScreenSpoolContent:
+		if plan, ok := forwardSpoolContentPlan(&ws.spoolContentPage); ok {
+			return m.startSpoolContent(ws, plan)
+		}
+		// ScreenJobs and ScreenSpoolFiles are deliberately absent here:
+		// z/OSMF's job list and spool file list have no pagination cursor
+		// at all, so there is no forward page to prefetch.
 	}
 	return nil
 }
@@ -1782,6 +1962,178 @@ func (m *Model) startRecords(ws *workspace, plan pagePlan[int64]) tea.Cmd {
 		page, err := browser.ReadRecords(ctx, request)
 		return recordsResultMsg{Meta: meta, Page: page, Err: err}
 	})
+}
+
+// openJobs switches to the jobs screen (reachable only from ScreenDataSets,
+// gated in keys.go). Job state persists across visits like every other
+// screen's cache: ensureActivePage only fetches when nothing is cached yet.
+func (m *Model) openJobs() tea.Cmd {
+	ws := m.ws()
+	if _, ok := ws.browser.(zosmf.JobBrowser); !ok {
+		ws.status = status{Level: statusWarn, Text: "this session cannot browse jobs"}
+		return nil
+	}
+	ws.cancelBrowse()
+	ws.cancelDecode()
+	ws.screen = ScreenJobs
+	return m.ensureActivePage()
+}
+
+func (m *Model) startJobs(ws *workspace, plan pagePlan[string]) tea.Cmd {
+	jobs, ok := ws.browser.(zosmf.JobBrowser)
+	if !ok || !ws.canFetch(m.budget) {
+		return nil
+	}
+	ws.cancelBrowse()
+	ws.browseGeneration++
+	meta := requestMeta{
+		Generation: ws.browseGeneration, Screen: ScreenJobs,
+		Identity: ws.jobIdentity(), Profile: ws.profile, Budget: m.budget, NamePlan: plan,
+	}
+	ws.browsePending = &meta
+	ctx, cancel := context.WithTimeout(context.Background(), m.deps.Timeout)
+	ws.browseCancel = cancel
+	ws.status = status{Level: statusLoading, Text: fmt.Sprintf("listing jobs for %s owned by %s", displayOr(ws.jobPrefix, "*"), displayOr(ws.jobOwner, "any"))}
+	request := zosmf.ListJobsRequest{Owner: ws.jobOwner, Prefix: ws.jobPrefix, MaxItems: m.budget}
+	return m.loadingCommand(func() tea.Msg {
+		page, err := jobs.ListJobs(ctx, request)
+		return jobsResultMsg{Meta: meta, Page: page, Err: err}
+	})
+}
+
+func (m *Model) startSpoolFiles(ws *workspace, plan pagePlan[string]) tea.Cmd {
+	jobs, ok := ws.browser.(zosmf.JobBrowser)
+	if !ok || !ws.canFetch(m.budget) || ws.job.JobName == "" {
+		return nil
+	}
+	ws.cancelBrowse()
+	ws.browseGeneration++
+	identity := ws.spoolFileListIdentity()
+	meta := requestMeta{
+		Generation: ws.browseGeneration, Screen: ScreenSpoolFiles,
+		Identity: identity, Profile: ws.profile, Budget: m.budget, NamePlan: plan,
+	}
+	ws.browsePending = &meta
+	ctx, cancel := context.WithTimeout(context.Background(), m.deps.Timeout)
+	ws.browseCancel = cancel
+	ws.status = status{Level: statusLoading, Text: fmt.Sprintf("listing spool files for %s", identity)}
+	jobName, jobID := ws.job.JobName, ws.job.JobID
+	return m.loadingCommand(func() tea.Msg {
+		files, err := jobs.ListSpoolFiles(ctx, jobName, jobID)
+		return spoolFilesResultMsg{Meta: meta, Files: files, Err: err}
+	})
+}
+
+func (m *Model) startSpoolContent(ws *workspace, plan pagePlan[int64]) tea.Cmd {
+	jobs, ok := ws.browser.(zosmf.JobBrowser)
+	if !ok || !ws.canFetch(m.budget) || ws.job.JobName == "" || ws.spoolFile == nil {
+		return nil
+	}
+	ws.cancelBrowse()
+	ws.browseGeneration++
+	identity := ws.spoolContentIdentity()
+	meta := requestMeta{
+		Generation: ws.browseGeneration, Screen: ScreenSpoolContent,
+		Identity: identity, Profile: ws.profile, Budget: m.budget, RecordPlan: plan,
+	}
+	ws.browsePending = &meta
+	ctx, cancel := context.WithTimeout(context.Background(), m.deps.Timeout)
+	ws.browseCancel = cancel
+	ws.status = status{Level: statusLoading, Text: fmt.Sprintf("reading spool content for %s", identity)}
+	request := zosmf.ReadSpoolContentRequest{
+		JobName: ws.job.JobName, JobID: ws.job.JobID, FileID: spoolFileKey(*ws.spoolFile),
+		Start: plan.Anchor, MaxItems: m.budget,
+	}
+	return m.loadingCommand(func() tea.Msg {
+		page, err := jobs.ReadSpoolContent(ctx, request)
+		return spoolContentResultMsg{Meta: meta, Page: page, Err: err}
+	})
+}
+
+func (m *Model) handleJobsResult(ws *workspace, msg jobsResultMsg) tea.Cmd {
+	if !ws.acceptBrowse(msg.Meta, m.budget, ws.screen) {
+		return nil
+	}
+	ws.finishBrowse()
+	if msg.Err != nil {
+		ws.status = status{Level: statusError, Text: msg.Err.Error()}
+		return nil
+	}
+	ws.jobs, _, _ = applyBrowsePage(
+		ws.jobs, msg.Page.Items, &ws.jobPage, nil, nil,
+		false, msg.Meta.Budget, msg.Meta.NamePlan,
+		func(item zosmf.Job) string { return strings.ToUpper(strings.TrimSpace(item.JobID)) },
+	)
+	ws.statusForCount(len(ws.jobs), "jobs")
+	if ws != &m.workspace {
+		return nil
+	}
+	return m.maybePrefetch(ws)
+}
+
+func (m *Model) handleSpoolFilesResult(ws *workspace, msg spoolFilesResultMsg) tea.Cmd {
+	if !ws.acceptBrowse(msg.Meta, m.budget, ws.screen) {
+		return nil
+	}
+	ws.finishBrowse()
+	if msg.Err != nil {
+		ws.status = status{Level: statusError, Text: msg.Err.Error()}
+		return nil
+	}
+	// Prepend the submitted JCL as a synthetic entry: z/OSMF never lists it
+	// among a job's real spool files, but always serves it at a fixed
+	// pseudo-file path. Truncate before applyBrowsePage so a combined list
+	// over budget can never flip the pager's "more" flag true — there is no
+	// forward page this screen could ever fetch to satisfy it.
+	files := append([]zosmf.SpoolFile{{JobName: ws.job.JobName, JobID: ws.job.JobID, ID: -1, DDName: "JCL"}}, msg.Files...)
+	if msg.Meta.Budget > 0 && len(files) > msg.Meta.Budget {
+		files = files[:msg.Meta.Budget]
+	}
+	ws.spoolFiles, _, _ = applyBrowsePage(
+		ws.spoolFiles, files, &ws.spoolFilePage, nil, nil,
+		false, msg.Meta.Budget, msg.Meta.NamePlan,
+		func(item zosmf.SpoolFile) string { return spoolFileKey(item) },
+	)
+	ws.statusForCount(len(ws.spoolFiles), "spool files")
+	if ws != &m.workspace {
+		return nil
+	}
+	return m.maybePrefetch(ws)
+}
+
+func (m *Model) handleSpoolContentResult(ws *workspace, msg spoolContentResultMsg) tea.Cmd {
+	if !ws.acceptBrowse(msg.Meta, m.budget, ws.screen) {
+		return nil
+	}
+	ws.finishBrowse()
+	if msg.Err != nil {
+		ws.status = status{Level: statusError, Text: msg.Err.Error()}
+		return nil
+	}
+	incoming := make([]spoolLine, len(msg.Page.Lines))
+	for i, text := range msg.Page.Lines {
+		incoming[i] = spoolLine{Number: msg.Page.Start + int64(i), Text: text}
+	}
+	var ended bool
+	ws.spoolContent, _, ended = applyBrowsePage(
+		ws.spoolContent, incoming, &ws.spoolContentPage, nil, nil,
+		msg.Page.MoreRows, msg.Meta.Budget, msg.Meta.RecordPlan,
+		func(line spoolLine) string { return strconv.FormatInt(line.Number, 10) },
+	)
+	if msg.Meta.RecordPlan.Direction == pageForward {
+		ws.spoolLongest = max(ws.spoolLongest, longestSpoolLineWidth(incoming))
+	} else {
+		ws.spoolLongest = longestSpoolLineWidth(ws.spoolContent)
+	}
+	if ended {
+		ws.status = status{Level: statusReady, Text: "end of spool content"}
+		return nil
+	}
+	ws.statusForCount(len(ws.spoolContent), "lines")
+	if ws != &m.workspace {
+		return nil
+	}
+	return m.maybePrefetch(ws)
 }
 
 func (m *Model) handleDataSetsResult(ws *workspace, msg dataSetsResultMsg) tea.Cmd {

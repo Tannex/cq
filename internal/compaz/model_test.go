@@ -23,16 +23,48 @@ import (
 )
 
 type fakeBrowser struct {
-	dataSetRequests []zosmf.ListDataSetsRequest
-	memberRequests  []zosmf.ListMembersRequest
-	recordRequests  []zosmf.ReadRecordsRequest
-	fetchRequests   []string
+	dataSetRequests      []zosmf.ListDataSetsRequest
+	memberRequests       []zosmf.ListMembersRequest
+	recordRequests       []zosmf.ReadRecordsRequest
+	fetchRequests        []string
+	jobRequests          []zosmf.ListJobsRequest
+	spoolFileRequests    [][2]string
+	spoolContentRequests []zosmf.ReadSpoolContentRequest
 
-	listDataSets func(context.Context, zosmf.ListDataSetsRequest) (zosmf.DataSetPage, error)
-	listMembers  func(context.Context, zosmf.ListMembersRequest) (zosmf.MemberPage, error)
-	readRecords  func(context.Context, zosmf.ReadRecordsRequest) (zosmf.RecordPage, error)
-	fetchText    func(context.Context, string) ([]byte, error)
-	encoding     string
+	listDataSets     func(context.Context, zosmf.ListDataSetsRequest) (zosmf.DataSetPage, error)
+	listMembers      func(context.Context, zosmf.ListMembersRequest) (zosmf.MemberPage, error)
+	readRecords      func(context.Context, zosmf.ReadRecordsRequest) (zosmf.RecordPage, error)
+	fetchText        func(context.Context, string) ([]byte, error)
+	listJobs         func(context.Context, zosmf.ListJobsRequest) (zosmf.JobPage, error)
+	listSpoolFiles   func(context.Context, string, string) ([]zosmf.SpoolFile, error)
+	readSpoolContent func(context.Context, zosmf.ReadSpoolContentRequest) (zosmf.SpoolContentPage, error)
+	encoding         string
+}
+
+var _ zosmf.JobBrowser = (*fakeBrowser)(nil)
+
+func (f *fakeBrowser) ListJobs(ctx context.Context, request zosmf.ListJobsRequest) (zosmf.JobPage, error) {
+	f.jobRequests = append(f.jobRequests, request)
+	if f.listJobs != nil {
+		return f.listJobs(ctx, request)
+	}
+	return zosmf.JobPage{}, nil
+}
+
+func (f *fakeBrowser) ListSpoolFiles(ctx context.Context, jobName, jobID string) ([]zosmf.SpoolFile, error) {
+	f.spoolFileRequests = append(f.spoolFileRequests, [2]string{jobName, jobID})
+	if f.listSpoolFiles != nil {
+		return f.listSpoolFiles(ctx, jobName, jobID)
+	}
+	return nil, nil
+}
+
+func (f *fakeBrowser) ReadSpoolContent(ctx context.Context, request zosmf.ReadSpoolContentRequest) (zosmf.SpoolContentPage, error) {
+	f.spoolContentRequests = append(f.spoolContentRequests, request)
+	if f.readSpoolContent != nil {
+		return f.readSpoolContent(ctx, request)
+	}
+	return zosmf.SpoolContentPage{}, nil
 }
 
 func (f *fakeBrowser) ListDataSets(ctx context.Context, request zosmf.ListDataSetsRequest) (zosmf.DataSetPage, error) {
@@ -141,7 +173,8 @@ func browseResultMessage(t *testing.T, command tea.Cmd) tea.Msg {
 			continue
 		}
 		switch message.(type) {
-		case dataSetsResultMsg, membersResultMsg, recordsResultMsg:
+		case dataSetsResultMsg, membersResultMsg, recordsResultMsg,
+			jobsResultMsg, spoolFilesResultMsg, spoolContentResultMsg:
 			return message
 		}
 	}

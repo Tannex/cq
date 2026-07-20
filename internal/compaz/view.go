@@ -416,6 +416,18 @@ func (m *Model) titleLine() string {
 			screenName += "(" + m.member.Name + ")"
 		}
 		body = m.modeName()
+	case ScreenJobs:
+		screenName = "JOBS"
+		body = fmt.Sprintf("owner %s  filter %s", displayOr(m.jobOwner, "*"), displayOr(m.jobPrefix, "*"))
+	case ScreenSpoolFiles:
+		screenName = m.job.JobName + "(" + m.job.JobID + ")"
+		body = "spool files"
+	case ScreenSpoolContent:
+		screenName = m.job.JobName + "(" + m.job.JobID + ")"
+		if m.spoolFile != nil {
+			screenName += " " + m.spoolFile.DDName
+		}
+		body = "spool content"
 	}
 	// Multi-profile sessions show the profile strip in the status line
 	// instead of a title chip.
@@ -485,6 +497,27 @@ func (m *Model) searchLine() string {
 		}
 		line = label.Render("CODEPAGE") + "  " + value.Render(m.codepageName) +
 			"  " + label.Render("COPYBOOK") + "  " + value.Render(overlayText)
+	case ScreenJobs:
+		if m.jobFilterInput.Focused() {
+			line = m.jobFilterInput.View()
+		} else {
+			line = label.Render("OWNER") + "  " + value.Render(displayOr(m.jobOwner, "*")) +
+				"    " + label.Render("PREFIX") + "  " + value.Render(displayOr(m.jobPrefix, "*"))
+		}
+	case ScreenSpoolFiles:
+		line = label.Render("JOB") + "  " + value.Render(m.job.JobName+" "+m.job.JobID) +
+			"    " + label.Render("STATUS") + "  " + value.Render(displayOr(m.job.Status, "unknown"))
+	case ScreenSpoolContent:
+		if m.locateInput.Focused() {
+			line = m.locateInput.View()
+			break
+		}
+		ddName := ""
+		if m.spoolFile != nil {
+			ddName = m.spoolFile.DDName
+		}
+		line = label.Render("JOB") + "  " + value.Render(m.job.JobName+" "+m.job.JobID) +
+			"    " + label.Render("DD") + "  " + value.Render(ddName)
 	}
 	return consolePalette.panel.Width(m.width).Render(truncateStyled(line, m.width))
 }
@@ -508,6 +541,12 @@ func (m *Model) dataView() string {
 		default:
 			return m.rawRecordView()
 		}
+	case ScreenJobs:
+		return m.jobTableView()
+	case ScreenSpoolFiles:
+		return m.spoolFileTableView()
+	case ScreenSpoolContent:
+		return m.spoolContentView()
 	default:
 		return m.statePanel(statusError, "unknown screen")
 	}
@@ -521,6 +560,12 @@ func (m *Model) activeRowCount() int {
 		return len(m.members)
 	case ScreenRecords:
 		return len(m.records)
+	case ScreenJobs:
+		return len(m.jobs)
+	case ScreenSpoolFiles:
+		return len(m.spoolFiles)
+	case ScreenSpoolContent:
+		return len(m.spoolContent)
 	default:
 		return 0
 	}
@@ -730,6 +775,115 @@ func (m *Model) memberTableView() string {
 	return renderTable(m.width, m.visible, columns, rows, selected-start, showEnd)
 }
 
+// jobTableView omits an OWNER column deliberately: the owner filter is not
+// user-editable in v1 (it defaults to the session user), so every row would
+// always share the same value the search line already shows.
+func (m *Model) jobTableView() string {
+	columns := []table.Column{
+		{Title: "", Width: 1},
+		{Title: "JOBNAME", Width: 8},
+		{Title: "JOBID", Width: 8},
+		{Title: "STATUS", Width: 6},
+	}
+	showClass := m.width >= 66
+	showRC := m.width >= 76
+	if showClass {
+		columns = append(columns, table.Column{Title: "CLASS", Width: 5})
+	}
+	if showRC {
+		columns = append(columns, table.Column{Title: "RC", Width: 10})
+	}
+	start, end, showEnd := endMarkerWindow(&m.jobPage)
+	rows := make([]table.Row, end-start)
+	selected := m.jobPage.selectedIndex()
+	for i, job := range m.jobs[start:end] {
+		onCursor := start+i == selected
+		marker := " "
+		if onCursor {
+			marker = ">"
+		}
+		row := table.Row{
+			marker,
+			styledCell(job.JobName, consolePalette.plain, onCursor),
+			styledCell(job.JobID, consolePalette.plain, onCursor),
+			styledCell(job.Status, jobStatusStyle(job.Status), onCursor),
+		}
+		if showClass {
+			row = append(row, styledCell(job.Class, consolePalette.plain, onCursor))
+		}
+		if showRC {
+			row = append(row, styledCell(job.ReturnCode, consolePalette.muted, onCursor))
+		}
+		rows[i] = row
+	}
+	return renderTable(m.width, m.visible, columns, rows, selected-start, showEnd)
+}
+
+// jobStatusStyle echoes the status-chip color language: ACTIVE reads as
+// in-progress (amber), OUTPUT as settled (green), anything else plain.
+func jobStatusStyle(status string) lipgloss.Style {
+	switch strings.ToUpper(strings.TrimSpace(status)) {
+	case "ACTIVE":
+		return consolePalette.amber
+	case "OUTPUT":
+		return consolePalette.green
+	default:
+		return consolePalette.plain
+	}
+}
+
+func (m *Model) spoolFileTableView() string {
+	columns := []table.Column{
+		{Title: "", Width: 1},
+		{Title: "DD", Width: 8},
+	}
+	showStep := m.width >= 60
+	showProcStep := m.width >= 76
+	showClass := m.width >= 84
+	showRecords := m.width >= 92
+	if showStep {
+		columns = append(columns, table.Column{Title: "STEP", Width: 8})
+	}
+	if showProcStep {
+		columns = append(columns, table.Column{Title: "PROCSTEP", Width: 8})
+	}
+	if showClass {
+		columns = append(columns, table.Column{Title: "CLASS", Width: 5})
+	}
+	if showRecords {
+		columns = append(columns, table.Column{Title: "RECORDS", Width: 8})
+	}
+	start, end, showEnd := endMarkerWindow(&m.spoolFilePage)
+	rows := make([]table.Row, end-start)
+	selected := m.spoolFilePage.selectedIndex()
+	for i, file := range m.spoolFiles[start:end] {
+		onCursor := start+i == selected
+		marker := " "
+		if onCursor {
+			marker = ">"
+		}
+		row := table.Row{marker, styledCell(file.DDName, consolePalette.plain, onCursor)}
+		if showStep {
+			row = append(row, styledCell(file.StepName, consolePalette.plain, onCursor))
+		}
+		if showProcStep {
+			row = append(row, styledCell(file.ProcStep, consolePalette.muted, onCursor))
+		}
+		if showClass {
+			row = append(row, styledCell(file.Class, consolePalette.plain, onCursor))
+		}
+		if showRecords {
+			records := ""
+			if file.ID >= 0 {
+				records = rightAligned(strconv.FormatInt(file.RecordCount, 10), 8)
+			}
+			row = append(row, styledCell(records, consolePalette.muted, onCursor))
+		}
+		rows[i] = row
+	}
+	return renderTable(m.width, m.visible, columns, rows, selected-start, showEnd)
+}
+
 func endMarkerWindow[A comparable](pager *pager[A]) (start, end int, showEnd bool) {
 	start, end = pager.windowRange()
 	// A trailing blank row marks the known end of data, but only when the
@@ -816,6 +970,75 @@ func (m *Model) rawRecordView() string {
 		view += "\n" + endMarker(m.width)
 	}
 	return view
+}
+
+// spoolContentView is a plain scrollable text viewer for one spool file's
+// content, mirroring rawRecordView's viewport+gutter shape. Unlike records,
+// spool text arrives already converted by z/OSMF (mode=text does any EBCDIC
+// conversion server-side), so there is no copybook overlay, table/JSON
+// toggle, or jq console here — just read and scroll.
+func (m *Model) spoolContentView() string {
+	numberWidth := m.spoolLineNumberWidth()
+	header := consolePalette.header.Render(fmt.Sprintf("  %-*s │ SPOOL CONTENT", numberWidth, "LINE"))
+	start, end, showEnd := endMarkerWindow(&m.spoolContentPage)
+	selected := m.spoolContentPage.selectedIndex()
+	lines := make([]string, end-start)
+	for i, line := range m.spoolContent[start:end] {
+		lines[i] = line.Text
+	}
+	height := m.visible
+	if showEnd {
+		height--
+	}
+	model := viewport.New(viewport.WithWidth(m.width), viewport.WithHeight(height))
+	model.SoftWrap = false
+	model.FillHeight = true
+	model.SetHorizontalStep(hScrollStep)
+	model.SetContentLines(lines)
+	model.SetXOffset(m.horizontal * hScrollStep)
+	model.LeftGutterFunc = func(context viewport.GutterContext) string {
+		absolute := start + context.Index
+		if context.Index < 0 || absolute >= end {
+			return strings.Repeat(" ", numberWidth+5)
+		}
+		marker := " "
+		if absolute == selected {
+			marker = ">"
+		}
+		return fmt.Sprintf("%s %0*d │ ", marker, numberWidth, m.spoolContent[absolute].Number)
+	}
+	model.StyleLineFunc = func(index int) lipgloss.Style {
+		if start+index == selected {
+			return consolePalette.selected
+		}
+		return consolePalette.plain
+	}
+	view := header + "\n" + model.View()
+	if showEnd {
+		view += "\n" + endMarker(m.width)
+	}
+	return view
+}
+
+// longestSpoolLineWidth scans only the given lines: forward pages only ever
+// grow the running maximum from what they append (mirrors
+// longestRawDisplayWidth's caller in handleSpoolContentResult).
+func longestSpoolLineWidth(lines []spoolLine) int {
+	longest := 0
+	for _, line := range lines {
+		longest = max(longest, lipgloss.Width(line.Text))
+	}
+	return longest
+}
+
+func (m *Model) spoolLineNumberWidth() int {
+	width := 4
+	if len(m.spoolContent) > 0 {
+		if digits := len(strconv.FormatInt(m.spoolContent[len(m.spoolContent)-1].Number, 10)); digits > width {
+			width = digits
+		}
+	}
+	return width
 }
 
 func (m *Model) recordTableView() string {
@@ -1124,23 +1347,31 @@ func (m *Model) modeName() string {
 }
 
 func (m *Model) maxHorizontal() int {
-	if m.screen != ScreenRecords {
+	switch m.screen {
+	case ScreenRecords:
+		if m.recordMode == ModeTable && m.overlay != nil {
+			return max(0, len(m.overlay.Columns)-1)
+		}
+		available := max(1, m.width-(m.recordNumberWidth()+5))
+		longest := 0
+		if m.recordMode == ModeJSON {
+			_, _, longest, _ = m.selectedJSONContent()
+		} else {
+			longest = m.rawLongest
+		}
+		if longest <= available {
+			return 0
+		}
+		return (longest - available + hScrollStep - 1) / hScrollStep
+	case ScreenSpoolContent:
+		available := max(1, m.width-(m.spoolLineNumberWidth()+5))
+		if m.spoolLongest <= available {
+			return 0
+		}
+		return (m.spoolLongest - available + hScrollStep - 1) / hScrollStep
+	default:
 		return 0
 	}
-	if m.recordMode == ModeTable && m.overlay != nil {
-		return max(0, len(m.overlay.Columns)-1)
-	}
-	available := max(1, m.width-(m.recordNumberWidth()+5))
-	longest := 0
-	if m.recordMode == ModeJSON {
-		_, _, longest, _ = m.selectedJSONContent()
-	} else {
-		longest = m.rawLongest
-	}
-	if longest <= available {
-		return 0
-	}
-	return (longest - available + hScrollStep - 1) / hScrollStep
 }
 
 func longestRawDisplayWidth(records []recordRow, charmap *decode.Charmap) int {

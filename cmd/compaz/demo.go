@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,8 +21,14 @@ import (
 
 // demoBrowser is a deterministic, in-memory zosmf.Browser implementation used
 // by the hidden --demo flag. It requires no z/OSMF connection and produces
-// plausible data sets, PDS members, and records for visual inspection.
-type demoBrowser struct{}
+// plausible data sets, PDS members, records, and jobs for visual inspection.
+// user backs the jobs view's default owner filter, mirroring how a real
+// session's owner defaults to the signed-in Zowe user.
+type demoBrowser struct {
+	user string
+}
+
+var _ zosmf.JobBrowser = (*demoBrowser)(nil)
 
 func loadDemoSession(ctx context.Context, profile string) (compaz.Session, error) {
 	if err := ctx.Err(); err != nil {
@@ -31,7 +39,7 @@ func loadDemoSession(ctx context.Context, profile string) (compaz.Session, error
 		user = strings.ToUpper(profile) + "USR"
 	}
 	return compaz.Session{
-		Browser:  &demoBrowser{},
+		Browser:  &demoBrowser{user: user},
 		User:     user,
 		Encoding: "latin1",
 	}, nil
@@ -122,6 +130,83 @@ func (d *demoBrowser) FetchText(_ context.Context, _ string) ([]byte, error) {
 
 func (d *demoBrowser) Encoding() (string, error) {
 	return "latin1", nil
+}
+
+// ListJobs filters the fixed demo job list by owner and prefix, using the
+// z/OSMF job-filter wildcard dialect (* and ?), and honors MaxItems the same
+// way real z/OSMF does not: JobPage.MoreRows always stays false, since
+// there is no such signal to fake convincingly.
+func (d *demoBrowser) ListJobs(ctx context.Context, request zosmf.ListJobsRequest) (zosmf.JobPage, error) {
+	if err := ctx.Err(); err != nil {
+		return zosmf.JobPage{}, err
+	}
+	owner := strings.ToUpper(strings.TrimSpace(request.Owner))
+	if owner == "" {
+		owner = "*"
+	}
+	prefix := strings.ToUpper(strings.TrimSpace(request.Prefix))
+	if prefix == "" {
+		prefix = "*"
+	}
+	var matched []zosmf.Job
+	for _, job := range demoJobs(d.user) {
+		if matchJobPattern(job.Owner, owner) && matchJobPattern(job.JobName, prefix) {
+			matched = append(matched, job)
+		}
+	}
+	if request.MaxItems > 0 && len(matched) > request.MaxItems {
+		matched = matched[:request.MaxItems]
+	}
+	return zosmf.JobPage{Items: matched}, nil
+}
+
+func (d *demoBrowser) ListSpoolFiles(ctx context.Context, jobName, jobID string) ([]zosmf.SpoolFile, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	job, ok := demoJobByID(d.user, jobName, jobID)
+	if !ok {
+		return nil, &zosmf.HTTPError{StatusCode: http.StatusNotFound, Resource: jobName + "/" + jobID, Message: "job not found"}
+	}
+	return demoSpoolFiles(job), nil
+}
+
+// ReadSpoolContent serves demo spool text, including the FileID "JCL"
+// pseudo-file real z/OSMF always serves for the submitted JCL regardless of
+// whether it appears in the spool file list.
+func (d *demoBrowser) ReadSpoolContent(ctx context.Context, request zosmf.ReadSpoolContentRequest) (zosmf.SpoolContentPage, error) {
+	if err := ctx.Err(); err != nil {
+		return zosmf.SpoolContentPage{}, err
+	}
+	job, ok := demoJobByID(d.user, request.JobName, request.JobID)
+	if !ok {
+		return zosmf.SpoolContentPage{}, &zosmf.HTTPError{StatusCode: http.StatusNotFound, Resource: request.JobName + "/" + request.JobID, Message: "job not found"}
+	}
+	ddName := "JESJCL"
+	if request.FileID != "JCL" {
+		ddName = ""
+		for _, file := range demoSpoolFiles(job) {
+			if strconv.Itoa(file.ID) == request.FileID {
+				ddName = file.DDName
+				break
+			}
+		}
+	}
+	lines := demoSpoolLines(job, ddName)
+	start := request.Start
+	if start < 0 {
+		start = 0
+	}
+	if start >= int64(len(lines)) {
+		return zosmf.SpoolContentPage{Start: start}, nil
+	}
+	end := start + int64(request.MaxItems)
+	if end > int64(len(lines)) {
+		end = int64(len(lines))
+	}
+	return zosmf.SpoolContentPage{
+		Lines: lines[start:end], Start: start, MoreRows: end < int64(len(lines)),
+	}, nil
 }
 
 // demoTexts keeps in-memory edited content so the full edit/save flow —
@@ -419,6 +504,151 @@ func demoCOBOLLines(member string) []string {
 		"002400     END-IF",
 		"002500     GOBACK.",
 	}
+}
+
+var demoJobDefs = []struct {
+	jobName   string
+	status    string
+	class     string
+	retcode   string
+	phase     int
+	phaseName string
+}{
+	{"NIGHTBAT", "OUTPUT", "A", "CC 0000", 20, "Job is on the hard copy queue"},
+	{"CUSTLOAD", "OUTPUT", "A", "CC 0000", 20, "Job is on the hard copy queue"},
+	{"PAYRUN", "OUTPUT", "A", "CC 0012", 20, "Job is on the hard copy queue"},
+	{"SORTJOB", "ACTIVE", "B", "", 14, "Job is actively executing"},
+	{"RPTGEN", "OUTPUT", "A", "ABEND S0C7", 20, "Job is on the hard copy queue"},
+	{"BACKUP01", "INPUT", "C", "", 2, "Job is queued for execution"},
+}
+
+// demoJobs builds the fixed demo job list under the given owner, so every
+// demo profile ("SANDBOXUSR", "DEVUSR", "PRODUSR", ...) sees its own jobs
+// under the jobs view's default owner filter, exactly as z/OSMF would.
+func demoJobs(owner string) []zosmf.Job {
+	items := make([]zosmf.Job, len(demoJobDefs))
+	for i, def := range demoJobDefs {
+		jobID := fmt.Sprintf("JOB%05d", i+1)
+		items[i] = zosmf.Job{
+			JobID: jobID, JobName: def.jobName, Subsystem: "JES2", Owner: owner,
+			Status: def.status, Type: "JOB", Class: def.class, ReturnCode: def.retcode,
+			URL:           "https://demo/zosmf/restjobs/jobs/" + def.jobName + "/" + jobID,
+			FilesURL:      "https://demo/zosmf/restjobs/jobs/" + def.jobName + "/" + jobID + "/files",
+			JobCorrelator: jobID + "DEMO1......T4",
+			Phase:         def.phase, PhaseName: def.phaseName,
+		}
+	}
+	return items
+}
+
+func demoJobByID(owner, jobName, jobID string) (zosmf.Job, bool) {
+	jobName = strings.ToUpper(strings.TrimSpace(jobName))
+	jobID = strings.ToUpper(strings.TrimSpace(jobID))
+	for _, job := range demoJobs(owner) {
+		if job.JobName == jobName && job.JobID == jobID {
+			return job, true
+		}
+	}
+	return zosmf.Job{}, false
+}
+
+// demoSpoolFiles returns the fixed three-DD spool file set every demo job
+// has: the JES message log, the interpreted JCL, and one step's SYSPRINT.
+func demoSpoolFiles(job zosmf.Job) []zosmf.SpoolFile {
+	files := []zosmf.SpoolFile{
+		{JobName: job.JobName, JobID: job.JobID, ID: 1, StepName: "JES2", DDName: "JESMSGLG", Class: job.Class},
+		{JobName: job.JobName, JobID: job.JobID, ID: 2, StepName: "JES2", DDName: "JESJCL", Class: job.Class},
+		{JobName: job.JobName, JobID: job.JobID, ID: 3, StepName: "STEP01", DDName: "SYSPRINT", Class: job.Class},
+	}
+	for i := range files {
+		lines := demoSpoolLines(job, files[i].DDName)
+		files[i].RecordCount = int64(len(lines))
+		files[i].ByteCount = int64(len(strings.Join(lines, "\n")))
+	}
+	return files
+}
+
+func demoSpoolLines(job zosmf.Job, ddName string) []string {
+	switch ddName {
+	case "JESJCL":
+		return demoJCLLines(job.JobName)
+	case "JESMSGLG":
+		return demoJESMessageLog(job)
+	default:
+		return demoStepOutput(job)
+	}
+}
+
+// demoJESMessageLog mimics the banner/allocation/completion message shape of
+// a real JES2 job log (JESMSGLG), varying by the job's simulated outcome.
+func demoJESMessageLog(job zosmf.Job) []string {
+	lines := []string{
+		"         J E S 2  J O B  L O G  --  S Y S T E M  D E M O 1  --  N O D E  D E M O",
+		fmt.Sprintf(" %-8s JOB %s", job.JobName, job.JobID),
+		fmt.Sprintf(" IEF403I %s - STARTED", job.JobName),
+		fmt.Sprintf(" $HASP373 %-8s STARTED - INIT 1 - CLASS %s - SYS DEMO1", job.JobName, job.Class),
+	}
+	switch {
+	case strings.HasPrefix(job.ReturnCode, "ABEND"):
+		lines = append(lines,
+			fmt.Sprintf(" IEF450I %s STEP01 - %s", job.JobName, job.ReturnCode),
+			fmt.Sprintf(" $HASP395 %-8s ENDED - ABEND", job.JobName),
+		)
+	case job.ReturnCode != "":
+		lines = append(lines,
+			fmt.Sprintf(" IEF404I %s - ENDED", job.JobName),
+			fmt.Sprintf(" $HASP395 %-8s ENDED - %s", job.JobName, job.ReturnCode),
+		)
+	default:
+		lines = append(lines, fmt.Sprintf(" %s IS EXECUTING", job.JobName))
+	}
+	return lines
+}
+
+// demoStepOutput is a generic SYSPRINT-style step report, varying only by
+// whether the simulated job abended.
+func demoStepOutput(job zosmf.Job) []string {
+	lines := []string{
+		fmt.Sprintf("1DEMO STEP REPORT FOR %s", job.JobName),
+		"0PROCESSING SUMMARY",
+		"  RECORDS READ.......... 000120",
+		"  RECORDS WRITTEN....... 000120",
+	}
+	if strings.HasPrefix(job.ReturnCode, "ABEND") {
+		return append(lines, "0*** "+job.ReturnCode+" IN STEP01 ***", "  SEE SYSABEND FOR DETAILS")
+	}
+	return append(lines, "0STEP COMPLETED NORMALLY")
+}
+
+// matchJobPattern implements the z/OSMF job-filter wildcard dialect for the
+// demo data: * matches any run of characters, ? matches exactly one — a
+// different dialect than dsnmap's data set patterns (% for one character),
+// since z/OSMF's own jobs and data set REST interfaces document different
+// wildcard characters.
+func matchJobPattern(name, pattern string) bool {
+	name = strings.ToUpper(strings.TrimSpace(name))
+	pattern = strings.ToUpper(strings.TrimSpace(pattern))
+	if pattern == "" || pattern == "*" {
+		return true
+	}
+	var sb strings.Builder
+	sb.WriteByte('^')
+	for _, r := range pattern {
+		switch r {
+		case '*':
+			sb.WriteString(".*")
+		case '?':
+			sb.WriteString(".")
+		default:
+			sb.WriteString(regexp.QuoteMeta(string(r)))
+		}
+	}
+	sb.WriteByte('$')
+	re, err := regexp.Compile(sb.String())
+	if err != nil {
+		return name == pattern
+	}
+	return re.MatchString(name)
 }
 
 func demoName(index int) string {
