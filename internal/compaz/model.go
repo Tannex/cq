@@ -586,6 +586,8 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(commands...)
 	case tea.KeyPressMsg:
 		return m, m.handleKey(msg)
+	case tea.PasteMsg:
+		return m, m.handlePaste(msg)
 	case tea.MouseWheelMsg:
 		return m, m.handleMouseWheel(msg)
 	default:
@@ -806,6 +808,52 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 	}
 	return m.handleAction(selectedAction)
+}
+
+// handlePaste routes bracketed-paste text to whichever input owns the
+// keyboard, mirroring handleKey's precedence; without this the terminal's
+// paste event is discarded before any widget sees it. Pastes with nothing
+// focused are dropped.
+func (m *Model) handlePaste(msg tea.PasteMsg) tea.Cmd {
+	switch {
+	case m.editor != nil:
+		if m.editor.confirmDiscard {
+			return nil
+		}
+		m.editor.flushNav()
+		updated, cmd := m.editor.area.Update(msg)
+		m.editor.area = updated
+		return cmd
+	case m.favPopup != nil:
+		if m.favPopup.patternEditing {
+			updated, cmd := m.favPopup.pattern.Update(msg)
+			m.favPopup.pattern = updated
+			return cmd
+		}
+		if m.favPopup.editing {
+			updated, cmd := m.favPopup.note.Update(msg)
+			m.favPopup.note = updated
+			return cmd
+		}
+		return nil
+	case m.query != nil:
+		updated, cmd := m.query.input.Update(msg)
+		m.query.input = updated
+		m.query.refreshCompletion()
+		return cmd
+	case m.mappingView != nil:
+		if m.mappingView.form != nil {
+			return m.mappingView.form.update(msg)
+		}
+		return nil
+	case m.inputFocused():
+		input := m.focusedInput()
+		updated, cmd := input.Update(msg)
+		*input = updated
+		return cmd
+	default:
+		return nil
+	}
 }
 
 func (m *Model) handleAction(selected action) tea.Cmd {
