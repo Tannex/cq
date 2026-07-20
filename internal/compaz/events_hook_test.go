@@ -62,6 +62,35 @@ func TestUsageEventsRecordOpensAndQueries(t *testing.T) {
 	}
 }
 
+func TestUsageEventsRecordMemberOpens(t *testing.T) {
+	recorder := &fakeEventRecorder{}
+	browser := &fakeBrowser{
+		listDataSets: func(context.Context, zosmf.ListDataSetsRequest) (zosmf.DataSetPage, error) {
+			return zosmf.DataSetPage{Items: []zosmf.DataSet{{Name: "A.PDS", Organization: "PO"}}}, nil
+		},
+		listMembers: func(context.Context, zosmf.ListMembersRequest) (zosmf.MemberPage, error) {
+			return zosmf.MemberPage{Items: []zosmf.Member{{Name: "MEM1"}}}, nil
+		},
+	}
+	model, err := NewModel(Options{Prefix: "A*"}, Dependencies{
+		LoadSession: func(context.Context, string) (Session, error) {
+			return Session{Browser: browser, User: "A", Encoding: "latin1"}, nil
+		},
+		Events: recorder,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	applyMessage(t, model, tea.WindowSizeMsg{Width: 90, Height: 13})
+	executeCommand(t, model, model.Init())
+
+	executeCommand(t, model, model.openSelection()) // PDS
+	executeCommand(t, model, model.openSelection()) // member
+	if len(recorder.opens) != 2 || recorder.opens[0] != "A.PDS" || recorder.opens[1] != "A.PDS(MEM1)" {
+		t.Fatalf("opens = %#v", recorder.opens)
+	}
+}
+
 func TestMigratedOrUnsupportedOpensAreNotRecorded(t *testing.T) {
 	recorder := &fakeEventRecorder{}
 	browser := &fakeBrowser{

@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/Tannex/cq/internal/zosmf"
 )
@@ -207,6 +209,23 @@ func TestStatusLineRendersActiveAndInactiveProfiles(t *testing.T) {
 		if !strings.Contains(line, profile) {
 			t.Fatalf("status line missing profile %q: %q", profile, line)
 		}
+	}
+}
+
+func TestProfileStripKeepsActiveVisibleWhenNarrow(t *testing.T) {
+	model := readyModelWithProfiles(t, Options{Prefix: "A*"}, &fakeBrowser{},
+		[]string{"production", "staging", "integration", "quality", "sandbox"})
+	applyMessage(t, model, tea.WindowSizeMsg{Width: 52, Height: 20})
+
+	line := ansi.Strip(model.statusLine())
+	if !strings.Contains(line, "production") {
+		t.Fatalf("active profile not visible on a narrow terminal: %q", line)
+	}
+	if !strings.Contains(line, "…") {
+		t.Fatalf("overflowing strip did not truncate with an ellipsis: %q", line)
+	}
+	if width := lipgloss.Width(model.statusLine()); width > 52 {
+		t.Fatalf("status line width = %d, want <= 52", width)
 	}
 }
 

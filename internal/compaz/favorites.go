@@ -466,9 +466,13 @@ func (m *Model) overlayFavorites(background string) string {
 }
 
 // selectedLineIndex returns the rendered line index of the selected entry, so
-// the popup viewport can keep it in view (entries with notes span two lines).
+// the popup viewport can keep it in view (entries with notes span two lines,
+// and the add-pattern input occupies the first line while open).
 func (p *favoritesPopup) selectedLineIndex() int {
 	line := 0
+	if p.patternEditing && p.adding {
+		line++
+	}
 	for i, entry := range p.entries {
 		if i == p.selected {
 			return line
