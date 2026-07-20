@@ -229,7 +229,10 @@ func (s *Store) read(path string) (events []Event, ok bool) {
 		events = append(events, event)
 	}
 	if err := scanner.Err(); err != nil {
+		// A partial read must not report ok: compact would rewrite the log
+		// from the truncated slice and drop the unread tail.
 		s.logf("events: scan %q: %v", path, err)
+		return events, false
 	}
 	return events, true
 }
