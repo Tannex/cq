@@ -552,8 +552,7 @@ func TestQueryInputWidthFitsInsideThePopupBox(t *testing.T) {
 		model.query.input.SetValue(long)
 		model.query.input.CursorEnd()
 
-		popupWidth := min(76, width-4)
-		innerWidth := popupWidth - 4
+		innerWidth := queryPopupInnerWidth(width)
 		if got := lipgloss.Width(model.query.input.View()); got > innerWidth {
 			t.Fatalf("width=%d: input view width = %d, exceeds popup inner width %d (would be clipped, hiding the cursor)", width, got, innerWidth)
 		}
@@ -568,8 +567,7 @@ func TestQueryInputWindowRecomputesOnResize(t *testing.T) {
 	model.query.input.CursorEnd()
 
 	applyMessage(t, model, tea.WindowSizeMsg{Width: 52, Height: 24})
-	popupWidth := min(76, 52-4)
-	innerWidth := popupWidth - 4
+	innerWidth := queryPopupInnerWidth(52)
 	if got := lipgloss.Width(model.query.input.View()); got > innerWidth {
 		t.Fatalf("after shrinking to 52: input view width = %d, exceeds popup inner width %d (stale scroll window from the wider layout)", got, innerWidth)
 	}

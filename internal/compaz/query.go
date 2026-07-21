@@ -118,11 +118,28 @@ func newQueryPopup(width int) *queryPopup {
 	return popup
 }
 
+// queryPopupWidth and queryPopupInnerWidth are the query popup's box and
+// content widths for a given terminal width, shared by overlayQuery and the
+// input sizing so the two can never disagree.
+func queryPopupWidth(width int) int {
+	return min(76, width-4)
+}
+
+func queryPopupInnerWidth(width int) int {
+	return queryPopupWidth(width) - 4
+}
+
 func (p *queryPopup) setWidth(width int) {
-	popupWidth := min(76, width-4)
-	innerWidth := popupWidth - 4
-	fieldWidth := innerWidth - lipgloss.Width(p.input.Prompt) - 1
+	// The extra cell keeps the input inside the box when textinput renders a
+	// mid-text cursor, which occupies one cell beyond the configured width.
+	fieldWidth := queryPopupInnerWidth(width) - lipgloss.Width(p.input.Prompt) - 1
 	p.input.SetWidth(max(8, min(68, fieldWidth)))
+	p.refreshScrollWindow()
+}
+
+// refreshScrollWindow recomputes the input's horizontal-scroll window, which
+// SetWidth alone leaves stale until the next cursor movement.
+func (p *queryPopup) refreshScrollWindow() {
 	p.input.SetCursor(p.input.Position())
 }
 
@@ -712,7 +729,7 @@ func (m *Model) queryPanel() string {
 // anchors below the table header row, so the column names the expression
 // refers to stay readable while typing.
 func (m *Model) overlayQuery(background string) string {
-	popupWidth := min(76, m.width-4)
+	popupWidth := queryPopupWidth(m.width)
 	// Rows above the popup: title, search, rule, and the table header line;
 	// the status and help lines stay visible below.
 	top := 4
@@ -726,7 +743,7 @@ func (m *Model) overlayQuery(background string) string {
 		return background
 	}
 
-	innerWidth := popupWidth - 4
+	innerWidth := queryPopupInnerWidth(m.width)
 	contentHeight := popupHeight - 4
 
 	fill := consolePalette.popup.Width(innerWidth)
