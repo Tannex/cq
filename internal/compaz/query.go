@@ -18,7 +18,7 @@ import (
 	"github.com/Tannex/cq/internal/zosmf"
 )
 
-var queryResultCap = 1_000_000
+const queryResultCap = 1_000_000
 
 // queryPopup is the composited jq console opened from the records screen: a
 // single-line expression input over a scrollable results pane. A query always
@@ -26,8 +26,9 @@ var queryResultCap = 1_000_000
 // once into the workspace's bulk cache (reused across runs while the same
 // records are browsed) and the expression is evaluated in a single pass.
 type queryPopup struct {
-	input    textinput.Model
-	compiled *query.Query
+	input     textinput.Model
+	compiled  *query.Query
+	resultCap int
 
 	// fields are the overlay's flattened field paths offered by the
 	// ctrl+space completion; comp is the open completion list, nil otherwise.
@@ -109,8 +110,9 @@ func newQueryPopup(width int) *queryPopup {
 	styles.Cursor.Blink = false
 	input.SetStyles(styles)
 	popup := &queryPopup{
-		input: input,
-		spin:  newStatusSpinner(),
+		input:     input,
+		resultCap: queryResultCap,
+		spin:      newStatusSpinner(),
 	}
 	popup.setWidth(width)
 	return popup
@@ -463,7 +465,7 @@ func (m *Model) runQuery() tea.Cmd {
 	popup.elapsed = 0
 	popup.ctx, popup.cancel = context.WithCancel(context.Background())
 	if path := ws.bulkRecords(); path != "" {
-		return tea.Batch(popup.spin.Tick, evalQueryArrayFile(popup.ctx, compiled, ws.overlay, path, ws.profile, popup.generation))
+		return tea.Batch(popup.spin.Tick, evalQueryArrayFile(popup.ctx, compiled, ws.overlay, path, ws.profile, popup.generation, popup.resultCap))
 	}
 	streamer, ok := ws.browser.(zosmf.RecordStreamer)
 	if !ok {
@@ -510,10 +512,10 @@ func decodeQueryValue(ov *overlay, data []byte, msg *queryEvalMsg) (any, bool) {
 // loop and deliberately has no time budget: the popup context cancels it on
 // esc, close, and quit, which is the only bound a long-running expression
 // needs.
-func runQueryArray(ctx context.Context, compiled *query.Query, values []any, msg *queryEvalMsg) {
+func runQueryArray(ctx context.Context, compiled *query.Query, values []any, resultCap int, msg *queryEvalMsg) {
 	err := compiled.RunContext(ctx, values, func(out any) error {
 		msg.Matches++
-		if len(msg.Lines) < queryResultCap {
+		if len(msg.Lines) < resultCap {
 			msg.Lines = append(msg.Lines, query.Marshal(out))
 		}
 		return nil
@@ -542,7 +544,7 @@ func (m *Model) handleQueryEval(msg queryEvalMsg) tea.Cmd {
 	if msg.LastError != "" {
 		popup.lastErr = msg.LastError
 	}
-	if room := queryResultCap - len(popup.lines); room > 0 {
+	if room := popup.resultCap - len(popup.lines); room > 0 {
 		popup.lines = append(popup.lines, msg.Lines[:min(room, len(msg.Lines))]...)
 	}
 	popup.stopSearch()

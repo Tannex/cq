@@ -235,23 +235,20 @@ func TestQueryCancelStopsSearchAndIgnoresStaleResults(t *testing.T) {
 }
 
 func TestQueryResultCapStopsSearch(t *testing.T) {
-	original := queryResultCap
-	queryResultCap = 500
-	defer func() { queryResultCap = original }()
-
 	model, _ := queryModel(t, singleRecordPage(
 		zosmf.Record{Number: 1, Data: []byte("ABC")},
 		zosmf.Record{Number: 2, Data: []byte("XYZ")},
 	))
 	openQuery(t, model)
+	model.query.resultCap = 500
 	runQueryExpr(t, model, "range(600) | tostring")
 
 	popup := model.query
 	if !popup.done || popup.running {
 		t.Fatalf("query not finished: done=%v running=%v", popup.done, popup.running)
 	}
-	if len(popup.lines) != queryResultCap {
-		t.Fatalf("retained lines = %d, want cap %d", len(popup.lines), queryResultCap)
+	if len(popup.lines) != 500 {
+		t.Fatalf("retained lines = %d, want cap 500", len(popup.lines))
 	}
 	if popup.matches != 600 {
 		t.Fatalf("matches = %d, want 600 (counted past the cap)", popup.matches)
