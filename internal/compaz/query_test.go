@@ -235,8 +235,6 @@ func TestQueryCancelStopsSearchAndIgnoresStaleResults(t *testing.T) {
 }
 
 func TestQueryResultCapStopsSearch(t *testing.T) {
-	// Lower the safety-valve cap for this test only; production runs with a
-	// much higher default so realistic result sets are never truncated.
 	original := queryResultCap
 	queryResultCap = 500
 	defer func() { queryResultCap = original }()
@@ -263,10 +261,6 @@ func TestQueryResultCapStopsSearch(t *testing.T) {
 	}
 }
 
-// TestQueryCopyIncludesAllResultsPastThePreviousDefaultCap is a regression
-// test for a reported bug: copy silently stopped at the old hardcoded
-// 500-line default even for realistic result sets well within what the
-// whole-data-set decode already holds in memory uncapped.
 func TestQueryCopyIncludesAllResultsPastThePreviousDefaultCap(t *testing.T) {
 	model, _ := queryModel(t, singleRecordPage(
 		zosmf.Record{Number: 1, Data: []byte("ABC")},
