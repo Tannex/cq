@@ -11,6 +11,13 @@ const (
 	ScreenDataSets Screen = iota
 	ScreenMembers
 	ScreenRecords
+	// ScreenJobs, ScreenSpoolFiles, and ScreenSpoolContent are a second,
+	// parallel drill-down (owner/prefix-filtered jobs -> a job's spool/DD
+	// files -> one spool file's text), reachable from ScreenDataSets and
+	// back-navigable to it, mirroring the data set chain above.
+	ScreenJobs
+	ScreenSpoolFiles
+	ScreenSpoolContent
 )
 
 type RecordMode uint8
@@ -74,6 +81,7 @@ const (
 	actionHelpBottom
 	actionNextProfile
 	actionPreviousProfile
+	actionJobs
 )
 
 type keyContext struct {
@@ -126,6 +134,7 @@ type KeyMap struct {
 	ToggleFavorite  key.Binding
 	Favorites       key.Binding
 	Recall          key.Binding
+	Jobs            key.Binding
 	FavoriteNote    key.Binding
 	FavoriteRemove  key.Binding
 	FavoriteAdd     key.Binding
@@ -174,6 +183,7 @@ func DefaultKeyMap() KeyMap {
 		ToggleFavorite: key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "favorite")),
 		Favorites:      key.NewBinding(key.WithKeys("F"), key.WithHelp("F", "favorites")),
 		Recall:         key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "recall migrated")),
+		Jobs:           key.NewBinding(key.WithKeys("J"), key.WithHelp("J", "jobs")),
 		FavoriteNote:   key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "edit note")),
 		FavoriteRemove: key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "remove favorite")),
 		FavoriteAdd:    key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "add pattern")),
@@ -255,6 +265,13 @@ func (k KeyMap) actionFor(msg tea.KeyPressMsg, ctx keyContext) action {
 			return actionAccept
 		case key.Matches(msg, k.Cancel):
 			return actionCancel
+		// ScreenJobs is the only input-focused screen with two fields (owner
+		// and prefix) to cycle between; every other single-field screen has
+		// nothing for Tab/Shift+Tab to do here.
+		case ctx.Screen == ScreenJobs && key.Matches(msg, k.NextField):
+			return actionNextField
+		case ctx.Screen == ScreenJobs && key.Matches(msg, k.PreviousField):
+			return actionPreviousField
 		default:
 			return actionNone
 		}
@@ -361,19 +378,25 @@ func (k KeyMap) actionFor(msg tea.KeyPressMsg, ctx keyContext) action {
 		return actionOpen
 	case key.Matches(msg, k.Back):
 		return actionBack
-	case key.Matches(msg, k.Search) && ctx.Screen != ScreenRecords:
+	// Screen guards are enumerated explicitly (never "!= ScreenRecords")
+	// so a new screen added to the Screen enum starts with no bindings
+	// instead of silently inheriting whichever branch its zero-guard falls
+	// through to.
+	case key.Matches(msg, k.Search) && (ctx.Screen == ScreenDataSets || ctx.Screen == ScreenMembers || ctx.Screen == ScreenJobs):
 		return actionSearch
-	case key.Matches(msg, k.Locate) && ctx.Screen == ScreenRecords:
+	case key.Matches(msg, k.Locate) && (ctx.Screen == ScreenRecords || ctx.Screen == ScreenSpoolContent):
 		return actionSearch
 	case key.Matches(msg, k.Refresh):
 		return actionRefresh
-	case key.Matches(msg, k.ToggleFavorite) && ctx.Screen == ScreenDataSets:
+	case key.Matches(msg, k.ToggleFavorite) && (ctx.Screen == ScreenDataSets || ctx.Screen == ScreenJobs):
 		return actionToggleFavorite
-	case key.Matches(msg, k.Favorites) && ctx.Screen == ScreenDataSets:
+	case key.Matches(msg, k.Favorites) && (ctx.Screen == ScreenDataSets || ctx.Screen == ScreenJobs):
 		return actionFavorites
 	case key.Matches(msg, k.Recall) && ctx.Screen == ScreenDataSets:
 		return actionRecall
-	case key.Matches(msg, k.Edit) && ctx.Screen != ScreenRecords:
+	case key.Matches(msg, k.Jobs) && ctx.Screen == ScreenDataSets:
+		return actionJobs
+	case key.Matches(msg, k.Edit) && (ctx.Screen == ScreenDataSets || ctx.Screen == ScreenMembers):
 		return actionEdit
 	case key.Matches(msg, k.Query) && ctx.Screen == ScreenRecords:
 		return actionQuery
@@ -387,9 +410,9 @@ func (k KeyMap) actionFor(msg tea.KeyPressMsg, ctx keyContext) action {
 		return actionToggleView
 	case key.Matches(msg, k.Diagnostics) && ctx.Screen == ScreenRecords:
 		return actionDiagnostics
-	case key.Matches(msg, k.WideLeft) && ctx.Screen == ScreenRecords:
+	case key.Matches(msg, k.WideLeft) && (ctx.Screen == ScreenRecords || ctx.Screen == ScreenSpoolContent):
 		return actionWideLeft
-	case key.Matches(msg, k.WideRight) && ctx.Screen == ScreenRecords:
+	case key.Matches(msg, k.WideRight) && (ctx.Screen == ScreenRecords || ctx.Screen == ScreenSpoolContent):
 		return actionWideRight
 	case key.Matches(msg, k.Help):
 		return actionHelp
@@ -438,18 +461,26 @@ func (k KeyMap) shortHelp(ctx keyContext, overlay bool) []key.Binding {
 		return []key.Binding{k.Up, k.Down, k.Accept, k.FavoriteOpen, k.FavoriteAdd, k.FavoriteEdit, k.FavoriteNote, k.FavoriteRemove, k.Cancel}
 	}
 	if ctx.InputFocused {
+		if ctx.Screen == ScreenJobs {
+			return []key.Binding{k.Accept, k.NextField, k.Cancel}
+		}
 		return []key.Binding{k.Accept, k.Cancel}
 	}
 	bindings := []key.Binding{k.Up, k.Down, k.Open}
-	if ctx.Screen == ScreenDataSets {
-		bindings = append(bindings, k.Search, k.ToggleFavorite, k.Favorites, k.Edit, k.Recall)
-	} else if ctx.Screen != ScreenRecords {
+	switch ctx.Screen {
+	case ScreenDataSets:
+		bindings = append(bindings, k.Search, k.ToggleFavorite, k.Favorites, k.Edit, k.Recall, k.Jobs)
+	case ScreenMembers:
 		bindings = append(bindings, k.Search, k.Edit)
-	} else {
+	case ScreenRecords:
 		bindings = append(bindings, k.Locate, k.WideLeft, k.WideRight, k.Copybook)
 		if overlay {
 			bindings = append(bindings, k.Query, k.ToggleOverlay, k.ToggleView, k.ClearOverlay)
 		}
+	case ScreenJobs:
+		bindings = append(bindings, k.Search, k.ToggleFavorite, k.Favorites)
+	case ScreenSpoolContent:
+		bindings = append(bindings, k.Locate, k.WideLeft, k.WideRight)
 	}
 	if ctx.Tabs {
 		bindings = append(bindings, k.NextProfile, k.PreviousProfile)
@@ -473,15 +504,20 @@ func (k KeyMap) fullHelp(ctx keyContext, overlay bool) []helpGroup {
 	}
 	navigation := []key.Binding{k.Up, k.Down, pageUp, pageDown, k.Top, k.Bottom, k.Open, k.Back}
 	actions := []key.Binding{k.Refresh}
-	if ctx.Screen == ScreenDataSets {
-		actions = append(actions, k.Search, k.ToggleFavorite, k.Favorites, k.Edit, k.Recall)
-	} else if ctx.Screen != ScreenRecords {
+	switch ctx.Screen {
+	case ScreenDataSets:
+		actions = append(actions, k.Search, k.ToggleFavorite, k.Favorites, k.Edit, k.Recall, k.Jobs)
+	case ScreenMembers:
 		actions = append(actions, k.Search, k.Edit)
-	} else {
+	case ScreenRecords:
 		actions = append(actions, k.Locate, k.WideLeft, k.WideRight, k.Copybook, k.Query)
 		if overlay {
 			actions = append(actions, k.ToggleOverlay, k.ToggleView, k.Diagnostics, k.ClearOverlay)
 		}
+	case ScreenJobs:
+		actions = append(actions, k.Search, k.ToggleFavorite, k.Favorites)
+	case ScreenSpoolContent:
+		actions = append(actions, k.Locate, k.WideLeft, k.WideRight)
 	}
 	general := []key.Binding{k.Help, k.Quit}
 	if ctx.Tabs {

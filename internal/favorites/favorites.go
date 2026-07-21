@@ -1,5 +1,6 @@
 // Package favorites persists data set favorites — exact names or DSN
-// wildcard patterns with optional notes — across sessions.
+// wildcard patterns with optional notes — and job owner/prefix filter
+// bookmarks, across sessions.
 package favorites
 
 import (
@@ -18,16 +19,35 @@ import (
 // StateFileName is the favorites state file kept next to cq/config.json.
 const StateFileName = "favorites.json"
 
-// Favorite marks a data set name or DSN pattern. Pattern wildcards follow the
-// shared cq dialect implemented by dsnmap.MatchPattern: * matches any run of
-// characters, % matches exactly one character, and a /…/ pattern is an
-// anchored, case-insensitive regular expression.
+// Kind distinguishes what a favorite's Pattern means, since a store holds
+// two unrelated families of entry that must never be listed or matched
+// against each other.
+type Kind string
+
+const (
+	// KindDataSet marks a data set name or DSN wildcard/regex pattern. It is
+	// the zero value so favorites saved before Kind existed, and files
+	// written by versions that never set it, stay valid.
+	KindDataSet Kind = ""
+	// KindJob marks a job owner/prefix filter bookmark. Pattern is the
+	// opaque "OWNER|PREFIX" identity ws.jobIdentity() also uses — never
+	// matched against listed rows, only looked up or jumped to directly.
+	KindJob Kind = "job"
+)
+
+// Favorite marks a data set name/pattern or a job filter bookmark, depending
+// on Kind. For KindDataSet, Pattern wildcards follow the shared cq dialect
+// implemented by dsnmap.MatchPattern: * matches any run of characters, %
+// matches exactly one character, and a /…/ pattern is an anchored,
+// case-insensitive regular expression. For KindJob, Pattern is an opaque
+// "OWNER|PREFIX" identity with no wildcard semantics of its own.
 //
 // Profile scopes the favorite to one z/OSMF profile. An empty profile is
 // shared across profiles: it is what single-profile sessions write, and what
 // favorites saved before profile keying existed carry.
 type Favorite struct {
 	Pattern  string    `json:"pattern"`
+	Kind     Kind      `json:"kind,omitempty"`
 	Profile  string    `json:"profile,omitempty"`
 	Note     string    `json:"note,omitempty"`
 	Created  time.Time `json:"created"`
@@ -153,13 +173,14 @@ func (s *Store) save() error {
 	return nil
 }
 
-// Favorites returns a copy of the profile's favorites in most-recently-used
-// order, so the popup surfaces what the operator touched last.
-func (s *Store) Favorites(profile string) []Favorite {
+// Favorites returns a copy of the profile's favorites of the given kind in
+// most-recently-used order, so the popup surfaces what the operator touched
+// last.
+func (s *Store) Favorites(profile string, kind Kind) []Favorite {
 	s.load()
 	favorites := make([]Favorite, 0, len(s.favorites))
 	for _, favorite := range s.favorites {
-		if favorite.visibleTo(profile) {
+		if favorite.visibleTo(profile) && favorite.Kind == kind {
 			favorites = append(favorites, favorite)
 		}
 	}
@@ -172,53 +193,54 @@ func (s *Store) Favorites(profile string) []Favorite {
 	return favorites
 }
 
-// Has reports whether an exact favorite entry is stored under the name in
-// the profile's view.
-func (s *Store) Has(profile, name string) bool {
+// Has reports whether an exact favorite entry of the given kind is stored
+// under the name in the profile's view.
+func (s *Store) Has(profile string, kind Kind, name string) bool {
 	s.load()
 	name = strings.ToUpper(strings.TrimSpace(name))
 	for _, favorite := range s.favorites {
-		if favorite.visibleTo(profile) && favorite.Pattern == name {
+		if favorite.visibleTo(profile) && favorite.Kind == kind && favorite.Pattern == name {
 			return true
 		}
 	}
 	return false
 }
 
-// Matches reports whether the name is favorited in the profile's view,
-// either by an exact entry or by any wildcard favorite covering it.
-func (s *Store) Matches(profile, name string) bool {
+// Matches reports whether the name is favorited (of the given kind) in the
+// profile's view, either by an exact entry or by any wildcard favorite
+// covering it.
+func (s *Store) Matches(profile string, kind Kind, name string) bool {
 	s.load()
 	name = strings.ToUpper(strings.TrimSpace(name))
 	if name == "" {
 		return false
 	}
 	for _, favorite := range s.favorites {
-		if favorite.visibleTo(profile) && dsnmap.MatchPattern(name, favorite.Pattern) {
+		if favorite.visibleTo(profile) && favorite.Kind == kind && dsnmap.MatchPattern(name, favorite.Pattern) {
 			return true
 		}
 	}
 	return false
 }
 
-// Toggle adds an exact favorite for the name under the profile, or removes
-// the existing exact entry visible to it (a shared entry is removed for every
-// profile). Wildcard favorites covering the name are never mutated. It
-// reports whether the name is favorited after the toggle.
-func (s *Store) Toggle(profile, name string) (bool, error) {
+// Toggle adds an exact favorite of the given kind for the name under the
+// profile, or removes the existing exact entry visible to it (a shared entry
+// is removed for every profile). Wildcard favorites covering the name are
+// never mutated. It reports whether the name is favorited after the toggle.
+func (s *Store) Toggle(profile string, kind Kind, name string) (bool, error) {
 	s.load()
 	name = strings.ToUpper(strings.TrimSpace(name))
 	if name == "" {
 		return false, errors.New("favorite name must not be empty")
 	}
 	for i, favorite := range s.favorites {
-		if favorite.visibleTo(profile) && favorite.Pattern == name {
+		if favorite.visibleTo(profile) && favorite.Kind == kind && favorite.Pattern == name {
 			s.favorites = append(s.favorites[:i], s.favorites[i+1:]...)
 			return false, s.save()
 		}
 	}
 	now := s.now()
-	s.favorites = append(s.favorites, Favorite{Pattern: name, Profile: profile, Created: now, LastUsed: now})
+	s.favorites = append(s.favorites, Favorite{Pattern: name, Kind: kind, Profile: profile, Created: now, LastUsed: now})
 	sortByPattern(s.favorites)
 	return true, s.save()
 }
@@ -229,18 +251,19 @@ func sortByPattern(favorites []Favorite) {
 	sort.SliceStable(favorites, func(i, j int) bool { return favorites[i].Pattern < favorites[j].Pattern })
 }
 
-func (s *Store) has(profile, pattern string) bool {
+func (s *Store) has(profile string, kind Kind, pattern string) bool {
 	for _, favorite := range s.favorites {
-		if favorite.visibleTo(profile) && favorite.Pattern == pattern {
+		if favorite.visibleTo(profile) && favorite.Kind == kind && favorite.Pattern == pattern {
 			return true
 		}
 	}
 	return false
 }
 
-// Add stores a new favorite under the normalized pattern — exact name,
-// wildcard, or /…/ regex — keyed to the profile.
-func (s *Store) Add(profile, pattern string) error {
+// Add stores a new favorite of the given kind under the normalized pattern —
+// exact name, wildcard, or /…/ regex for KindDataSet; an opaque identity for
+// KindJob — keyed to the profile.
+func (s *Store) Add(profile string, kind Kind, pattern string) error {
 	s.load()
 	pattern = dsnmap.NormalizePattern(pattern)
 	if pattern == "" {
@@ -249,18 +272,19 @@ func (s *Store) Add(profile, pattern string) error {
 	if err := dsnmap.ValidatePattern(pattern); err != nil {
 		return err
 	}
-	if s.has(profile, pattern) {
+	if s.has(profile, kind, pattern) {
 		return fmt.Errorf("favorite %s already exists", pattern)
 	}
 	now := s.now()
-	s.favorites = append(s.favorites, Favorite{Pattern: pattern, Profile: profile, Created: now, LastUsed: now})
+	s.favorites = append(s.favorites, Favorite{Pattern: pattern, Kind: kind, Profile: profile, Created: now, LastUsed: now})
 	sortByPattern(s.favorites)
 	return s.save()
 }
 
-// Rename moves the favorite visible to the profile under the old pattern to
-// a new one, preserving its note, timestamps, and profile keying.
-func (s *Store) Rename(profile, oldPattern, newPattern string) error {
+// Rename moves the favorite of the given kind visible to the profile under
+// the old pattern to a new one, preserving its note, timestamps, and profile
+// keying.
+func (s *Store) Rename(profile string, kind Kind, oldPattern, newPattern string) error {
 	s.load()
 	oldPattern = dsnmap.NormalizePattern(oldPattern)
 	newPattern = dsnmap.NormalizePattern(newPattern)
@@ -270,11 +294,11 @@ func (s *Store) Rename(profile, oldPattern, newPattern string) error {
 	if err := dsnmap.ValidatePattern(newPattern); err != nil {
 		return err
 	}
-	if newPattern != oldPattern && s.has(profile, newPattern) {
+	if newPattern != oldPattern && s.has(profile, kind, newPattern) {
 		return fmt.Errorf("favorite %s already exists", newPattern)
 	}
 	for i, favorite := range s.favorites {
-		if favorite.visibleTo(profile) && favorite.Pattern == oldPattern {
+		if favorite.visibleTo(profile) && favorite.Kind == kind && favorite.Pattern == oldPattern {
 			s.favorites[i].Pattern = newPattern
 			sortByPattern(s.favorites)
 			return s.save()
@@ -283,12 +307,13 @@ func (s *Store) Rename(profile, oldPattern, newPattern string) error {
 	return fmt.Errorf("no favorite stored for %s", oldPattern)
 }
 
-// SetNote stores the note on the profile's favorite kept under the pattern.
-func (s *Store) SetNote(profile, pattern, note string) error {
+// SetNote stores the note on the profile's favorite of the given kind kept
+// under the pattern.
+func (s *Store) SetNote(profile string, kind Kind, pattern, note string) error {
 	s.load()
 	pattern = dsnmap.NormalizePattern(pattern)
 	for i, favorite := range s.favorites {
-		if favorite.visibleTo(profile) && favorite.Pattern == pattern {
+		if favorite.visibleTo(profile) && favorite.Kind == kind && favorite.Pattern == pattern {
 			s.favorites[i].Note = strings.TrimSpace(note)
 			return s.save()
 		}
@@ -296,13 +321,13 @@ func (s *Store) SetNote(profile, pattern, note string) error {
 	return fmt.Errorf("no favorite stored for %s", pattern)
 }
 
-// Remove deletes the profile's favorite stored under the pattern (a shared
-// entry is removed for every profile).
-func (s *Store) Remove(profile, pattern string) (bool, error) {
+// Remove deletes the profile's favorite of the given kind stored under the
+// pattern (a shared entry is removed for every profile).
+func (s *Store) Remove(profile string, kind Kind, pattern string) (bool, error) {
 	s.load()
 	pattern = dsnmap.NormalizePattern(pattern)
 	for i, favorite := range s.favorites {
-		if favorite.visibleTo(profile) && favorite.Pattern == pattern {
+		if favorite.visibleTo(profile) && favorite.Kind == kind && favorite.Pattern == pattern {
 			s.favorites = append(s.favorites[:i], s.favorites[i+1:]...)
 			return true, s.save()
 		}
@@ -310,13 +335,14 @@ func (s *Store) Remove(profile, pattern string) (bool, error) {
 	return false, nil
 }
 
-// Touch records a use of the profile's favorite stored under the pattern.
-// Failures only affect bookkeeping, so callers may ignore the error.
-func (s *Store) Touch(profile, pattern string) error {
+// Touch records a use of the profile's favorite of the given kind stored
+// under the pattern. Failures only affect bookkeeping, so callers may ignore
+// the error.
+func (s *Store) Touch(profile string, kind Kind, pattern string) error {
 	s.load()
 	pattern = dsnmap.NormalizePattern(pattern)
 	for i, favorite := range s.favorites {
-		if favorite.visibleTo(profile) && favorite.Pattern == pattern {
+		if favorite.visibleTo(profile) && favorite.Kind == kind && favorite.Pattern == pattern {
 			s.favorites[i].LastUsed = s.now()
 			return s.save()
 		}

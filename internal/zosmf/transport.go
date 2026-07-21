@@ -545,3 +545,39 @@ func (l *LazyClient) ReadRecords(ctx context.Context, request ReadRecordsRequest
 	}
 	return client.ReadRecords(ctx, request)
 }
+
+// ListJobs lazily initializes the client and performs a bounded job search.
+func (l *LazyClient) ListJobs(ctx context.Context, request ListJobsRequest) (JobPage, error) {
+	if err := browserContextError(ctx); err != nil {
+		return JobPage{}, err
+	}
+	client, err := l.get()
+	if err != nil {
+		return JobPage{}, err
+	}
+	return client.ListJobs(ctx, request)
+}
+
+// ListSpoolFiles lazily initializes the client and lists a job's spool files.
+func (l *LazyClient) ListSpoolFiles(ctx context.Context, jobName, jobID string) ([]SpoolFile, error) {
+	if err := browserContextError(ctx); err != nil {
+		return nil, err
+	}
+	client, err := l.get()
+	if err != nil {
+		return nil, err
+	}
+	return client.ListSpoolFiles(ctx, jobName, jobID)
+}
+
+// ReadSpoolContent lazily initializes the client and reads bounded spool content.
+func (l *LazyClient) ReadSpoolContent(ctx context.Context, request ReadSpoolContentRequest) (SpoolContentPage, error) {
+	if err := browserContextError(ctx); err != nil {
+		return SpoolContentPage{}, err
+	}
+	client, err := l.get()
+	if err != nil {
+		return SpoolContentPage{}, err
+	}
+	return client.ReadSpoolContent(ctx, request)
+}

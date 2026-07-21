@@ -357,3 +357,18 @@ func forwardRecordPlan(p *pager[int64]) (pagePlan[int64], bool) {
 		return number, err == nil
 	})
 }
+
+func forwardSpoolContentPlan(p *pager[int64]) (pagePlan[int64], bool) {
+	// Unlike record numbers (1-based, so the last cached number already
+	// equals the next request's Start), spool content lines are numbered
+	// 0-based (Number = Start+i): the next Start must be one past the last
+	// cached line, or the forward fetch re-requests and dedupes it away.
+	plan, ok := forwardPlan(p, func(key string) (int64, bool) {
+		number, err := strconv.ParseInt(key, 10, 64)
+		return number, err == nil
+	})
+	if ok {
+		plan.Anchor++
+	}
+	return plan, ok
+}

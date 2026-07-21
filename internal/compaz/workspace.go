@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 
 	"github.com/Tannex/cq/internal/decode"
 	"github.com/Tannex/cq/internal/zosmf"
@@ -35,17 +36,41 @@ type workspace struct {
 	// refresh, back-navigation) cannot trigger a stale open.
 	autoOpen           string
 	autoOpenGeneration uint64
-	dataSet      zosmf.DataSet
-	members      []zosmf.Member
-	memberPage   pager[string]
-	memberTotal  *int
-	member       *zosmf.Member
+	dataSet            zosmf.DataSet
+	members            []zosmf.Member
+	memberPage         pager[string]
+	memberTotal        *int
+	member             *zosmf.Member
 
 	// recalls tracks data sets with an HRECALL in flight, keyed by upper-case
 	// name, so the list can mark them and catalog polling knows when to stop.
 	// The value holds the most recent catalog-check error, surfaced if the
 	// watch gives up.
 	recalls map[string]string
+
+	// jobOwner defaults once from the session user at session load (mirrors
+	// the "<Zowe user>.*" data set default precedent) but, like jobPrefix,
+	// is editable via a dedicated search-line input.
+	jobOwner  string
+	jobPrefix string
+	jobs      []zosmf.Job
+	jobPage   pager[string]
+	job       zosmf.Job
+
+	// spoolFile may point at the synthetic JCL entry (ID < 0) that compaz
+	// prepends client-side, since z/OSMF's spool file list never includes
+	// the submitted JCL itself.
+	spoolFiles    []zosmf.SpoolFile
+	spoolFilePage pager[string]
+	spoolFile     *zosmf.SpoolFile
+
+	// spoolContent is keyed by line number (like records are keyed by
+	// record number), not by line text, since spool lines are not unique.
+	spoolContent []spoolLine
+	// spoolLongest mirrors rawLongest for the spool content viewer's
+	// horizontal pan.
+	spoolLongest     int
+	spoolContentPage pager[int64]
 
 	// bulkRecordsPath caches a whole-data-set record download (jq bulk
 	// search) keyed by bulkRecordsIdentity, so closing and reopening the
@@ -183,6 +208,12 @@ func (ws *workspace) acceptBrowse(meta requestMeta, budget int, screen Screen) b
 		return meta.Identity == ws.memberIdentity()
 	case ScreenRecords:
 		return meta.Identity == ws.recordIdentity()
+	case ScreenJobs:
+		return meta.Identity == ws.jobIdentity()
+	case ScreenSpoolFiles:
+		return meta.Identity == ws.spoolFileListIdentity()
+	case ScreenSpoolContent:
+		return meta.Identity == ws.spoolContentIdentity()
 	default:
 		return false
 	}
@@ -212,6 +243,40 @@ func (ws *workspace) recordIdentity() string {
 	return fmt.Sprintf("%s(%s)", ws.dataSet.Name, member)
 }
 
+func (ws *workspace) jobIdentity() string {
+	return ws.jobOwner + "|" + ws.jobPrefix
+}
+
+func (ws *workspace) spoolFileListIdentity() string {
+	return ws.job.JobName + "|" + ws.job.JobID
+}
+
+func (ws *workspace) spoolContentIdentity() string {
+	file := ""
+	if ws.spoolFile != nil {
+		file = spoolFileKey(*ws.spoolFile)
+	}
+	return fmt.Sprintf("%s|%s|%s", ws.job.JobName, ws.job.JobID, file)
+}
+
+// isSyntheticJCLFile reports whether file is the submitted-JCL entry compaz
+// prepends client-side (negative ID), as opposed to a real spool file z/OSMF
+// returned. This is the one place that convention is defined; every other
+// site should call this instead of re-checking file.ID's sign directly.
+func isSyntheticJCLFile(file zosmf.SpoolFile) bool {
+	return file.ID < 0
+}
+
+// spoolFileKey is the pager/identity key for a spool file: its numeric id,
+// or "JCL" for the synthetic entry, which also doubles as the FileID z/OSMF
+// expects for that pseudo spool file.
+func spoolFileKey(file zosmf.SpoolFile) string {
+	if isSyntheticJCLFile(file) {
+		return "JCL"
+	}
+	return strconv.Itoa(file.ID)
+}
+
 // matchName is the name persisted DSN → copybook mappings are matched
 // against: DSN(MEMBER) for members and the plain DSN otherwise.
 func (ws *workspace) matchName() string {
@@ -237,6 +302,27 @@ func (ws *workspace) resetMemberState() {
 	ws.memberPage.reset(ws.memberPage.visible, ws.memberPage.budget)
 	ws.member = nil
 	ws.resetRecordState()
+}
+
+func (ws *workspace) resetSpoolContentState() {
+	ws.spoolContent = nil
+	ws.spoolLongest = 0
+	ws.spoolContentPage.reset(ws.spoolContentPage.visible, ws.spoolContentPage.budget)
+	ws.horizontal = 0
+}
+
+func (ws *workspace) resetSpoolFilesState() {
+	ws.spoolFiles = nil
+	ws.spoolFilePage.reset(ws.spoolFilePage.visible, ws.spoolFilePage.budget)
+	ws.spoolFile = nil
+	ws.resetSpoolContentState()
+}
+
+func (ws *workspace) resetJobsState() {
+	ws.jobs = nil
+	ws.jobPage.reset(ws.jobPage.visible, ws.jobPage.budget)
+	ws.job = zosmf.Job{}
+	ws.resetSpoolFilesState()
 }
 
 func (ws *workspace) cancelSession() {
@@ -283,6 +369,9 @@ func (ws *workspace) resizePagers(visible, budget int) {
 	ws.datasetPage.resize(visible, budget)
 	ws.memberPage.resize(visible, budget)
 	ws.recordPage.resize(visible, budget)
+	ws.jobPage.resize(visible, budget)
+	ws.spoolFilePage.resize(visible, budget)
+	ws.spoolContentPage.resize(visible, budget)
 }
 
 func (ws *workspace) activePager() pagerNavigator {
@@ -293,6 +382,12 @@ func (ws *workspace) activePager() pagerNavigator {
 		return &ws.memberPage
 	case ScreenRecords:
 		return &ws.recordPage
+	case ScreenJobs:
+		return &ws.jobPage
+	case ScreenSpoolFiles:
+		return &ws.spoolFilePage
+	case ScreenSpoolContent:
+		return &ws.spoolContentPage
 	default:
 		return nil
 	}

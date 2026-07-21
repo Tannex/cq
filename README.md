@@ -106,6 +106,12 @@ data set or PDS member for editing; nothing writes to the host until
 (`Ctrl-R` reloads). `--read-only` removes the editor and its write path
 entirely — browsing itself never writes.
 
+`J` from the data set screen opens the jobs view: list, drill into a job's
+spool files, and read spool/JCL content — read-only, same session. z/OSMF's
+jobs API has no pagination cursor, so the job and spool file lists are
+single bounded snapshots rather than incrementally fetched like data sets.
+Not yet supported: submit, cancel, purge, hold, release.
+
 ## Zowe setup
 
 Both binaries connect to z/OSMF directly (no Node/npm) using your existing
