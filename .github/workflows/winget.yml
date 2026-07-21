@@ -1,0 +1,83 @@
+name: Publish release to WinGet
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release tag, with leading v (e.g. v0.2.0)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: winget-${{ github.event.release.tag_name || inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Update ${{ matrix.package_id }}
+    runs-on: windows-latest
+    environment: winget
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - package_id: Tannex.cq
+            asset_prefix: cq
+          - package_id: Tannex.compaz
+            asset_prefix: compaz
+
+    steps:
+      - name: Resolve version and installer URLs
+        id: release
+        shell: pwsh
+        env:
+          TAG: ${{ github.event.release.tag_name || inputs.version }}
+          PREFIX: ${{ matrix.asset_prefix }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:TAG -notmatch '^v\d') { throw "Unexpected tag: $env:TAG" }
+          $version = $env:TAG -replace '^v', ''
+          # Skip pre-releases; winget only takes stable versions here.
+          if ($version -match '-') {
+            "skip=true" >> $env:GITHUB_OUTPUT
+            Write-Host "Pre-release $version - skipping WinGet publish."
+            exit 0
+          }
+          $base = "https://github.com/${{ github.repository }}/releases/download/$env:TAG"
+          "skip=false" >> $env:GITHUB_OUTPUT
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "url_x64=$base/${env:PREFIX}_${env:TAG}_windows_amd64.zip" >> $env:GITHUB_OUTPUT
+          "url_arm64=$base/${env:PREFIX}_${env:TAG}_windows_arm64.zip" >> $env:GITHUB_OUTPUT
+
+      - name: Validate configuration
+        if: steps.release.outputs.skip != 'true'
+        shell: pwsh
+        env:
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: |
+          if (-not $env:WINGET_TOKEN) {
+            throw 'Environment secret WINGET_TOKEN is not configured.'
+          }
+
+      - name: Download WingetCreate
+        if: steps.release.outputs.skip != 'true'
+        shell: pwsh
+        run: Invoke-WebRequest https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
+
+      - name: Update and submit WinGet manifest
+        if: steps.release.outputs.skip != 'true'
+        shell: pwsh
+        env:
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: |
+          ./wingetcreate.exe update ${{ matrix.package_id }} `
+            --version ${{ steps.release.outputs.version }} `
+            --urls "${{ steps.release.outputs.url_x64 }}|x64" "${{ steps.release.outputs.url_arm64 }}|arm64" `
+            --token $env:WINGET_TOKEN `
+            --submit

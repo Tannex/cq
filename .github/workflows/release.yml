@@ -73,8 +73,10 @@ jobs:
 
             if [[ "$goos" == "windows" ]]; then
               (
-                cd "$RUNNER_TEMP"
-                zip -X -qr "$GITHUB_WORKSPACE/dist/$asset.zip" "$asset"
+                # Flat zip (binary at archive root) so the WinGet
+                # NestedInstallerFiles path is stable across versions.
+                cd "$package_dir"
+                zip -X -qr "$GITHUB_WORKSPACE/dist/$asset.zip" .
               )
             else
               tar -C "$RUNNER_TEMP" -czf "dist/$asset.tar.gz" "$asset"
@@ -101,8 +103,10 @@ jobs:
 
             if [[ "$goos" == "windows" ]]; then
               (
-                cd "$RUNNER_TEMP"
-                zip -X -qr "$GITHUB_WORKSPACE/dist/$asset.zip" "$asset"
+                # Flat zip (binary at archive root) so the WinGet
+                # NestedInstallerFiles path is stable across versions.
+                cd "$package_dir"
+                zip -X -qr "$GITHUB_WORKSPACE/dist/$asset.zip" .
               )
             else
               tar -C "$RUNNER_TEMP" -czf "dist/$asset.tar.gz" "$asset"
