@@ -82,6 +82,8 @@ const (
 	actionNextProfile
 	actionPreviousProfile
 	actionJobs
+	actionNextView
+	actionPreviousView
 )
 
 type keyContext struct {
@@ -94,6 +96,7 @@ type keyContext struct {
 	DialogFormFocused bool
 	ShowHelp          bool
 	Tabs              bool
+	JobsAvailable     bool
 	FavoritesOpen     bool
 	FavoritesInput    bool
 	EditorOpen        bool
@@ -149,6 +152,8 @@ type KeyMap struct {
 	DiscardEdit     key.Binding
 	NextProfile     key.Binding
 	PreviousProfile key.Binding
+	NextView        key.Binding
+	PreviousView    key.Binding
 }
 
 func DefaultKeyMap() KeyMap {
@@ -202,6 +207,8 @@ func DefaultKeyMap() KeyMap {
 		DiscardEdit:     key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "discard changes")),
 		NextProfile:     key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next profile")),
 		PreviousProfile: key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("shift+tab", "previous profile")),
+		NextView:        key.NewBinding(key.WithKeys("]"), key.WithHelp("]", "jobs tab")),
+		PreviousView:    key.NewBinding(key.WithKeys("["), key.WithHelp("[", "data sets tab")),
 	}
 }
 
@@ -422,6 +429,10 @@ func (k KeyMap) actionFor(msg tea.KeyPressMsg, ctx keyContext) action {
 		return actionNextProfile
 	case ctx.Tabs && key.Matches(msg, k.PreviousProfile):
 		return actionPreviousProfile
+	case ctx.JobsAvailable && key.Matches(msg, k.NextView):
+		return actionNextView
+	case ctx.JobsAvailable && key.Matches(msg, k.PreviousView):
+		return actionPreviousView
 	default:
 		return actionNone
 	}
@@ -482,6 +493,9 @@ func (k KeyMap) shortHelp(ctx keyContext, overlay bool) []key.Binding {
 	case ScreenSpoolContent:
 		bindings = append(bindings, k.Locate, k.WideLeft, k.WideRight)
 	}
+	if ctx.JobsAvailable {
+		bindings = append(bindings, k.PreviousView, k.NextView)
+	}
 	if ctx.Tabs {
 		bindings = append(bindings, k.NextProfile, k.PreviousProfile)
 	}
@@ -520,6 +534,9 @@ func (k KeyMap) fullHelp(ctx keyContext, overlay bool) []helpGroup {
 		actions = append(actions, k.Locate, k.WideLeft, k.WideRight)
 	}
 	general := []key.Binding{k.Help, k.Quit}
+	if ctx.JobsAvailable {
+		general = append(general, k.PreviousView, k.NextView)
+	}
 	if ctx.Tabs {
 		general = append(general, k.NextProfile, k.PreviousProfile)
 	}

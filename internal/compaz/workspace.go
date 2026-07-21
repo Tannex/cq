@@ -325,6 +325,37 @@ func (ws *workspace) resetJobsState() {
 	ws.resetSpoolFilesState()
 }
 
+// topLevelView reports which of the two tab-switchable top-level screens the
+// current screen belongs to, regardless of drill-down depth.
+func (ws *workspace) topLevelView() Screen {
+	switch ws.screen {
+	case ScreenJobs, ScreenSpoolFiles, ScreenSpoolContent:
+		return ScreenJobs
+	default:
+		return ScreenDataSets
+	}
+}
+
+// leaveDataSetsFamily sheds Members/Records drill-down state, leaving only
+// the data set list (which persists across visits, like every top-level
+// screen's cache) — identical to the state reached by backing out via Esc
+// one screen at a time, just done in one step.
+func (ws *workspace) leaveDataSetsFamily() {
+	if ws.screen == ScreenRecords || ws.screen == ScreenMembers {
+		ws.resetMemberState()
+		ws.dataSet = zosmf.DataSet{}
+	}
+}
+
+// leaveJobsFamily is leaveDataSetsFamily's counterpart for the jobs chain:
+// sheds SpoolFiles/SpoolContent drill-down state, leaving only the job list.
+func (ws *workspace) leaveJobsFamily() {
+	if ws.screen == ScreenSpoolFiles || ws.screen == ScreenSpoolContent {
+		ws.resetSpoolFilesState()
+		ws.job = zosmf.Job{}
+	}
+}
+
 func (ws *workspace) cancelSession() {
 	if ws.sessionCancel != nil {
 		ws.sessionCancel()
