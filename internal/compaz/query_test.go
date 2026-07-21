@@ -543,13 +543,6 @@ func TestQueryPlaceholderBuiltFromOverlayFields(t *testing.T) {
 	}
 }
 
-// TestQueryInputWidthFitsInsideThePopupBox is a regression test for a
-// reported bug: on a long expression, the cursor (and the last character or
-// two) could visually disappear off the right edge. The root cause was that
-// the input's configured width didn't leave room for its own prompt or for
-// bubbles' textinput reserving one extra cell for a mid-text cursor, so the
-// rendered input could be wider than overlayQuery's popup box; the outer
-// truncateStyled then hard-clipped that overflow, cutting off the cursor.
 func TestQueryInputWidthFitsInsideThePopupBox(t *testing.T) {
 	long := strings.Repeat("a", 200)
 	for _, width := range []int{52, 60, 76, 90, 120, 200} {
@@ -567,12 +560,6 @@ func TestQueryInputWidthFitsInsideThePopupBox(t *testing.T) {
 	}
 }
 
-// TestQueryInputWindowRecomputesOnResize is a regression test for a related
-// bug: SetWidth alone doesn't recompute the input's horizontal-scroll
-// window, so resizing the terminal while a long expression is already
-// displayed left a window sized for the old (wider) width in place until
-// the next keystroke — overflowing the new, narrower popup box exactly like
-// the original bug, but triggered by a resize instead of by typing.
 func TestQueryInputWindowRecomputesOnResize(t *testing.T) {
 	model, _ := queryModel(t, singleRecordPage(zosmf.Record{Number: 1, Data: []byte("ABC")}))
 	applyMessage(t, model, tea.WindowSizeMsg{Width: 200, Height: 24})

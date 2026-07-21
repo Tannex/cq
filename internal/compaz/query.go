@@ -118,23 +118,11 @@ func newQueryPopup(width int) *queryPopup {
 	return popup
 }
 
-// setWidth sizes the expression input to fit inside overlayQuery's popup box
-// exactly (mirroring its popupWidth/innerWidth math), leaving room for the
-// input's own prompt plus the one extra cell bubbles' textinput reserves for
-// a mid-text cursor — without that margin, the rendered input can be one
-// cell wider than the box truncateStyled then clips it to, hiding the
-// cursor or the last character or two on longer expressions.
 func (p *queryPopup) setWidth(width int) {
 	popupWidth := min(76, width-4)
 	innerWidth := popupWidth - 4
 	fieldWidth := innerWidth - lipgloss.Width(p.input.Prompt) - 1
 	p.input.SetWidth(max(8, min(68, fieldWidth)))
-	// SetWidth alone doesn't recompute the input's horizontal-scroll window
-	// (that only happens on the next SetValue/SetCursor/keystroke), so a
-	// terminal resize while a long expression is already typed would
-	// otherwise leave a stale window sized for the old width until the next
-	// keystroke — SetCursor at the current position forces the recompute
-	// without moving the cursor.
 	p.input.SetCursor(p.input.Position())
 }
 
