@@ -12,6 +12,7 @@ import (
 
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/Tannex/cq/internal/zosmf"
@@ -539,6 +540,51 @@ func TestQueryPlaceholderBuiltFromOverlayFields(t *testing.T) {
 	// Without an overlay the static fallback remains.
 	if got := examplePlaceholder(nil); got != `select(.FIELD == "VALUE") | .FIELD` {
 		t.Fatalf("fallback placeholder = %q", got)
+	}
+}
+
+// TestQueryInputWidthFitsInsideThePopupBox is a regression test for a
+// reported bug: on a long expression, the cursor (and the last character or
+// two) could visually disappear off the right edge. The root cause was that
+// the input's configured width didn't leave room for its own prompt or for
+// bubbles' textinput reserving one extra cell for a mid-text cursor, so the
+// rendered input could be wider than overlayQuery's popup box; the outer
+// truncateStyled then hard-clipped that overflow, cutting off the cursor.
+func TestQueryInputWidthFitsInsideThePopupBox(t *testing.T) {
+	long := strings.Repeat("a", 200)
+	for _, width := range []int{52, 60, 76, 90, 120, 200} {
+		model, _ := queryModel(t, singleRecordPage(zosmf.Record{Number: 1, Data: []byte("ABC")}))
+		applyMessage(t, model, tea.WindowSizeMsg{Width: width, Height: 24})
+		openQuery(t, model)
+		model.query.input.SetValue(long)
+		model.query.input.CursorEnd()
+
+		popupWidth := min(76, width-4)
+		innerWidth := popupWidth - 4
+		if got := lipgloss.Width(model.query.input.View()); got > innerWidth {
+			t.Fatalf("width=%d: input view width = %d, exceeds popup inner width %d (would be clipped, hiding the cursor)", width, got, innerWidth)
+		}
+	}
+}
+
+// TestQueryInputWindowRecomputesOnResize is a regression test for a related
+// bug: SetWidth alone doesn't recompute the input's horizontal-scroll
+// window, so resizing the terminal while a long expression is already
+// displayed left a window sized for the old (wider) width in place until
+// the next keystroke — overflowing the new, narrower popup box exactly like
+// the original bug, but triggered by a resize instead of by typing.
+func TestQueryInputWindowRecomputesOnResize(t *testing.T) {
+	model, _ := queryModel(t, singleRecordPage(zosmf.Record{Number: 1, Data: []byte("ABC")}))
+	applyMessage(t, model, tea.WindowSizeMsg{Width: 200, Height: 24})
+	openQuery(t, model)
+	model.query.input.SetValue(strings.Repeat("a", 200))
+	model.query.input.CursorEnd()
+
+	applyMessage(t, model, tea.WindowSizeMsg{Width: 52, Height: 24})
+	popupWidth := min(76, 52-4)
+	innerWidth := popupWidth - 4
+	if got := lipgloss.Width(model.query.input.View()); got > innerWidth {
+		t.Fatalf("after shrinking to 52: input view width = %d, exceeds popup inner width %d (stale scroll window from the wider layout)", got, innerWidth)
 	}
 }
 
