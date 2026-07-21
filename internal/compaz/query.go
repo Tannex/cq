@@ -18,9 +18,14 @@ import (
 	"github.com/Tannex/cq/internal/zosmf"
 )
 
-// queryResultCap bounds retained result lines; the result count keeps
-// running so a capped query still reports how much it produced.
-const queryResultCap = 500
+// queryResultCap bounds retained result lines. The whole data set is already
+// decoded into memory before evaluation (uncapped), so this is a safety
+// valve against a runaway or mistyped expression (e.g. range(1e9)) rather
+// than a routine limit — any realistic query result set, and everything a
+// user would want to copy, stays well under it. The result count keeps
+// running past the cap so a capped query still reports how much it
+// produced. A var, not a const, so tests can lower it cheaply.
+var queryResultCap = 1_000_000
 
 // queryPopup is the composited jq console opened from the records screen: a
 // single-line expression input over a scrollable results pane. A query always

@@ -235,6 +235,12 @@ func TestQueryCancelStopsSearchAndIgnoresStaleResults(t *testing.T) {
 }
 
 func TestQueryResultCapStopsSearch(t *testing.T) {
+	// Lower the safety-valve cap for this test only; production runs with a
+	// much higher default so realistic result sets are never truncated.
+	original := queryResultCap
+	queryResultCap = 500
+	defer func() { queryResultCap = original }()
+
 	model, _ := queryModel(t, singleRecordPage(
 		zosmf.Record{Number: 1, Data: []byte("ABC")},
 		zosmf.Record{Number: 2, Data: []byte("XYZ")},
@@ -254,6 +260,34 @@ func TestQueryResultCapStopsSearch(t *testing.T) {
 	}
 	if footer := model.queryFooter(); !strings.Contains(footer, "first 500 shown") {
 		t.Fatalf("footer missing cap note: %q", footer)
+	}
+}
+
+// TestQueryCopyIncludesAllResultsPastThePreviousDefaultCap is a regression
+// test for a reported bug: copy silently stopped at the old hardcoded
+// 500-line default even for realistic result sets well within what the
+// whole-data-set decode already holds in memory uncapped.
+func TestQueryCopyIncludesAllResultsPastThePreviousDefaultCap(t *testing.T) {
+	model, _ := queryModel(t, singleRecordPage(
+		zosmf.Record{Number: 1, Data: []byte("ABC")},
+		zosmf.Record{Number: 2, Data: []byte("XYZ")},
+	))
+	openQuery(t, model)
+	runQueryExpr(t, model, "range(600) | tostring")
+
+	popup := model.query
+	if popup.matches != 600 || len(popup.lines) != 600 {
+		t.Fatalf("matches=%d retained=%d, want all 600 retained under the default cap", popup.matches, len(popup.lines))
+	}
+	if footer := model.queryFooter(); strings.Contains(footer, "shown") {
+		t.Fatalf("footer reported a cap that should not apply: %q", footer)
+	}
+
+	if cmd := applyMessage(t, model, tea.KeyPressMsg(tea.Key{Code: 'y', Mod: tea.ModCtrl})); cmd == nil {
+		t.Fatal("copy dispatched no clipboard command")
+	}
+	if !strings.Contains(popup.notice, "copied 600 lines") {
+		t.Fatalf("copy notice = %q, want all 600 lines copied", popup.notice)
 	}
 }
 
