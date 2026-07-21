@@ -440,8 +440,6 @@ func (m *Model) hasTabs() bool {
 	return len(m.profiles) > 1
 }
 
-// jobsAvailable reports whether the active session's browser supports the
-// jobs view, gating both the view-switch keys' help text and the tab strip.
 func (m *Model) jobsAvailable() bool {
 	_, ok := m.browser.(zosmf.JobBrowser)
 	return ok
@@ -1608,15 +1606,8 @@ func (m *Model) recordOpen(name string) {
 	}
 }
 
-// topLevelViews are the tab-switchable top-level screens, [ and ] cycle
-// between them like Tab/Shift+Tab cycle profile tabs: each one's list
-// persists across visits, so switching away and back never refetches.
 var topLevelViews = []Screen{ScreenDataSets, ScreenJobs}
 
-// switchView jumps directly to the other top-level tab from anywhere in
-// either drill-down chain, shedding the current chain's deeper state exactly
-// as backing out via Esc one screen at a time would (leaveDataSetsFamily/
-// leaveJobsFamily), but in one step instead of several.
 func (m *Model) switchView(delta int) tea.Cmd {
 	ws := m.ws()
 	current := ws.topLevelView()

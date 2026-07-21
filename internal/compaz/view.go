@@ -139,12 +139,6 @@ func (m *Model) chromeRule() string {
 	return consolePalette.muted.Render(strings.Repeat("─", max(0, m.width)))
 }
 
-// viewStrip renders the DATASETS/JOBS tab indicator for the title line's left
-// edge, mirroring profileStrip's active/dimmed styling: the tab you're in
-// (at any drill-down depth — this always shows the top-level pair, never the
-// specific sub-screen) is highlighted, the other dimmed. [ and ] switch
-// between them from anywhere. Empty when the session has no job browsing
-// capability, matching how profileStrip is empty in single-profile mode.
 func (m *Model) viewStrip() string {
 	if !m.jobsAvailable() {
 		return ""

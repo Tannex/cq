@@ -653,8 +653,6 @@ func TestSwitchViewJumpsBetweenDataSetsAndJobsWithoutRefetching(t *testing.T) {
 	}
 	dataSetRequests := len(browser.dataSetRequests)
 
-	// Switching back to a tab already visited must reuse its cache, not
-	// refetch — the whole point of tabs mirroring profile switching.
 	executeCommand(t, model, model.handleAction(actionNextView))
 	if model.screen != ScreenJobs || len(browser.jobRequests) != jobRequests {
 		t.Fatalf("returning to jobs refetched: before=%d after=%d", jobRequests, len(browser.jobRequests))
@@ -746,8 +744,6 @@ func TestSwitchViewShedsDataSetsDrillDownButKeepsDataSetsList(t *testing.T) {
 	}
 }
 
-// jobIncapableBrowser implements zosmf.Browser only, not zosmf.JobBrowser,
-// for testing how the view switch degrades on a session without job support.
 type jobIncapableBrowser struct{}
 
 func (jobIncapableBrowser) ListDataSets(context.Context, zosmf.ListDataSetsRequest) (zosmf.DataSetPage, error) {
