@@ -1,0 +1,9 @@
+# Store LF in the repo; let Git normalize on checkin.
+* text=auto
+
+# Shell scripts must stay LF to run on Linux/macOS/CI.
+*.sh text eol=lf
+scripts/tui-shot text eol=lf
+
+# PowerShell is happiest with CRLF on checkout.
+*.ps1 text eol=crlf

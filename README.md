@@ -21,7 +21,14 @@ $ compaz --prefix 'PROD.CUSTOMER.*' -c CUSTOMER.cpy
 
 ## Install
 
-Download the archive for your platform from the
+On Windows, install from winget:
+
+```console
+$ winget install Tannex.cq
+$ winget install Tannex.compaz
+```
+
+Or download the archive for your platform from the
 [latest release](https://github.com/Tannex/cq/releases/latest) — `cq_VERSION_OS_ARCH`
 for the CLI, `compaz_VERSION_OS_ARCH` for the browser (Linux/macOS/Windows,
 amd64/arm64). Extract and put the binary on your `PATH`.
