@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: release-${{ github.ref }}
@@ -147,3 +148,14 @@ jobs:
             --generate-notes \
             "${release_args[@]}" \
             dist/*
+
+      # Releases published with GITHUB_TOKEN do not emit a `release` event
+      # (recursion suppression), so dispatch the WinGet workflow directly.
+      - name: Trigger WinGet publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh workflow run winget.yml \
+            --ref "$GITHUB_REF_NAME" \
+            -f "version=$GITHUB_REF_NAME"
