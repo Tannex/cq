@@ -126,6 +126,11 @@ func drain(t *testing.T, model *compaz.Model, command tea.Cmd) {
 			queue = append(queue, batch...)
 			continue
 		}
+		// Follow mode reschedules its poll tick forever; a synchronous
+		// drain must stop at the first idle tick.
+		if compaz.IsSpoolFollowTick(message) {
+			continue
+		}
 		_, cmd := model.Update(message)
 		if cmd != nil {
 			queue = append(queue, cmd)

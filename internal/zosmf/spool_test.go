@@ -130,6 +130,31 @@ func TestSpoolFollowerPollsIncrementally(t *testing.T) {
 	}
 }
 
+func TestSpoolFollowerSetPositionSkipsHeldLines(t *testing.T) {
+	content := []string{"one", "two", "three", "four"}
+	browser := &followerBrowser{}
+	browser.read = func(request ReadSpoolContentRequest) (SpoolContentPage, error) {
+		start := min(int(request.Start), len(content))
+		end := min(start+request.MaxItems, len(content))
+		return SpoolContentPage{Lines: content[start:end], Start: request.Start}, nil
+	}
+	follower := FollowSpool(browser, "TESTJOB1", "JOB00023", "5", 10)
+	follower.SetPosition(3)
+
+	lines, _, err := follower.Poll(context.Background())
+	if err != nil || fmt.Sprint(lines) != "[four]" {
+		t.Fatalf("poll after SetPosition = %v err=%v", lines, err)
+	}
+	if got := browser.requests[0].Start; got != 3 {
+		t.Fatalf("first request start = %d, want 3", got)
+	}
+
+	follower.SetPosition(-2)
+	if follower.Position() != 0 {
+		t.Fatalf("negative position not clamped: %d", follower.Position())
+	}
+}
+
 func TestSpoolFollowerDoesNotAdvanceOnError(t *testing.T) {
 	browser := &followerBrowser{}
 	fail := true

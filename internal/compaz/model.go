@@ -138,6 +138,8 @@ type Dependencies struct {
 	Events        EventRecorder
 	DSNSearchPath []string
 	Timeout       time.Duration
+	// FollowInterval paces the spool follow mode's idle polls.
+	FollowInterval time.Duration
 }
 
 type statusLevel string
@@ -339,6 +341,9 @@ func NewModel(options Options, deps Dependencies) (*Model, error) {
 	if deps.Timeout <= 0 {
 		deps.Timeout = defaultRequestTimeout
 	}
+	if deps.FollowInterval <= 0 {
+		deps.FollowInterval = defaultFollowInterval
+	}
 	if deps.LoadFile == nil {
 		deps.LoadFile = func(ctx context.Context, path string) ([]byte, error) {
 			if err := ctx.Err(); err != nil {
@@ -386,7 +391,7 @@ func NewModel(options Options, deps Dependencies) (*Model, error) {
 	styleInput(&jobFilterInput, consolePalette.panel)
 	spoolCmdInput := textinput.New()
 	spoolCmdInput.Prompt = ":  "
-	spoolCmdInput.Placeholder = "incl <pattern> | f <pattern>"
+	spoolCmdInput.Placeholder = "incl <pattern> | f <pattern> | follow"
 	spoolCmdInput.CharLimit = 80
 	spoolCmdInput.SetWidth(48)
 	styleInput(&spoolCmdInput, consolePalette.panel)
@@ -631,6 +636,14 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case spoolBulkResultMsg:
 		if ws := m.targetWorkspace(msg.Profile); ws != nil {
 			return m, m.handleSpoolBulkResult(ws, msg)
+		}
+	case spoolFollowTickMsg:
+		if ws := m.targetWorkspace(msg.Profile); ws != nil {
+			return m, m.handleSpoolFollowTick(ws, msg)
+		}
+	case spoolFollowResultMsg:
+		if ws := m.targetWorkspace(msg.Profile); ws != nil {
+			return m, m.handleSpoolFollowResult(ws, msg)
 		}
 	case overlayResultMsg:
 		if ws := m.targetWorkspace(msg.Profile); ws != nil {
@@ -1019,16 +1032,25 @@ func (m *Model) handleAction(selected action) tea.Cmd {
 			return m.jobFilterInput.Focus()
 		}
 	case actionUp:
+		if cmd, handled := m.spoolFollowInterrupt(); handled {
+			return cmd
+		}
 		if cmd, handled := m.spoolFilteredMove(-1); handled {
 			return cmd
 		}
 		return m.moveSelection(-1)
 	case actionDown:
+		if cmd, handled := m.spoolFollowInterrupt(); handled {
+			return cmd
+		}
 		if cmd, handled := m.spoolFilteredMove(1); handled {
 			return cmd
 		}
 		return m.moveSelection(1)
 	case actionPageUp:
+		if cmd, handled := m.spoolFollowInterrupt(); handled {
+			return cmd
+		}
 		if cmd, handled := m.spoolFilteredMove(-max(1, m.visible)); handled {
 			return cmd
 		}
@@ -1037,6 +1059,9 @@ func (m *Model) handleAction(selected action) tea.Cmd {
 		}
 		return m.pageSelection(scrollUp)
 	case actionPageDown:
+		if cmd, handled := m.spoolFollowInterrupt(); handled {
+			return cmd
+		}
 		if cmd, handled := m.spoolFilteredMove(max(1, m.visible)); handled {
 			return cmd
 		}
@@ -1045,12 +1070,18 @@ func (m *Model) handleAction(selected action) tea.Cmd {
 		}
 		return m.pageSelection(scrollDown)
 	case actionTop:
+		if cmd, handled := m.spoolFollowInterrupt(); handled {
+			return cmd
+		}
 		if cmd, handled := m.spoolFilteredMove(-len(m.spoolFilterHits)); handled {
 			return cmd
 		}
 		m.activePagerTop()
 		return nil
 	case actionBottom:
+		if cmd, handled := m.spoolFollowInterrupt(); handled {
+			return cmd
+		}
 		if cmd, handled := m.spoolFilteredMove(len(m.spoolFilterHits)); handled {
 			return cmd
 		}
@@ -1525,8 +1556,13 @@ func (m *Model) acceptSpoolCommand() tea.Cmd {
 			return nil
 		}
 		return m.runSpoolCommand(ws, "f "+argument)
+	case "follow":
+		if ws.spoolFollow {
+			return m.stopSpoolFollowNavigation(ws)
+		}
+		return m.runSpoolCommand(ws, "follow")
 	default:
-		ws.status = status{Level: statusError, Text: "unknown command (incl <pattern> | f <pattern>)"}
+		ws.status = status{Level: statusError, Text: "unknown command (incl <pattern> | f <pattern> | follow)"}
 		return nil
 	}
 }
@@ -1551,9 +1587,11 @@ func (m *Model) acceptSpoolLocation() tea.Cmd {
 		return nil
 	}
 	m.locateInput.Blur()
-	// Locate navigates the whole file; a filtered view would hide the jump,
-	// so clear the include filter (keeping the bulk cache) first.
+	// Locate navigates the whole file; a filtered or tail-pinned view would
+	// hide the jump, so clear the include filter and stop follow mode
+	// (keeping the bulk cache) first.
 	ws.setSpoolInclude("")
+	ws.stopSpoolFollow()
 	if ws.spoolContentPage.selectKey(strconv.FormatInt(number, 10)) {
 		ws.status = status{Level: statusReady, Text: fmt.Sprintf("located line %d", number)}
 		return m.maybePrefetch(ws)

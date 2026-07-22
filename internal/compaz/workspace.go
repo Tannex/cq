@@ -85,9 +85,16 @@ type workspace struct {
 	spoolBulkScanned    int
 	spoolBulkGeneration uint64
 	spoolBulkCancel     context.CancelFunc
-	spoolPendingCommand string // incl/f command deferred until the download lands
+	spoolPendingCommand string // incl/f/follow command deferred until the download lands
 	spoolFilterHits     []int  // spoolBulk indexes matching spoolInclude
 	spoolFilterCursor   int    // selected position within spoolFilterHits
+	// spoolFollow tails the file (the follow command): the follower polls for
+	// lines appended past the bulk cache, which they are folded into.
+	// spoolBulkBytes tracks the cache size so appends respect the 32 MB cap.
+	spoolFollow       bool
+	spoolFollower     *zosmf.SpoolFollower
+	spoolFollowCancel context.CancelFunc
+	spoolBulkBytes    int
 	// spoolLongest mirrors rawLongest for the spool content viewer's
 	// horizontal pan.
 	spoolLongest     int
@@ -349,17 +356,32 @@ func (ws *workspace) cancelSpoolBulk() {
 	ws.spoolBulkGeneration++
 }
 
-// dropSpoolBulk cancels any in-flight download and forgets the cache.
+// dropSpoolBulk cancels any in-flight download and forgets the cache,
+// stopping follow mode with it.
 func (ws *workspace) dropSpoolBulk() {
 	ws.cancelSpoolBulk()
+	ws.stopSpoolFollow()
 	ws.spoolBulk = nil
 	ws.spoolBulkUpper = nil
 	ws.spoolBulkIdentity = ""
 	ws.spoolBulkTruncated = false
 	ws.spoolBulkScanned = 0
+	ws.spoolBulkBytes = 0
 	ws.spoolPendingCommand = ""
 	ws.spoolFilterHits = nil
 	ws.spoolFilterCursor = 0
+}
+
+// stopSpoolFollow ends follow mode, cancelling the in-flight poll if any.
+// Stale poll results are dropped by the bulk generation check, so no new
+// polls can be scheduled from what is already in flight.
+func (ws *workspace) stopSpoolFollow() {
+	if ws.spoolFollowCancel != nil {
+		ws.spoolFollowCancel()
+		ws.spoolFollowCancel = nil
+	}
+	ws.spoolFollow = false
+	ws.spoolFollower = nil
 }
 
 func (ws *workspace) spoolBulkReady() bool {
@@ -467,6 +489,7 @@ func (ws *workspace) cancelAll() {
 	ws.cancelOverlay()
 	ws.cancelDecode()
 	ws.cancelSpoolBulk()
+	ws.stopSpoolFollow()
 }
 
 func (ws *workspace) resizePagers(visible, budget int) {

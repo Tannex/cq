@@ -102,3 +102,10 @@ func (f *SpoolFollower) Poll(ctx context.Context) (lines []string, more bool, er
 func (f *SpoolFollower) Position() int64 {
 	return f.next
 }
+
+// SetPosition moves the next Poll to start at the given zero-based line
+// number, for callers that already hold the earlier content (e.g. a
+// whole-file cache).
+func (f *SpoolFollower) SetPosition(position int64) {
+	f.next = max(0, position)
+}
