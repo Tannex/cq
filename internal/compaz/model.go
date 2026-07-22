@@ -295,6 +295,7 @@ type Model struct {
 	locateInput    textinput.Model
 	jobOwnerInput  textinput.Model
 	jobFilterInput textinput.Model
+	spoolCmdInput  textinput.Model
 	mappingView    *mappingView
 	favPopup       *favoritesPopup
 	editor         *editorState
@@ -392,6 +393,14 @@ func NewModel(options Options, deps Dependencies) (*Model, error) {
 	jobFilterStyles := jobFilterInput.Styles()
 	jobFilterStyles.Cursor.Blink = false
 	jobFilterInput.SetStyles(jobFilterStyles)
+	spoolCmdInput := textinput.New()
+	spoolCmdInput.Prompt = ":  "
+	spoolCmdInput.Placeholder = "incl <pattern> | f <pattern>"
+	spoolCmdInput.CharLimit = 80
+	spoolCmdInput.SetWidth(48)
+	spoolCmdStyles := spoolCmdInput.Styles()
+	spoolCmdStyles.Cursor.Blink = false
+	spoolCmdInput.SetStyles(spoolCmdStyles)
 
 	ws := newWorkspace("")
 	m := &Model{
@@ -406,6 +415,7 @@ func NewModel(options Options, deps Dependencies) (*Model, error) {
 		locateInput:    locateInput,
 		jobOwnerInput:  jobOwnerInput,
 		jobFilterInput: jobFilterInput,
+		spoolCmdInput:  spoolCmdInput,
 		profiles:       []string{""},
 	}
 	m.workspaces = []*workspace{&m.workspace}
@@ -598,6 +608,10 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case spoolContentResultMsg:
 		if ws := m.targetWorkspace(msg.Meta.Profile); ws != nil {
 			return m, m.handleSpoolContentResult(ws, msg)
+		}
+	case spoolBulkResultMsg:
+		if ws := m.targetWorkspace(msg.Profile); ws != nil {
+			return m, m.handleSpoolBulkResult(ws, msg)
 		}
 	case overlayResultMsg:
 		if ws := m.targetWorkspace(msg.Profile); ws != nil {
@@ -985,23 +999,41 @@ func (m *Model) handleAction(selected action) tea.Cmd {
 			return m.jobFilterInput.Focus()
 		}
 	case actionUp:
+		if cmd, handled := m.spoolFilteredMove(-1); handled {
+			return cmd
+		}
 		return m.moveSelection(-1)
 	case actionDown:
+		if cmd, handled := m.spoolFilteredMove(1); handled {
+			return cmd
+		}
 		return m.moveSelection(1)
 	case actionPageUp:
+		if cmd, handled := m.spoolFilteredMove(-max(1, m.visible)); handled {
+			return cmd
+		}
 		if m.scrollJSON(-max(1, m.visible)) {
 			return nil
 		}
 		return m.pageSelection(scrollUp)
 	case actionPageDown:
+		if cmd, handled := m.spoolFilteredMove(max(1, m.visible)); handled {
+			return cmd
+		}
 		if m.scrollJSON(max(1, m.visible)) {
 			return nil
 		}
 		return m.pageSelection(scrollDown)
 	case actionTop:
+		if cmd, handled := m.spoolFilteredMove(-len(m.spoolFilterHits)); handled {
+			return cmd
+		}
 		m.activePagerTop()
 		return nil
 	case actionBottom:
+		if cmd, handled := m.spoolFilteredMove(len(m.spoolFilterHits)); handled {
+			return cmd
+		}
 		return m.activePagerBottom()
 	case actionOpen:
 		return m.openSelection()
@@ -1027,6 +1059,11 @@ func (m *Model) handleAction(selected action) tea.Cmd {
 		return m.beginEdit()
 	case actionQuery:
 		return m.openQueryPopup()
+	case actionSpoolCommand:
+		m.spoolCmdInput.SetValue("")
+		return m.spoolCmdInput.Focus()
+	case actionFindNext:
+		return m.spoolFindNext()
 	case actionCopybook:
 		m.openMappingView(ws)
 		return nil
@@ -1329,7 +1366,7 @@ func mappingSource(mapping dsnmap.Mapping) CopybookSource {
 }
 
 func (m *Model) focusedInput() *textinput.Model {
-	for _, input := range []*textinput.Model{&m.prefixInput, &m.memberInput, &m.locateInput, &m.jobOwnerInput, &m.jobFilterInput} {
+	for _, input := range []*textinput.Model{&m.prefixInput, &m.memberInput, &m.locateInput, &m.jobOwnerInput, &m.jobFilterInput, &m.spoolCmdInput} {
 		if input.Focused() {
 			return input
 		}
@@ -1343,6 +1380,9 @@ func (m *Model) inputFocused() bool {
 
 func (m *Model) acceptSearch() tea.Cmd {
 	ws := m.ws()
+	if ws.screen == ScreenSpoolContent && m.spoolCmdInput.Focused() {
+		return m.acceptSpoolCommand()
+	}
 	if ws.screen == ScreenSpoolContent && m.locateInput.Focused() {
 		return m.acceptSpoolLocation()
 	}
@@ -1428,6 +1468,58 @@ func (m *Model) acceptRecordLocation() tea.Cmd {
 	return m.startRecords(ws, ws.recordPage.initialPlan(number))
 }
 
+// acceptSpoolCommand parses the spool viewer's command line: "incl <pattern>"
+// filters the view to matching lines (bare "incl" clears the filter) and
+// "f <pattern>" finds the next occurrence, repeatable with n. Both operate
+// case-insensitively over the whole-file bulk cache, downloading it first
+// when it is not ready yet.
+func (m *Model) acceptSpoolCommand() tea.Cmd {
+	ws := m.ws()
+	value := strings.TrimSpace(m.spoolCmdInput.Value())
+	m.spoolCmdInput.Blur()
+	command, argument, _ := strings.Cut(value, " ")
+	argument = strings.TrimSpace(argument)
+	switch command {
+	case "":
+		return nil
+	case "incl":
+		if argument == "" {
+			// Carry the user's place out of the filtered view: land the pager
+			// on the line the filter cursor was resting on.
+			target := int64(-1)
+			if ws.spoolBulkReady() && len(ws.spoolFilterHits) > 0 {
+				cursor := max(0, min(ws.spoolFilterCursor, len(ws.spoolFilterHits)-1))
+				target = int64(ws.spoolFilterHits[cursor])
+			}
+			ws.setSpoolInclude("")
+			ws.status = status{Level: statusReady, Text: "include filter cleared"}
+			if target >= 0 {
+				return m.spoolJumpTo(target)
+			}
+			return nil
+		}
+		return m.runSpoolCommand(ws, "incl "+argument)
+	case "f":
+		if argument == "" {
+			ws.status = status{Level: statusError, Text: "usage: f <pattern>"}
+			return nil
+		}
+		return m.runSpoolCommand(ws, "f "+argument)
+	default:
+		ws.status = status{Level: statusError, Text: "unknown command (incl <pattern> | f <pattern>)"}
+		return nil
+	}
+}
+
+// runSpoolCommand executes a parsed incl/f command against the bulk cache,
+// downloading the whole file first when the cache is not ready.
+func (m *Model) runSpoolCommand(ws *workspace, command string) tea.Cmd {
+	if ws.spoolBulkReady() {
+		return m.applySpoolCommand(ws, command)
+	}
+	return m.startSpoolBulk(ws, command)
+}
+
 // acceptSpoolLocation jumps the spool content viewer to a zero-based line
 // number, mirroring acceptRecordLocation.
 func (m *Model) acceptSpoolLocation() tea.Cmd {
@@ -1439,13 +1531,16 @@ func (m *Model) acceptSpoolLocation() tea.Cmd {
 		return nil
 	}
 	m.locateInput.Blur()
+	// Locate navigates the whole file; a filtered view would hide the jump,
+	// so clear the include filter (keeping the bulk cache) first.
+	ws.setSpoolInclude("")
 	if ws.spoolContentPage.selectKey(strconv.FormatInt(number, 10)) {
 		ws.status = status{Level: statusReady, Text: fmt.Sprintf("located line %d", number)}
 		return m.maybePrefetch(ws)
 	}
 
 	ws.cancelBrowse()
-	ws.resetSpoolContentState()
+	ws.resetSpoolWindow()
 	return m.startSpoolContent(ws, ws.spoolContentPage.initialPlan(number))
 }
 
@@ -1736,6 +1831,12 @@ func (m *Model) refresh() tea.Cmd {
 		ws.spoolContent = nil
 		ws.spoolLongest = 0
 		ws.spoolContentPage.reset(m.visible, m.budget)
+		// The file may have grown or been purged; the bulk cache is stale,
+		// and with it the filter/find state derived from it — otherwise the
+		// INCL badge would keep claiming a filter that is no longer applied.
+		ws.spoolInclude = ""
+		ws.spoolFind = ""
+		ws.dropSpoolBulk()
 		return m.startSpoolContent(ws, plan)
 	}
 	return nil
@@ -1922,6 +2023,7 @@ func (m *Model) handleResize(width, height int) tea.Cmd {
 	m.locateInput.SetWidth(max(8, min(24, width-10)))
 	m.jobOwnerInput.SetWidth(max(8, min(24, width-10)))
 	m.jobFilterInput.SetWidth(max(8, min(24, width-10)))
+	m.spoolCmdInput.SetWidth(max(8, min(48, width-10)))
 	if m.mappingView != nil {
 		m.mappingView.setWidth(width)
 	}

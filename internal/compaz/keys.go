@@ -82,6 +82,8 @@ const (
 	actionNextProfile
 	actionPreviousProfile
 	actionJobs
+	actionSpoolCommand
+	actionFindNext
 	actionNextView
 	actionPreviousView
 )
@@ -152,6 +154,8 @@ type KeyMap struct {
 	DiscardEdit     key.Binding
 	NextProfile     key.Binding
 	PreviousProfile key.Binding
+	SpoolCommand    key.Binding
+	FindNext        key.Binding
 	NextView        key.Binding
 	PreviousView    key.Binding
 }
@@ -207,6 +211,8 @@ func DefaultKeyMap() KeyMap {
 		DiscardEdit:     key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "discard changes")),
 		NextProfile:     key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next profile")),
 		PreviousProfile: key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("shift+tab", "previous profile")),
+		SpoolCommand:    key.NewBinding(key.WithKeys(":"), key.WithHelp(":", "command")),
+		FindNext:        key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "find next")),
 		NextView:        key.NewBinding(key.WithKeys("]"), key.WithHelp("]", "jobs tab")),
 		PreviousView:    key.NewBinding(key.WithKeys("["), key.WithHelp("[", "data sets tab")),
 	}
@@ -407,6 +413,10 @@ func (k KeyMap) actionFor(msg tea.KeyPressMsg, ctx keyContext) action {
 		return actionEdit
 	case key.Matches(msg, k.Query) && ctx.Screen == ScreenRecords:
 		return actionQuery
+	case key.Matches(msg, k.SpoolCommand) && ctx.Screen == ScreenSpoolContent:
+		return actionSpoolCommand
+	case key.Matches(msg, k.FindNext) && ctx.Screen == ScreenSpoolContent:
+		return actionFindNext
 	case key.Matches(msg, k.Copybook) && ctx.Screen == ScreenRecords:
 		return actionCopybook
 	case key.Matches(msg, k.ClearOverlay) && ctx.Screen == ScreenRecords:
@@ -491,7 +501,7 @@ func (k KeyMap) shortHelp(ctx keyContext, overlay bool) []key.Binding {
 	case ScreenJobs:
 		bindings = append(bindings, k.Search, k.ToggleFavorite, k.Favorites)
 	case ScreenSpoolContent:
-		bindings = append(bindings, k.Locate, k.WideLeft, k.WideRight)
+		bindings = append(bindings, k.Locate, k.SpoolCommand, k.FindNext, k.WideLeft, k.WideRight)
 	}
 	if ctx.JobsAvailable {
 		bindings = append(bindings, k.PreviousView, k.NextView)
@@ -531,7 +541,7 @@ func (k KeyMap) fullHelp(ctx keyContext, overlay bool) []helpGroup {
 	case ScreenJobs:
 		actions = append(actions, k.Search, k.ToggleFavorite, k.Favorites)
 	case ScreenSpoolContent:
-		actions = append(actions, k.Locate, k.WideLeft, k.WideRight)
+		actions = append(actions, k.Locate, k.SpoolCommand, k.FindNext, k.WideLeft, k.WideRight)
 	}
 	general := []key.Binding{k.Help, k.Quit}
 	if ctx.JobsAvailable {

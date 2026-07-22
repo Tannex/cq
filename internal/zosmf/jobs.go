@@ -297,34 +297,17 @@ func (z *Client) ReadSpoolContent(ctx context.Context, request ReadSpoolContentR
 	if request.Start < 0 {
 		return SpoolContentPage{}, &RequestError{Field: "start", Message: "must be zero or greater"}
 	}
-	name, err := normalizeJobFilterValue("job name", request.JobName)
+	path, resource, err := spoolContentPath(request.JobName, request.JobID, request.FileID)
 	if err != nil {
 		return SpoolContentPage{}, err
 	}
-	if name == "" {
-		return SpoolContentPage{}, &RequestError{Field: "job name", Message: "must not be empty"}
-	}
-	id, err := normalizeJobFilterValue("job ID", request.JobID)
-	if err != nil {
-		return SpoolContentPage{}, err
-	}
-	if id == "" {
-		return SpoolContentPage{}, &RequestError{Field: "job ID", Message: "must not be empty"}
-	}
-	fileID := strings.ToUpper(strings.TrimSpace(request.FileID))
-	if fileID == "" {
-		return SpoolContentPage{}, &RequestError{Field: "spool file id", Message: "must not be empty"}
-	}
-
-	path := "/zosmf/restjobs/jobs/" + url.PathEscape(name) + "/" + url.PathEscape(id) +
-		"/files/" + url.PathEscape(fileID) + "/records"
 	req, err := z.newAPIRequest(ctx, http.MethodGet, path, nil, nil)
 	if err != nil {
 		return SpoolContentPage{}, err
 	}
 	req.Header.Set("X-IBM-Record-Range", fmt.Sprintf("%d,%d", request.Start, maxItems))
 
-	res, err := z.doRequest(req, name+"/"+id+"/"+fileID, http.StatusOK)
+	res, err := z.doRequest(req, resource, http.StatusOK)
 	if err != nil {
 		return SpoolContentPage{}, err
 	}
@@ -352,6 +335,32 @@ func (z *Client) ReadSpoolContent(ctx context.Context, request ReadSpoolContentR
 		moreRows = true
 	}
 	return SpoolContentPage{Lines: lines, Start: request.Start, MoreRows: moreRows}, nil
+}
+
+// spoolContentPath validates one spool file's identifiers and builds its
+// records-endpoint path plus the resource label used in errors and logs.
+func spoolContentPath(jobName, jobID, fileID string) (path, resource string, err error) {
+	name, err := normalizeJobFilterValue("job name", jobName)
+	if err != nil {
+		return "", "", err
+	}
+	if name == "" {
+		return "", "", &RequestError{Field: "job name", Message: "must not be empty"}
+	}
+	id, err := normalizeJobFilterValue("job ID", jobID)
+	if err != nil {
+		return "", "", err
+	}
+	if id == "" {
+		return "", "", &RequestError{Field: "job ID", Message: "must not be empty"}
+	}
+	fid := strings.ToUpper(strings.TrimSpace(fileID))
+	if fid == "" {
+		return "", "", &RequestError{Field: "spool file id", Message: "must not be empty"}
+	}
+	path = "/zosmf/restjobs/jobs/" + url.PathEscape(name) + "/" + url.PathEscape(id) +
+		"/files/" + url.PathEscape(fid) + "/records"
+	return path, name + "/" + id + "/" + fid, nil
 }
 
 // normalizeJobFilterValue trims and uppercases a jobs-API filter value
