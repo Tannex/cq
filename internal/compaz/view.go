@@ -146,7 +146,7 @@ func (m *Model) viewStrip() string {
 	accent := consolePalette.cyan.Bold(true).Inherit(consolePalette.navy)
 	muted := consolePalette.navy.Foreground(ayu.comment).Faint(true)
 	current := m.topLevelView()
-	labels := map[Screen]string{ScreenDataSets: "DATASETS", ScreenJobs: "JOBS"}
+	labels := map[Screen]string{ScreenDataSets: "DATA SETS", ScreenJobs: "JOBS"}
 	parts := make([]string, len(topLevelViews))
 	for i, screen := range topLevelViews {
 		if screen == current {
@@ -174,7 +174,9 @@ func (m *Model) profileStrip(budget int) string {
 		label := profile
 		loaded := i == m.active || (i < len(m.workspaces) && m.workspaces[i].sessionReady)
 		if !loaded {
-			label += "·"
+			// Degree sign, not the view strip's "·" separator, so the glyph
+			// keeps a single meaning across the chrome.
+			label += "°"
 		}
 		if i == m.active {
 			parts[i] = consolePalette.activeTab.Render(" " + label + " ")
@@ -345,7 +347,10 @@ func (m *Model) overlayHelp(background string) string {
 // the background, so the footer advertises no save keys.
 func (m *Model) mappingViewContent() string {
 	view := m.mappingView
-	title := consolePalette.navy.Bold(true).Width(m.width).Render(" COMPA/Z  COPYBOOK MAPPINGS ")
+	// Standard screen anatomy — accent screen name on the navy title row —
+	// rather than a one-off product banner.
+	accent := consolePalette.cyan.Bold(true).Inherit(consolePalette.navy)
+	title := consolePalette.navy.Width(m.width).Render(" " + accent.Render("COPYBOOK MAPPINGS"))
 	subtitle := consolePalette.panel.Width(m.width).Render(" " + view.target + "  mappings are matched most precise first and saved automatically ")
 
 	var lines []string
@@ -383,7 +388,7 @@ func (m *Model) mappingViewContent() string {
 				entry.Mapping.Record)
 			style := consolePalette.plain
 			if i == view.selected {
-				style = consolePalette.bright
+				style = consolePalette.selected
 			}
 			rendered := style.Render(row)
 			if entry.Applied {
@@ -403,7 +408,7 @@ func (m *Model) mappingViewContent() string {
 		lines = append(lines, "   "+consolePalette.muted.Render(footer))
 	}
 	available := max(1, m.height-4)
-	body := lipgloss.Place(m.width, available, lipgloss.Left, lipgloss.Center, strings.Join(lines, "\n"), lipgloss.WithWhitespaceChars(" "))
+	body := lipgloss.Place(m.width, available, lipgloss.Left, lipgloss.Top, strings.Join(lines, "\n"), lipgloss.WithWhitespaceChars(" "))
 	statusLine := m.statusLine()
 	helpLine := m.helpLine()
 	return fitHeight(strings.Join([]string{title, subtitle, body, statusLine, helpLine}, "\n"), m.width, m.height)
@@ -424,7 +429,7 @@ func (m *Model) titleLine() string {
 	var screenName, body, chip string
 	switch m.screen {
 	case ScreenDataSets:
-		screenName = "DATASETS"
+		screenName = "DATA SETS"
 		body = fmt.Sprintf("prefix %s", displayOr(m.prefix, "—"))
 	case ScreenMembers:
 		screenName = m.dataSet.Name
@@ -437,7 +442,7 @@ func (m *Model) titleLine() string {
 		body = m.modeName()
 	case ScreenJobs:
 		screenName = "JOBS"
-		body = fmt.Sprintf("owner %s  filter %s", displayOr(m.jobOwner, "*"), displayOr(m.jobPrefix, "*"))
+		body = fmt.Sprintf("owner %s  prefix %s", displayOr(m.jobOwner, "*"), displayOr(m.jobPrefix, "*"))
 	case ScreenSpoolFiles:
 		screenName = m.job.JobName + "(" + m.job.JobID + ")"
 		body = "spool files"
@@ -471,6 +476,12 @@ func (m *Model) titleLine() string {
 	stripText := ""
 	if strip != "" {
 		stripText = strip + plain.Render("  ")
+		// The strip already names the two top-level screens; repeating the
+		// active tab's name right next to it is noise.
+		if m.screen == ScreenDataSets || m.screen == ScreenJobs {
+			screenName = ""
+			plainMiddle = body
+		}
 	}
 	baseWidth := 1 + lipgloss.Width(stripText) + lipgloss.Width(screenName) + lipgloss.Width(plainMiddle) + lipgloss.Width(chipText)
 	gap := 0
@@ -509,7 +520,10 @@ func (m *Model) searchLine() string {
 		}
 	case ScreenRecords:
 		if m.locateInput.Focused() {
-			line = m.locateInput.View()
+			// Keep CODEPAGE alongside the input: it has no other home on
+			// this screen (the jobs screen keeps its sibling field the same
+			// way).
+			line = m.locateInput.View() + "    " + label.Render("CODEPAGE") + "  " + value.Render(m.codepageName)
 			break
 		}
 		overlayText := "none"
@@ -535,12 +549,19 @@ func (m *Model) searchLine() string {
 		line = label.Render("JOB") + "  " + value.Render(m.job.JobName+" "+m.job.JobID) +
 			"    " + label.Render("STATUS") + "  " + value.Render(displayOr(m.job.Status, "unknown"))
 	case ScreenSpoolContent:
+		// The active INCL filter appears nowhere else on screen, so it stays
+		// visible next to a focused input — especially the command line that
+		// modifies it.
+		inclChip := ""
+		if m.spoolInclude != "" {
+			inclChip = "    " + label.Render("INCL") + "  " + value.Render(m.spoolInclude)
+		}
 		if m.spoolCmdInput.Focused() {
-			line = m.spoolCmdInput.View()
+			line = m.spoolCmdInput.View() + inclChip
 			break
 		}
 		if m.locateInput.Focused() {
-			line = m.locateInput.View()
+			line = m.locateInput.View() + inclChip
 			break
 		}
 		ddName := ""
@@ -548,12 +569,10 @@ func (m *Model) searchLine() string {
 			ddName = m.spoolFile.DDName
 		}
 		line = label.Render("JOB") + "  " + value.Render(m.job.JobName+" "+m.job.JobID) +
-			"    " + label.Render("DD") + "  " + value.Render(ddName)
-		if m.spoolInclude != "" {
-			line += "    " + label.Render("INCL") + "  " + value.Render(m.spoolInclude)
-		}
+			"    " + label.Render("DD") + "  " + value.Render(ddName) + inclChip
 	}
-	return consolePalette.panel.Width(m.width).Render(truncateStyled(line, m.width))
+	// One-cell left margin, matching the title, status, and help rows.
+	return consolePalette.panel.Width(m.width).Render(truncateStyled(" "+line, m.width))
 }
 
 func (m *Model) dataView() string {
@@ -606,7 +625,7 @@ func (m *Model) activeRowCount() int {
 }
 
 func (m *Model) statePanel(level statusLevel, text string) string {
-	header := consolePalette.header.Render("  STATE    DETAIL")
+	header := consolePalette.header.Width(m.width).Render("  STATE    DETAIL")
 	// The status chip is fixed-width (7) so DETAIL stays column-aligned for
 	// every status word length.
 	bodyLine := "  " + m.renderStatusLabel(level) + "  " + text
@@ -846,11 +865,26 @@ func (m *Model) jobTableView() string {
 			row = append(row, styledCell(job.Class, consolePalette.plain, onCursor))
 		}
 		if showRC {
-			row = append(row, styledCell(job.ReturnCode, consolePalette.muted, onCursor))
+			row = append(row, styledCell(job.ReturnCode, jobReturnStyle(job.ReturnCode), onCursor))
 		}
 		rows[i] = row
 	}
 	return renderTable(m.width, m.visible, columns, rows, selected-start, showEnd)
+}
+
+// jobReturnStyle extends the status color language to return codes: clean
+// completions stay muted like before, nonzero condition codes read as
+// caution, abends and JCL errors as danger.
+func jobReturnStyle(returnCode string) lipgloss.Style {
+	code := strings.ToUpper(strings.TrimSpace(returnCode))
+	switch {
+	case strings.HasPrefix(code, "ABEND") || strings.HasPrefix(code, "JCL"):
+		return consolePalette.danger
+	case strings.HasPrefix(code, "CC ") && code != "CC 0000":
+		return consolePalette.amber
+	default:
+		return consolePalette.muted
+	}
 }
 
 // jobStatusStyle echoes the status-chip color language: ACTIVE reads as
@@ -907,11 +941,15 @@ func (m *Model) spoolFileTableView() string {
 			row = append(row, styledCell(file.Class, consolePalette.plain, onCursor))
 		}
 		if showRecords {
-			records := ""
+			cell := ""
 			if !isSyntheticJCLFile(file) {
-				records = rightAligned(strconv.FormatInt(file.RecordCount, 10), 8)
+				cell = styledCell(rightAligned(strconv.FormatInt(file.RecordCount, 10), 8), consolePalette.muted, onCursor)
+			} else {
+				// Right-align the empty-cell mark too, so the dot sits under
+				// the units digit of this numeric column.
+				cell = strings.Repeat(" ", 7) + styledCell("", consolePalette.muted, onCursor)
 			}
-			row = append(row, styledCell(records, consolePalette.muted, onCursor))
+			row = append(row, cell)
 		}
 		rows[i] = row
 	}
@@ -958,7 +996,7 @@ func endMarker(width int) string {
 
 func (m *Model) rawRecordView() string {
 	numberWidth := m.recordNumberWidth()
-	header := consolePalette.header.Render(fmt.Sprintf("  %-*s │ RAW DATA", numberWidth, "RECORD"))
+	header := consolePalette.header.Width(m.width).Render(fmt.Sprintf("  %-*s │ RAW DATA", numberWidth, "RECORD"))
 	start, end, showEnd := endMarkerWindow(&m.recordPage)
 	selected := m.recordPage.selectedIndex()
 	syntax := m.recordSyntax()
@@ -1016,7 +1054,7 @@ func (m *Model) spoolContentView() string {
 		return m.spoolFilteredView()
 	}
 	numberWidth := m.spoolLineNumberWidth()
-	header := consolePalette.header.Render(fmt.Sprintf("  %-*s │ SPOOL CONTENT", numberWidth, "LINE"))
+	header := consolePalette.header.Width(m.width).Render(fmt.Sprintf("  %-*s │ SPOOL CONTENT", numberWidth, "LINE"))
 	start, end, showEnd := endMarkerWindow(&m.spoolContentPage)
 	selected := m.spoolContentPage.selectedIndex()
 	lines := make([]string, end-start)
@@ -1070,7 +1108,7 @@ func (m *Model) spoolFilteredView() string {
 	if m.spoolBulkTruncated {
 		title += " — cache truncated"
 	}
-	header := consolePalette.header.Render(fmt.Sprintf("  %-*s │ %s", numberWidth, "LINE", title))
+	header := consolePalette.header.Width(m.width).Render(fmt.Sprintf("  %-*s │ %s", numberWidth, "LINE", title))
 	hits := m.spoolFilterHits
 	height := max(1, m.visible)
 	if len(hits) == 0 {
@@ -1218,7 +1256,13 @@ func (m *Model) recordJSONView() string {
 	numberWidth := m.recordNumberWidth()
 	title := fmt.Sprintf("  %-*s │ PRETTY JSON", numberWidth, "RECORD")
 	hint := "  j/k record  pgup/pgdn scroll"
-	header := truncateStyled(consolePalette.header.Render(title)+consolePalette.panel.Faint(true).Render(hint), m.width)
+	// One full-width header band like every other viewer; the hint keeps its
+	// faint tint but sits on the same band instead of a second background.
+	header := consolePalette.header.Render(title) + consolePalette.header.Faint(true).Render(hint)
+	if gap := m.width - lipgloss.Width(header); gap > 0 {
+		header += consolePalette.header.Render(strings.Repeat(" ", gap))
+	}
+	header = truncateStyled(header, m.width)
 	model := viewport.New(viewport.WithWidth(m.width), viewport.WithHeight(m.visible))
 	model.SoftWrap = false
 	model.FillHeight = true
@@ -1428,14 +1472,17 @@ func (m *Model) helpLine() string {
 	return consolePalette.muted.Width(m.width).Render(truncateStyled(" "+line, m.width))
 }
 
+// modeName is lowercase like every other screen's title body ("spool
+// content", "members  filter *"); the viewer headers keep the uppercase
+// column-header convention.
 func (m *Model) modeName() string {
 	switch m.recordMode {
 	case ModeTable:
-		return "COPYBOOK TABLE"
+		return "copybook table"
 	case ModeJSON:
-		return "PRETTY JSON"
+		return "pretty json"
 	default:
-		return "RAW"
+		return "raw"
 	}
 }
 

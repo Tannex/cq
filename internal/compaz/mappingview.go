@@ -53,9 +53,7 @@ func newMappingForm(source CopybookSource, pattern string, editing bool) *mappin
 		input.Placeholder = placeholder
 		input.CharLimit = limit
 		input.SetWidth(58)
-		styles := input.Styles()
-		styles.Cursor.Blink = false
-		input.SetStyles(styles)
+		styleInput(&input, consolePalette.plain)
 		return input
 	}
 	form := &mappingForm{

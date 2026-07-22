@@ -106,9 +106,7 @@ func newQueryPopup(width int) *queryPopup {
 	input.Prompt = "jq  "
 	input.Placeholder = `.[] | select(.FIELD == "VALUE") | .FIELD`
 	input.CharLimit = 512
-	styles := input.Styles()
-	styles.Cursor.Blink = false
-	input.SetStyles(styles)
+	styleInput(&input, consolePalette.popup)
 	popup := &queryPopup{
 		input:     input,
 		resultCap: queryResultCap,

@@ -99,6 +99,7 @@ type keyContext struct {
 	ShowHelp          bool
 	Tabs              bool
 	JobsAvailable     bool
+	Overlay           bool
 	FavoritesOpen     bool
 	FavoritesInput    bool
 	EditorOpen        bool
@@ -210,7 +211,7 @@ func DefaultKeyMap() KeyMap {
 		ReloadEdit:      key.NewBinding(key.WithKeys("ctrl+r"), key.WithHelp("ctrl+r", "reload from host")),
 		DiscardEdit:     key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "discard changes")),
 		NextProfile:     key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next profile")),
-		PreviousProfile: key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("shift+tab", "previous profile")),
+		PreviousProfile: key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("shift+tab", "prev profile")),
 		SpoolCommand:    key.NewBinding(key.WithKeys(":"), key.WithHelp(":", "command")),
 		FindNext:        key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "find next")),
 		NextView:        key.NewBinding(key.WithKeys("]"), key.WithHelp("]", "jobs tab")),
@@ -411,7 +412,10 @@ func (k KeyMap) actionFor(msg tea.KeyPressMsg, ctx keyContext) action {
 		return actionJobs
 	case key.Matches(msg, k.Edit) && (ctx.Screen == ScreenDataSets || ctx.Screen == ScreenMembers):
 		return actionEdit
-	case key.Matches(msg, k.Query) && ctx.Screen == ScreenRecords:
+	// Query and Diagnostics act on decoded records, so both keys stay dead
+	// until a copybook overlay is loaded — the footer hints advertise them
+	// under exactly the same condition.
+	case key.Matches(msg, k.Query) && ctx.Screen == ScreenRecords && ctx.Overlay:
 		return actionQuery
 	case key.Matches(msg, k.SpoolCommand) && ctx.Screen == ScreenSpoolContent:
 		return actionSpoolCommand
@@ -425,7 +429,7 @@ func (k KeyMap) actionFor(msg tea.KeyPressMsg, ctx keyContext) action {
 		return actionToggleOverlay
 	case key.Matches(msg, k.ToggleView) && ctx.Screen == ScreenRecords:
 		return actionToggleView
-	case key.Matches(msg, k.Diagnostics) && ctx.Screen == ScreenRecords:
+	case key.Matches(msg, k.Diagnostics) && ctx.Screen == ScreenRecords && ctx.Overlay:
 		return actionDiagnostics
 	case key.Matches(msg, k.WideLeft) && (ctx.Screen == ScreenRecords || ctx.Screen == ScreenSpoolContent):
 		return actionWideLeft
@@ -487,29 +491,37 @@ func (k KeyMap) shortHelp(ctx keyContext, overlay bool) []key.Binding {
 		}
 		return []key.Binding{k.Accept, k.Cancel}
 	}
-	bindings := []key.Binding{k.Up, k.Down, k.Open}
+	// Open is advertised only on the screens where openSelection acts, and
+	// drill-down screens advertise Back — the key that actually leaves them.
+	// Help and Quit come before the wide view/profile-tab bindings so they
+	// survive when the help model drops trailing items on narrow terminals.
+	bindings := []key.Binding{k.Up, k.Down}
 	switch ctx.Screen {
 	case ScreenDataSets:
-		bindings = append(bindings, k.Search, k.ToggleFavorite, k.Favorites, k.Edit, k.Recall, k.Jobs)
+		bindings = append(bindings, k.Open, k.Search, k.ToggleFavorite, k.Favorites, k.Edit, k.Recall, k.Jobs)
 	case ScreenMembers:
-		bindings = append(bindings, k.Search, k.Edit)
+		bindings = append(bindings, k.Open, k.Search, k.Edit, k.Back)
 	case ScreenRecords:
 		bindings = append(bindings, k.Locate, k.WideLeft, k.WideRight, k.Copybook)
 		if overlay {
 			bindings = append(bindings, k.Query, k.ToggleOverlay, k.ToggleView, k.ClearOverlay)
 		}
+		bindings = append(bindings, k.Back)
 	case ScreenJobs:
-		bindings = append(bindings, k.Search, k.ToggleFavorite, k.Favorites)
+		bindings = append(bindings, k.Open, k.Search, k.ToggleFavorite, k.Favorites)
+	case ScreenSpoolFiles:
+		bindings = append(bindings, k.Open, k.Back)
 	case ScreenSpoolContent:
-		bindings = append(bindings, k.Locate, k.SpoolCommand, k.FindNext, k.WideLeft, k.WideRight)
+		bindings = append(bindings, k.Locate, k.SpoolCommand, k.FindNext, k.WideLeft, k.WideRight, k.Back)
 	}
+	bindings = append(bindings, k.Help, k.Quit)
 	if ctx.JobsAvailable {
 		bindings = append(bindings, k.PreviousView, k.NextView)
 	}
 	if ctx.Tabs {
 		bindings = append(bindings, k.NextProfile, k.PreviousProfile)
 	}
-	return append(bindings, k.Help, k.Quit)
+	return bindings
 }
 
 type helpGroup struct {
@@ -534,9 +546,9 @@ func (k KeyMap) fullHelp(ctx keyContext, overlay bool) []helpGroup {
 	case ScreenMembers:
 		actions = append(actions, k.Search, k.Edit)
 	case ScreenRecords:
-		actions = append(actions, k.Locate, k.WideLeft, k.WideRight, k.Copybook, k.Query)
+		actions = append(actions, k.Locate, k.WideLeft, k.WideRight, k.Copybook)
 		if overlay {
-			actions = append(actions, k.ToggleOverlay, k.ToggleView, k.Diagnostics, k.ClearOverlay)
+			actions = append(actions, k.Query, k.ToggleOverlay, k.ToggleView, k.Diagnostics, k.ClearOverlay)
 		}
 	case ScreenJobs:
 		actions = append(actions, k.Search, k.ToggleFavorite, k.Favorites)

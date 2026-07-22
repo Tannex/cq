@@ -157,13 +157,11 @@ func TestQueryCompileErrorRendersInPopup(t *testing.T) {
 func TestQueryRequiresOverlay(t *testing.T) {
 	model, _ := queryModel(t, singleRecordPage(zosmf.Record{Number: 1, Data: []byte("ABC")}))
 	executeQuery(t, model, applyMessage(t, model, keyPress('x', "x"))) // clear overlay
-	openQuery(t, model)
-	if !strings.Contains(model.query.err, "copybook") {
-		t.Fatalf("missing overlay explanation, err = %q", model.query.err)
-	}
-	runQueryExpr(t, model, ".NAME")
-	if model.query.running || model.query.searched != 0 {
-		t.Fatalf("search ran without an overlay: %+v", model.query)
+	// The jq console runs over decoded records, so without an overlay the
+	// key is dead — the same condition under which the footer hides it.
+	executeQuery(t, model, applyMessage(t, model, keyPress(':', ":")))
+	if model.query != nil {
+		t.Fatal("query popup opened without an overlay")
 	}
 }
 
