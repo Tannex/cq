@@ -41,16 +41,12 @@ func newFavoritesPopup(kind favorites.Kind, entries []favorites.Favorite, width 
 	note.Prompt = "NOTE  "
 	note.Placeholder = "free-text note"
 	note.CharLimit = 120
-	styles := note.Styles()
-	styles.Cursor.Blink = false
-	note.SetStyles(styles)
+	styleInput(&note, consolePalette.popup)
 	pattern := textinput.New()
 	pattern.Prompt = "PATTERN  "
 	pattern.Placeholder = `name, wildcard (*, %), or /regex/`
 	pattern.CharLimit = 120
-	patternStyles := pattern.Styles()
-	patternStyles.Cursor.Blink = false
-	pattern.SetStyles(patternStyles)
+	styleInput(&pattern, consolePalette.popup)
 	popup := &favoritesPopup{kind: kind, entries: entries, note: note, pattern: pattern}
 	popup.setWidth(width)
 	return popup
@@ -538,7 +534,9 @@ func (m *Model) favoritesPanel() string {
 // overlayFavorites composites the favorites popup over the live view with the
 // same Canvas/Layer mechanism and sizing rules as the help popup.
 func (m *Model) overlayFavorites(background string) string {
-	popupWidth := min(64, m.width-4)
+	// 68 leaves a 64-cell inner width so the widest footer and empty-state
+	// hint (62 cells) fit without wrapping.
+	popupWidth := min(68, m.width-4)
 	popupHeight := min(max(10, int(float64(m.height)*0.8)), m.height-2)
 	if popupWidth < 24 || popupHeight < 8 {
 		return background
@@ -552,7 +550,10 @@ func (m *Model) overlayFavorites(background string) string {
 	body := consolePalette.popup
 	muted := consolePalette.muted.Inherit(consolePalette.popup)
 
-	lines := m.favoritesContent(accent, body, muted, innerWidth)
+	// The selected row uses the same amber-on-navy band as every table and
+	// viewer (and this popup's own tiny-terminal fallback), not the accent.
+	selected := consolePalette.selected.Inherit(consolePalette.popup)
+	lines := m.favoritesContent(selected, body, muted, innerWidth)
 	// Keep the selected entry visible: scroll so its first line is in window.
 	offset := 0
 	if selectedLine := m.favPopup.selectedLineIndex(); selectedLine >= contentHeight {
@@ -570,7 +571,9 @@ func (m *Model) overlayFavorites(background string) string {
 	for len(innerLines) < contentHeight+1 {
 		innerLines = append(innerLines, fill.Render(""))
 	}
-	footer := muted.Render(m.favPopup.footerText())
+	// Clamp like the content lines: a footer wider than the box must
+	// truncate, never wrap onto a second row.
+	footer := truncateStyled(muted.Render(m.favPopup.footerText()), innerWidth)
 	innerLines = append(innerLines, fill.Render(strings.Repeat(" ", max(0, (innerWidth-lipgloss.Width(footer))/2))+footer))
 
 	popupStyle := consolePalette.popup.

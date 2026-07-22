@@ -524,7 +524,7 @@ func TestTitleLinesOmitCacheAndRangeDetails(t *testing.T) {
 	model.datasets = []zosmf.DataSet{{Name: "DEMO.A"}, {Name: "DEMO.B"}}
 
 	title := ansi.Strip(model.titleLine())
-	if !strings.Contains(title, "DATASETS") || !strings.Contains(title, "prefix DEMO.*") {
+	if !strings.Contains(title, "DATA SETS") || !strings.Contains(title, "prefix DEMO.*") {
 		t.Fatalf("data set title missing expected body: %q", title)
 	}
 	if strings.Contains(title, "range") || strings.Contains(title, "cached") {
@@ -548,7 +548,7 @@ func TestTitleLinesOmitCacheAndRangeDetails(t *testing.T) {
 	model.recordMode = ModeTable
 	model.overlay = &overlay{Source: CopybookSource{Local: "book.cpy"}, Columns: []fieldColumn{{Path: "F", Parts: []string{"F"}}}}
 	title = ansi.Strip(model.titleLine())
-	if !strings.Contains(title, "HQ.DATA") || !strings.Contains(title, "COPYBOOK TABLE") {
+	if !strings.Contains(title, "HQ.DATA") || !strings.Contains(title, "copybook table") {
 		t.Fatalf("record title missing expected body: %q", title)
 	}
 	if strings.Contains(title, "records ") || strings.Contains(title, "cached") || strings.Contains(title, "1–") {

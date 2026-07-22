@@ -16,6 +16,7 @@ import (
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/Tannex/cq/internal/decode"
 	"github.com/Tannex/cq/internal/dsnmap"
@@ -359,48 +360,36 @@ func NewModel(options Options, deps Dependencies) (*Model, error) {
 	prefixInput.Placeholder = "IBMUSER.*"
 	prefixInput.CharLimit = 44
 	prefixInput.SetWidth(48)
-	prefixStyles := prefixInput.Styles()
-	prefixStyles.Cursor.Blink = false
-	prefixInput.SetStyles(prefixStyles)
+	styleInput(&prefixInput, consolePalette.panel)
 	memberInput := textinput.New()
 	memberInput.Prompt = "MEMBER  "
 	memberInput.Placeholder = "prefix or pattern"
 	memberInput.CharLimit = 8
 	memberInput.SetWidth(24)
-	memberStyles := memberInput.Styles()
-	memberStyles.Cursor.Blink = false
-	memberInput.SetStyles(memberStyles)
+	styleInput(&memberInput, consolePalette.panel)
 	locateInput := textinput.New()
 	locateInput.Prompt = "RECORD  "
 	locateInput.Placeholder = "record number"
 	locateInput.CharLimit = 19
 	locateInput.SetWidth(24)
-	locateStyles := locateInput.Styles()
-	locateStyles.Cursor.Blink = false
-	locateInput.SetStyles(locateStyles)
+	styleInput(&locateInput, consolePalette.panel)
 	jobOwnerInput := textinput.New()
-	jobOwnerInput.Prompt = "OWNER   "
+	jobOwnerInput.Prompt = "OWNER  "
 	jobOwnerInput.CharLimit = 8
 	jobOwnerInput.SetWidth(24)
-	jobOwnerStyles := jobOwnerInput.Styles()
-	jobOwnerStyles.Cursor.Blink = false
-	jobOwnerInput.SetStyles(jobOwnerStyles)
+	styleInput(&jobOwnerInput, consolePalette.panel)
 	jobFilterInput := textinput.New()
 	jobFilterInput.Prompt = "PREFIX  "
 	jobFilterInput.Placeholder = "*"
 	jobFilterInput.CharLimit = 8
 	jobFilterInput.SetWidth(24)
-	jobFilterStyles := jobFilterInput.Styles()
-	jobFilterStyles.Cursor.Blink = false
-	jobFilterInput.SetStyles(jobFilterStyles)
+	styleInput(&jobFilterInput, consolePalette.panel)
 	spoolCmdInput := textinput.New()
 	spoolCmdInput.Prompt = ":  "
 	spoolCmdInput.Placeholder = "incl <pattern> | f <pattern>"
 	spoolCmdInput.CharLimit = 80
 	spoolCmdInput.SetWidth(48)
-	spoolCmdStyles := spoolCmdInput.Styles()
-	spoolCmdStyles.Cursor.Blink = false
-	spoolCmdInput.SetStyles(spoolCmdStyles)
+	styleInput(&spoolCmdInput, consolePalette.panel)
 
 	ws := newWorkspace("")
 	m := &Model{
@@ -408,7 +397,7 @@ func NewModel(options Options, deps Dependencies) (*Model, error) {
 		options:        options,
 		deps:           deps,
 		keys:           DefaultKeyMap(),
-		help:           help.New(),
+		help:           newHelpModel(),
 		spinner:        newStatusSpinner(),
 		prefixInput:    prefixInput,
 		memberInput:    memberInput,
@@ -420,6 +409,36 @@ func NewModel(options Options, deps Dependencies) (*Model, error) {
 	}
 	m.workspaces = []*workspace{&m.workspace}
 	return m, nil
+}
+
+// styleInput applies the console palette to a text input over the given base
+// (panel for chrome-row inputs, popup for popup-hosted ones), so focusing a
+// field keeps the colors the unfocused search line already uses.
+func styleInput(input *textinput.Model, base lipgloss.Style) {
+	styles := input.Styles()
+	styles.Cursor.Blink = false
+	styles.Cursor.Color = ayu.accent
+	for _, state := range []*textinput.StyleState{&styles.Focused, &styles.Blurred} {
+		state.Prompt = base.Foreground(ayu.uiFg)
+		state.Text = base.Foreground(ayu.fgBright)
+		state.Placeholder = base.Foreground(ayu.comment).Faint(true)
+	}
+	input.SetStyles(styles)
+}
+
+// newHelpModel builds the footer help renderer with the console palette in
+// place of bubbles' default greys, matching the muted hint style popup
+// footers use.
+func newHelpModel() help.Model {
+	model := help.New()
+	model.Styles.ShortKey = lipgloss.NewStyle().Foreground(ayu.fg)
+	model.Styles.ShortDesc = consolePalette.muted
+	model.Styles.ShortSeparator = consolePalette.muted
+	model.Styles.Ellipsis = consolePalette.muted
+	model.Styles.FullKey = model.Styles.ShortKey
+	model.Styles.FullDesc = model.Styles.ShortDesc
+	model.Styles.FullSeparator = model.Styles.ShortSeparator
+	return model
 }
 
 func validateCopybookFormat(format string) error {
@@ -815,6 +834,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		InputFocused: m.inputFocused(), DialogOpen: m.mappingView != nil,
 		DialogFormFocused: m.mappingView != nil && m.mappingView.form != nil,
 		ShowHelp:          m.showHelp, Tabs: m.hasTabs(), JobsAvailable: m.jobsAvailable(),
+		Overlay:           ws.overlay != nil,
 		FavoritesOpen: m.favPopup != nil, FavoritesInput: m.favPopup != nil && m.favPopup.inputActive(),
 		EditorOpen: m.editor != nil, EditorConfirm: m.editor != nil && m.editor.confirmDiscard,
 		QueryOpen: m.query != nil,
@@ -2017,7 +2037,10 @@ func (m *Model) handleResize(width, height int) tea.Cmd {
 	m.width, m.height = width, height
 	m.visible = VisibleRows(width, height)
 	m.budget = RowBudget(m.visible)
-	m.help.SetWidth(max(1, width))
+	// One cell narrower than the terminal: helpLine prepends a one-cell
+	// margin, and the help model must drop whole trailing items instead of
+	// having the margin push the line into a mid-item hard truncation.
+	m.help.SetWidth(max(1, width-1))
 	m.prefixInput.SetWidth(max(8, width-10))
 	m.memberInput.SetWidth(max(8, min(24, width-10)))
 	m.locateInput.SetWidth(max(8, min(24, width-10)))
@@ -2192,7 +2215,7 @@ func (m *Model) startJobs(ws *workspace, plan pagePlan[string]) tea.Cmd {
 	ws.browsePending = &meta
 	ctx, cancel := context.WithTimeout(context.Background(), m.deps.Timeout)
 	ws.browseCancel = cancel
-	ws.status = status{Level: statusLoading, Text: fmt.Sprintf("listing jobs for %s owned by %s", displayOr(ws.jobPrefix, "*"), displayOr(ws.jobOwner, "any"))}
+	ws.status = status{Level: statusLoading, Text: fmt.Sprintf("listing jobs for %s owned by %s", displayOr(ws.jobPrefix, "*"), displayOr(ws.jobOwner, "*"))}
 	request := zosmf.ListJobsRequest{Owner: ws.jobOwner, Prefix: ws.jobPrefix, MaxItems: m.budget}
 	return m.loadingCommand(func() tea.Msg {
 		page, err := jobs.ListJobs(ctx, request)
@@ -2372,7 +2395,7 @@ func (m *Model) handleDataSetsResult(ws *workspace, msg dataSetsResultMsg) tea.C
 		func(item zosmf.DataSet) string { return strings.ToUpper(strings.TrimSpace(item.Name)) },
 	)
 	if ended {
-		ws.status = status{Level: statusReady, Text: "end of data set results"}
+		ws.status = status{Level: statusReady, Text: "end of data sets"}
 		return nil
 	}
 	ws.statusForCount(len(ws.datasets), "data sets")
@@ -2421,7 +2444,7 @@ func (m *Model) handleMembersResult(ws *workspace, msg membersResultMsg) tea.Cmd
 		func(item zosmf.Member) string { return strings.ToUpper(strings.TrimSpace(item.Name)) },
 	)
 	if ended {
-		ws.status = status{Level: statusReady, Text: "end of member results"}
+		ws.status = status{Level: statusReady, Text: "end of members"}
 		return nil
 	}
 	ws.statusForCount(len(ws.members), "members")
