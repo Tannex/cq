@@ -988,7 +988,7 @@ func (m *Model) rawRecordView() string {
 // conversion server-side), so there is no copybook overlay, table/JSON
 // toggle, or jq console here — just read and scroll.
 func (m *Model) spoolContentView() string {
-	if m.spoolInclude != "" {
+	if m.spoolInclude != "" && m.spoolBulkReady() {
 		return m.spoolFilteredView()
 	}
 	numberWidth := m.spoolLineNumberWidth()
@@ -1033,35 +1033,36 @@ func (m *Model) spoolContentView() string {
 	return view
 }
 
-// spoolFilteredView renders only the loaded lines matching the include
-// filter, windowed so the selection stays visible. Original line numbers are
-// kept in the gutter; the pager's end marker is not meaningful here because
-// the filtered subset is not the fetch window.
+// spoolFilteredView renders the bulk-cache lines matching the include
+// filter, windowed around the filter cursor. The gutter shows the bulk
+// index, which is the zero-based line number; the pager's end marker is not
+// meaningful here because the filtered subset is not the fetch window.
 func (m *Model) spoolFilteredView() string {
-	numberWidth := m.spoolLineNumberWidth()
-	header := consolePalette.header.Render(fmt.Sprintf("  %-*s │ SPOOL CONTENT (filtered)", numberWidth, "LINE"))
-	indexes := spoolFilteredIndexes(m.spoolContent, m.spoolInclude)
+	numberWidth := 4
+	if len(m.spoolBulk) > 0 {
+		numberWidth = max(numberWidth, len(strconv.Itoa(len(m.spoolBulk)-1)))
+	}
+	title := "SPOOL CONTENT (filtered)"
+	if m.spoolBulkTruncated {
+		title += " — cache truncated"
+	}
+	header := consolePalette.header.Render(fmt.Sprintf("  %-*s │ %s", numberWidth, "LINE", title))
+	hits := m.spoolFilterHits
 	height := max(1, m.visible)
-	if len(indexes) == 0 {
+	if len(hits) == 0 {
 		empty := lipgloss.Place(m.width, height, lipgloss.Center, lipgloss.Center,
-			consolePalette.amber.Render(fmt.Sprintf("no loaded lines match incl %q", m.spoolInclude)))
+			consolePalette.amber.Render(fmt.Sprintf("no lines match incl %q", m.spoolInclude)))
 		return header + "\n" + empty
 	}
 
-	selected := m.spoolContentPage.selectedIndex()
-	position := 0
-	for i, index := range indexes {
-		if index <= selected {
-			position = i
-		}
-	}
-	start := max(0, min(position-height/2, len(indexes)-height))
-	end := min(len(indexes), start+height)
-	window := indexes[start:end]
+	cursor := max(0, min(m.spoolFilterCursor, len(hits)-1))
+	start := max(0, min(cursor-height/2, len(hits)-height))
+	end := min(len(hits), start+height)
+	window := hits[start:end]
 
 	lines := make([]string, len(window))
 	for i, index := range window {
-		lines[i] = m.spoolContent[index].Text
+		lines[i] = m.spoolBulk[index]
 	}
 	model := viewport.New(viewport.WithWidth(m.width), viewport.WithHeight(height))
 	model.SoftWrap = false
@@ -1074,13 +1075,13 @@ func (m *Model) spoolFilteredView() string {
 			return strings.Repeat(" ", numberWidth+5)
 		}
 		marker := " "
-		if window[context.Index] == selected {
+		if start+context.Index == cursor {
 			marker = ">"
 		}
-		return fmt.Sprintf("%s %0*d │ ", marker, numberWidth, m.spoolContent[window[context.Index]].Number)
+		return fmt.Sprintf("%s %0*d │ ", marker, numberWidth, window[context.Index])
 	}
 	model.StyleLineFunc = func(index int) lipgloss.Style {
-		if index >= 0 && index < len(window) && window[index] == selected {
+		if start+index == cursor {
 			return consolePalette.selected
 		}
 		return consolePalette.plain

@@ -682,18 +682,18 @@ func TestSpoolCommandInclFiltersViewToMatchingLines(t *testing.T) {
 		t.Fatalf("filtered view leaked non-matching lines:\n%s", view)
 	}
 
-	// Selection movement steps between matching lines only.
+	// Selection movement steps the cursor through the filter hits, clamped.
 	executeCommand(t, model, model.handleAction(actionDown))
-	if got := model.spoolContentPage.selectedIndex(); got != 2 {
-		t.Fatalf("first down selected %d, want 2", got)
+	if model.spoolFilterCursor != 1 {
+		t.Fatalf("first down cursor = %d, want 1", model.spoolFilterCursor)
 	}
 	executeCommand(t, model, model.handleAction(actionDown))
-	if got := model.spoolContentPage.selectedIndex(); got != 4 {
-		t.Fatalf("second down selected %d, want 4", got)
+	if model.spoolFilterCursor != 1 {
+		t.Fatalf("down past the last hit cursor = %d, want clamp at 1", model.spoolFilterCursor)
 	}
 	executeCommand(t, model, model.handleAction(actionUp))
-	if got := model.spoolContentPage.selectedIndex(); got != 2 {
-		t.Fatalf("up selected %d, want 2", got)
+	if model.spoolFilterCursor != 0 {
+		t.Fatalf("up cursor = %d, want 0", model.spoolFilterCursor)
 	}
 
 	// Bare incl clears the filter and the full view returns.
@@ -740,5 +740,65 @@ func TestSpoolCommandRejectsUnknownCommandAndBareF(t *testing.T) {
 	executeCommand(t, model, applyMessage(t, model, keyPress('n', "n")))
 	if model.status.Level != statusWarn || !strings.Contains(model.status.Text, "no find pattern") {
 		t.Fatalf("status = %#v", model.status)
+	}
+}
+
+// fakeSpoolStreamBrowser adds SpoolStreamer to fakeBrowser so bulk commands
+// take the streaming path instead of the page-drain fallback.
+type fakeSpoolStreamBrowser struct {
+	*fakeBrowser
+	spoolStreams []string
+	content      string
+}
+
+func (b *fakeSpoolStreamBrowser) OpenSpoolContent(_ context.Context, jobName, jobID, fileID string) (io.ReadCloser, error) {
+	b.spoolStreams = append(b.spoolStreams, jobName+"/"+jobID+"/"+fileID)
+	return io.NopCloser(strings.NewReader(b.content)), nil
+}
+
+func TestSpoolCommandStreamsWholeFileAndReusesCache(t *testing.T) {
+	lines := []string{"alpha", "beta", "ERROR one", "gamma", "error two", "delta"}
+	inner := &fakeBrowser{
+		listJobs: func(context.Context, zosmf.ListJobsRequest) (zosmf.JobPage, error) {
+			return zosmf.JobPage{Items: []zosmf.Job{{JobID: "JOB00001", JobName: "NIGHTBAT"}}}, nil
+		},
+		listSpoolFiles: func(context.Context, string, string) ([]zosmf.SpoolFile, error) {
+			return []zosmf.SpoolFile{{ID: 2, DDName: "SYSPRINT"}}, nil
+		},
+		readSpoolContent: func(_ context.Context, request zosmf.ReadSpoolContentRequest) (zosmf.SpoolContentPage, error) {
+			start := min(int(request.Start), len(lines))
+			end := min(start+request.MaxItems, len(lines))
+			return zosmf.SpoolContentPage{Lines: lines[start:end], Start: request.Start, MoreRows: end < len(lines)}, nil
+		},
+	}
+	browser := &fakeSpoolStreamBrowser{fakeBrowser: inner, content: strings.Join(lines, "\n") + "\n"}
+	model := readyModel(t, Options{}, browser, "IBMUSER", "", 90, 16)
+	executeCommand(t, model, model.handleAction(actionJobs))
+	executeCommand(t, model, model.openSelection())
+	model.spoolFilePage.move(1)
+	executeCommand(t, model, model.openSelection())
+	if model.screen != ScreenSpoolContent {
+		t.Fatalf("did not reach spool content, screen=%d", model.screen)
+	}
+	pageRequests := len(inner.spoolContentRequests)
+
+	runSpoolCommand(t, model, "incl err")
+	if len(browser.spoolStreams) != 1 {
+		t.Fatalf("stream requests = %v, want one", browser.spoolStreams)
+	}
+	if len(inner.spoolContentRequests) != pageRequests {
+		t.Fatalf("page-drained %d requests despite streamer", len(inner.spoolContentRequests)-pageRequests)
+	}
+	if len(model.spoolFilterHits) != 2 || model.spoolFilterHits[0] != 2 || model.spoolFilterHits[1] != 4 {
+		t.Fatalf("filter hits = %v, want [2 4]", model.spoolFilterHits)
+	}
+
+	// A second command reuses the cache instead of re-downloading.
+	runSpoolCommand(t, model, "f error")
+	if len(browser.spoolStreams) != 1 {
+		t.Fatalf("stream requests = %v, want cache reuse", browser.spoolStreams)
+	}
+	if model.spoolFilterCursor != 1 {
+		t.Fatalf("find within filter cursor = %d, want 1", model.spoolFilterCursor)
 	}
 }

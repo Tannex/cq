@@ -604,6 +604,10 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if ws := m.targetWorkspace(msg.Meta.Profile); ws != nil {
 			return m, m.handleSpoolContentResult(ws, msg)
 		}
+	case spoolBulkResultMsg:
+		if ws := m.targetWorkspace(msg.Profile); ws != nil {
+			return m, m.handleSpoolBulkResult(ws, msg)
+		}
 	case overlayResultMsg:
 		if ws := m.targetWorkspace(msg.Profile); ws != nil {
 			return m, m.handleOverlayResult(ws, msg)
@@ -1000,19 +1004,31 @@ func (m *Model) handleAction(selected action) tea.Cmd {
 		}
 		return m.moveSelection(1)
 	case actionPageUp:
+		if cmd, handled := m.spoolFilteredMove(-max(1, m.visible)); handled {
+			return cmd
+		}
 		if m.scrollJSON(-max(1, m.visible)) {
 			return nil
 		}
 		return m.pageSelection(scrollUp)
 	case actionPageDown:
+		if cmd, handled := m.spoolFilteredMove(max(1, m.visible)); handled {
+			return cmd
+		}
 		if m.scrollJSON(max(1, m.visible)) {
 			return nil
 		}
 		return m.pageSelection(scrollDown)
 	case actionTop:
+		if cmd, handled := m.spoolFilteredMove(-len(m.spoolFilterHits)); handled {
+			return cmd
+		}
 		m.activePagerTop()
 		return nil
 	case actionBottom:
+		if cmd, handled := m.spoolFilteredMove(len(m.spoolFilterHits)); handled {
+			return cmd
+		}
 		return m.activePagerBottom()
 	case actionOpen:
 		return m.openSelection()
@@ -1446,7 +1462,8 @@ func (m *Model) acceptRecordLocation() tea.Cmd {
 // acceptSpoolCommand parses the spool viewer's command line: "incl <pattern>"
 // filters the view to matching lines (bare "incl" clears the filter) and
 // "f <pattern>" finds the next occurrence, repeatable with n. Both operate
-// on the loaded lines, case-insensitively.
+// case-insensitively over the whole-file bulk cache, downloading it first
+// when it is not ready yet.
 func (m *Model) acceptSpoolCommand() tea.Cmd {
 	ws := m.ws()
 	value := strings.TrimSpace(m.spoolCmdInput.Value())
@@ -1457,101 +1474,31 @@ func (m *Model) acceptSpoolCommand() tea.Cmd {
 	case "":
 		return nil
 	case "incl":
-		ws.spoolInclude = argument
 		if argument == "" {
+			ws.setSpoolInclude("")
 			ws.status = status{Level: statusReady, Text: "include filter cleared"}
 			return nil
 		}
-		ws.status = status{Level: statusReady, Text: fmt.Sprintf("incl %q: %d of %d loaded lines",
-			argument, len(spoolFilteredIndexes(ws.spoolContent, argument)), len(ws.spoolContent))}
-		return nil
+		return m.runSpoolCommand(ws, "incl "+argument)
 	case "f":
 		if argument == "" {
 			ws.status = status{Level: statusError, Text: "usage: f <pattern>"}
 			return nil
 		}
-		ws.spoolFind = argument
-		return m.spoolFindNext()
+		return m.runSpoolCommand(ws, "f "+argument)
 	default:
 		ws.status = status{Level: statusError, Text: "unknown command (incl <pattern> | f <pattern>)"}
 		return nil
 	}
 }
 
-// spoolFindNext moves the selection to the next loaded line containing the
-// last f pattern, wrapping past the end of the loaded window.
-func (m *Model) spoolFindNext() tea.Cmd {
-	ws := m.ws()
-	if ws.spoolFind == "" {
-		ws.status = status{Level: statusWarn, Text: "no find pattern; use f <pattern>"}
-		return nil
+// runSpoolCommand executes a parsed incl/f command against the bulk cache,
+// downloading the whole file first when the cache is not ready.
+func (m *Model) runSpoolCommand(ws *workspace, command string) tea.Cmd {
+	if ws.spoolBulkReady() {
+		return m.applySpoolCommand(ws, command)
 	}
-	total := len(ws.spoolContent)
-	if total == 0 {
-		ws.status = status{Level: statusWarn, Text: "no spool lines loaded"}
-		return nil
-	}
-	pattern := strings.ToUpper(ws.spoolFind)
-	selected := ws.spoolContentPage.selectedIndex()
-	for offset := 1; offset <= total; offset++ {
-		index := ((selected+offset)%total + total) % total
-		if !strings.Contains(strings.ToUpper(ws.spoolContent[index].Text), pattern) {
-			continue
-		}
-		ws.spoolContentPage.selectKey(strconv.FormatInt(ws.spoolContent[index].Number, 10))
-		text := fmt.Sprintf("line %d matches %q", ws.spoolContent[index].Number, ws.spoolFind)
-		if index <= selected {
-			text += " (wrapped)"
-		}
-		ws.status = status{Level: statusReady, Text: text}
-		return m.maybePrefetch(ws)
-	}
-	ws.status = status{Level: statusWarn, Text: fmt.Sprintf("%q not found in loaded lines", ws.spoolFind)}
-	return nil
-}
-
-// spoolFilteredMove steps the selection between matching lines while the
-// include filter is active; handled is false when the default selection
-// movement should run instead.
-func (m *Model) spoolFilteredMove(delta int) (tea.Cmd, bool) {
-	ws := m.ws()
-	if ws.screen != ScreenSpoolContent || ws.spoolInclude == "" {
-		return nil, false
-	}
-	indexes := spoolFilteredIndexes(ws.spoolContent, ws.spoolInclude)
-	if len(indexes) == 0 {
-		return nil, true
-	}
-	selected := ws.spoolContentPage.selectedIndex()
-	if delta > 0 {
-		for _, index := range indexes {
-			if index > selected {
-				ws.spoolContentPage.selectKey(strconv.FormatInt(ws.spoolContent[index].Number, 10))
-				return m.maybePrefetch(ws), true
-			}
-		}
-	} else {
-		for i := len(indexes) - 1; i >= 0; i-- {
-			if indexes[i] < selected {
-				ws.spoolContentPage.selectKey(strconv.FormatInt(ws.spoolContent[indexes[i]].Number, 10))
-				return m.maybePrefetch(ws), true
-			}
-		}
-	}
-	return nil, true
-}
-
-// spoolFilteredIndexes lists the indexes of lines matching the include
-// pattern, case-insensitively.
-func spoolFilteredIndexes(lines []spoolLine, pattern string) []int {
-	pattern = strings.ToUpper(pattern)
-	var indexes []int
-	for i, line := range lines {
-		if strings.Contains(strings.ToUpper(line.Text), pattern) {
-			indexes = append(indexes, i)
-		}
-	}
-	return indexes
+	return m.startSpoolBulk(ws, command)
 }
 
 // acceptSpoolLocation jumps the spool content viewer to a zero-based line
@@ -1571,7 +1518,7 @@ func (m *Model) acceptSpoolLocation() tea.Cmd {
 	}
 
 	ws.cancelBrowse()
-	ws.resetSpoolContentState()
+	ws.resetSpoolWindow()
 	return m.startSpoolContent(ws, ws.spoolContentPage.initialPlan(number))
 }
 
@@ -1826,6 +1773,8 @@ func (m *Model) refresh() tea.Cmd {
 		ws.spoolContent = nil
 		ws.spoolLongest = 0
 		ws.spoolContentPage.reset(m.visible, m.budget)
+		// The file may have grown or been purged; the bulk cache is stale.
+		ws.dropSpoolBulk()
 		return m.startSpoolContent(ws, plan)
 	}
 	return nil

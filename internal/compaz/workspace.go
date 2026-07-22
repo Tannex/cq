@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/Tannex/cq/internal/decode"
 	"github.com/Tannex/cq/internal/zosmf"
@@ -71,6 +72,19 @@ type workspace struct {
 	// command); spoolFind is the last f pattern, repeated by n.
 	spoolInclude string
 	spoolFind    string
+	// spoolBulk caches the whole spool file for the incl/f commands (the
+	// jobs-side counterpart of bulkRecordsPath), keyed by spoolBulkIdentity.
+	// spoolBulkScanned marks how far spoolFilterHits has been computed, so
+	// follow-mode appends are filtered incrementally instead of rescanning.
+	spoolBulk           []string
+	spoolBulkIdentity   string
+	spoolBulkTruncated  bool
+	spoolBulkScanned    int
+	spoolBulkGeneration uint64
+	spoolBulkCancel     context.CancelFunc
+	spoolPendingCommand string // incl/f command deferred until the download lands
+	spoolFilterHits     []int  // spoolBulk indexes matching spoolInclude
+	spoolFilterCursor   int    // selected position within spoolFilterHits
 	// spoolLongest mirrors rawLongest for the spool content viewer's
 	// horizontal pan.
 	spoolLongest     int
@@ -308,13 +322,69 @@ func (ws *workspace) resetMemberState() {
 	ws.resetRecordState()
 }
 
-func (ws *workspace) resetSpoolContentState() {
+// resetSpoolWindow clears only the pager's fetch window, leaving the bulk
+// cache and command state in place (find jumps re-anchor the window).
+func (ws *workspace) resetSpoolWindow() {
 	ws.spoolContent = nil
 	ws.spoolLongest = 0
 	ws.spoolContentPage.reset(ws.spoolContentPage.visible, ws.spoolContentPage.budget)
 	ws.horizontal = 0
+}
+
+func (ws *workspace) resetSpoolContentState() {
+	ws.resetSpoolWindow()
 	ws.spoolInclude = ""
 	ws.spoolFind = ""
+	ws.dropSpoolBulk()
+}
+
+func (ws *workspace) cancelSpoolBulk() {
+	if ws.spoolBulkCancel != nil {
+		ws.spoolBulkCancel()
+	}
+	ws.spoolBulkCancel = nil
+	ws.spoolBulkGeneration++
+}
+
+// dropSpoolBulk cancels any in-flight download and forgets the cache.
+func (ws *workspace) dropSpoolBulk() {
+	ws.cancelSpoolBulk()
+	ws.spoolBulk = nil
+	ws.spoolBulkIdentity = ""
+	ws.spoolBulkTruncated = false
+	ws.spoolBulkScanned = 0
+	ws.spoolPendingCommand = ""
+	ws.spoolFilterHits = nil
+	ws.spoolFilterCursor = 0
+}
+
+func (ws *workspace) spoolBulkReady() bool {
+	return ws.spoolBulk != nil && ws.spoolBulkIdentity == ws.spoolContentIdentity()
+}
+
+// setSpoolInclude replaces the filter and recomputes the hits from scratch.
+func (ws *workspace) setSpoolInclude(pattern string) {
+	ws.spoolInclude = pattern
+	ws.spoolFilterHits = nil
+	ws.spoolFilterCursor = 0
+	ws.spoolBulkScanned = 0
+	ws.refilterSpool()
+}
+
+// refilterSpool advances the incremental filter over lines appended to the
+// bulk cache since the last scan.
+func (ws *workspace) refilterSpool() {
+	if ws.spoolInclude == "" {
+		ws.spoolBulkScanned = len(ws.spoolBulk)
+		return
+	}
+	pattern := strings.ToUpper(ws.spoolInclude)
+	for i := ws.spoolBulkScanned; i < len(ws.spoolBulk); i++ {
+		if strings.Contains(strings.ToUpper(ws.spoolBulk[i]), pattern) {
+			ws.spoolFilterHits = append(ws.spoolFilterHits, i)
+		}
+	}
+	ws.spoolBulkScanned = len(ws.spoolBulk)
 }
 
 func (ws *workspace) resetSpoolFilesState() {
@@ -369,6 +439,7 @@ func (ws *workspace) cancelAll() {
 	ws.cancelBrowse()
 	ws.cancelOverlay()
 	ws.cancelDecode()
+	ws.cancelSpoolBulk()
 }
 
 func (ws *workspace) resizePagers(visible, budget int) {
