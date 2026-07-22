@@ -452,6 +452,9 @@ func (m *Model) titleLine() string {
 			screenName += " " + m.spoolFile.DDName
 		}
 		body = "spool content"
+		if m.spoolFollow {
+			body += " · following"
+		}
 	}
 	// Multi-profile sessions show the profile strip in the status line
 	// instead of a title chip.
@@ -1053,6 +1056,9 @@ func (m *Model) spoolContentView() string {
 	if m.spoolInclude != "" && m.spoolBulkReady() {
 		return m.spoolFilteredView()
 	}
+	if m.spoolFollow && m.spoolBulkReady() {
+		return m.spoolFollowView()
+	}
 	numberWidth := m.spoolLineNumberWidth()
 	header := consolePalette.header.Width(m.width).Render(fmt.Sprintf("  %-*s │ SPOOL CONTENT", numberWidth, "LINE"))
 	start, end, showEnd := endMarkerWindow(&m.spoolContentPage)
@@ -1144,6 +1150,55 @@ func (m *Model) spoolFilteredView() string {
 	}
 	model.StyleLineFunc = func(index int) lipgloss.Style {
 		if start+index == cursor {
+			return consolePalette.selected
+		}
+		return consolePalette.plain
+	}
+	return header + "\n" + model.View()
+}
+
+// spoolFollowView renders the tail of the bulk cache while follow mode is
+// on, pinned to the newest line as polls append. Mirrors spoolFilteredView's
+// bulk-index gutter; with an include filter active the filtered view renders
+// instead, itself pinned to the newest hit.
+func (m *Model) spoolFollowView() string {
+	numberWidth := 4
+	if len(m.spoolBulk) > 0 {
+		numberWidth = max(numberWidth, len(strconv.Itoa(len(m.spoolBulk)-1)))
+	}
+	title := "SPOOL CONTENT (following)"
+	if m.spoolBulkTruncated {
+		title += " — cache truncated"
+	}
+	header := consolePalette.header.Width(m.width).Render(fmt.Sprintf("  %-*s │ %s", numberWidth, "LINE", title))
+	height := max(1, m.visible)
+	if len(m.spoolBulk) == 0 {
+		empty := lipgloss.Place(m.width, height, lipgloss.Center, lipgloss.Center,
+			consolePalette.amber.Render("waiting for output…"))
+		return header + "\n" + empty
+	}
+
+	start := max(0, len(m.spoolBulk)-height)
+	window := m.spoolBulk[start:]
+	last := len(window) - 1
+	model := viewport.New(viewport.WithWidth(m.width), viewport.WithHeight(height))
+	model.SoftWrap = false
+	model.FillHeight = true
+	model.SetHorizontalStep(hScrollStep)
+	model.SetContentLines(window)
+	model.SetXOffset(m.horizontal * hScrollStep)
+	model.LeftGutterFunc = func(context viewport.GutterContext) string {
+		if context.Index < 0 || context.Index >= len(window) {
+			return strings.Repeat(" ", numberWidth+5)
+		}
+		marker := " "
+		if context.Index == last {
+			marker = ">"
+		}
+		return fmt.Sprintf("%s %0*d │ ", marker, numberWidth, start+context.Index)
+	}
+	model.StyleLineFunc = func(index int) lipgloss.Style {
+		if index == last {
 			return consolePalette.selected
 		}
 		return consolePalette.plain

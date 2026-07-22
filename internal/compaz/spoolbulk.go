@@ -185,6 +185,8 @@ func (m *Model) applySpoolCommand(ws *workspace, command string) tea.Cmd {
 			return nil
 		}
 		return m.spoolFindNext()
+	case "follow":
+		return m.startSpoolFollow(ws)
 	}
 	return nil
 }
@@ -198,6 +200,8 @@ func (m *Model) spoolFindNext() tea.Cmd {
 		ws.status = status{Level: statusWarn, Text: "no find pattern; use f <pattern>"}
 		return nil
 	}
+	// Find navigates; it cannot coexist with the tail-pinned follow view.
+	ws.stopSpoolFollow()
 	if !ws.spoolBulkReady() {
 		return m.startSpoolBulk(ws, "f "+ws.spoolFind)
 	}
