@@ -76,7 +76,10 @@ type workspace struct {
 	// jobs-side counterpart of bulkRecordsPath), keyed by spoolBulkIdentity.
 	// spoolBulkScanned marks how far spoolFilterHits has been computed, so
 	// follow-mode appends are filtered incrementally instead of rescanning.
-	spoolBulk           []string
+	spoolBulk []string
+	// spoolBulkUpper is spoolBulk uppercased once at download time so the
+	// case-insensitive incl/f scans do not re-fold the file per keystroke.
+	spoolBulkUpper      []string
 	spoolBulkIdentity   string
 	spoolBulkTruncated  bool
 	spoolBulkScanned    int
@@ -350,6 +353,7 @@ func (ws *workspace) cancelSpoolBulk() {
 func (ws *workspace) dropSpoolBulk() {
 	ws.cancelSpoolBulk()
 	ws.spoolBulk = nil
+	ws.spoolBulkUpper = nil
 	ws.spoolBulkIdentity = ""
 	ws.spoolBulkTruncated = false
 	ws.spoolBulkScanned = 0
@@ -380,7 +384,7 @@ func (ws *workspace) refilterSpool() {
 	}
 	pattern := strings.ToUpper(ws.spoolInclude)
 	for i := ws.spoolBulkScanned; i < len(ws.spoolBulk); i++ {
-		if strings.Contains(strings.ToUpper(ws.spoolBulk[i]), pattern) {
+		if strings.Contains(ws.spoolBulkUpper[i], pattern) {
 			ws.spoolFilterHits = append(ws.spoolFilterHits, i)
 		}
 	}

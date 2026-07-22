@@ -1475,8 +1475,18 @@ func (m *Model) acceptSpoolCommand() tea.Cmd {
 		return nil
 	case "incl":
 		if argument == "" {
+			// Carry the user's place out of the filtered view: land the pager
+			// on the line the filter cursor was resting on.
+			target := int64(-1)
+			if ws.spoolBulkReady() && len(ws.spoolFilterHits) > 0 {
+				cursor := max(0, min(ws.spoolFilterCursor, len(ws.spoolFilterHits)-1))
+				target = int64(ws.spoolFilterHits[cursor])
+			}
 			ws.setSpoolInclude("")
 			ws.status = status{Level: statusReady, Text: "include filter cleared"}
+			if target >= 0 {
+				return m.spoolJumpTo(target)
+			}
 			return nil
 		}
 		return m.runSpoolCommand(ws, "incl "+argument)
@@ -1512,6 +1522,9 @@ func (m *Model) acceptSpoolLocation() tea.Cmd {
 		return nil
 	}
 	m.locateInput.Blur()
+	// Locate navigates the whole file; a filtered view would hide the jump,
+	// so clear the include filter (keeping the bulk cache) first.
+	ws.setSpoolInclude("")
 	if ws.spoolContentPage.selectKey(strconv.FormatInt(number, 10)) {
 		ws.status = status{Level: statusReady, Text: fmt.Sprintf("located line %d", number)}
 		return m.maybePrefetch(ws)
@@ -1773,7 +1786,11 @@ func (m *Model) refresh() tea.Cmd {
 		ws.spoolContent = nil
 		ws.spoolLongest = 0
 		ws.spoolContentPage.reset(m.visible, m.budget)
-		// The file may have grown or been purged; the bulk cache is stale.
+		// The file may have grown or been purged; the bulk cache is stale,
+		// and with it the filter/find state derived from it — otherwise the
+		// INCL badge would keep claiming a filter that is no longer applied.
+		ws.spoolInclude = ""
+		ws.spoolFind = ""
 		ws.dropSpoolBulk()
 		return m.startSpoolContent(ws, plan)
 	}
@@ -1961,6 +1978,7 @@ func (m *Model) handleResize(width, height int) tea.Cmd {
 	m.locateInput.SetWidth(max(8, min(24, width-10)))
 	m.jobOwnerInput.SetWidth(max(8, min(24, width-10)))
 	m.jobFilterInput.SetWidth(max(8, min(24, width-10)))
+	m.spoolCmdInput.SetWidth(max(8, min(48, width-10)))
 	if m.mappingView != nil {
 		m.mappingView.setWidth(width)
 	}

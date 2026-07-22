@@ -696,13 +696,17 @@ func TestSpoolCommandInclFiltersViewToMatchingLines(t *testing.T) {
 		t.Fatalf("up cursor = %d, want 0", model.spoolFilterCursor)
 	}
 
-	// Bare incl clears the filter and the full view returns.
+	// Bare incl clears the filter, returns the full view, and lands the
+	// pager on the line the filter cursor was resting on.
 	runSpoolCommand(t, model, "incl")
 	if model.spoolInclude != "" {
 		t.Fatalf("spoolInclude not cleared: %q", model.spoolInclude)
 	}
 	if view := ansi.Strip(model.mainView()); !strings.Contains(view, "alpha") {
 		t.Fatalf("unfiltered view missing lines:\n%s", view)
+	}
+	if got := model.spoolContentPage.selectedIndex(); got != 2 {
+		t.Fatalf("selection after clearing filter = %d, want 2 (the cursor's line)", got)
 	}
 }
 

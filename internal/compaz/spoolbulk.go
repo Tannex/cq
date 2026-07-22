@@ -27,7 +27,6 @@ type spoolBulkResultMsg struct {
 	Generation uint64
 	Lines      []string
 	Truncated  bool
-	Command    string
 	Err        error
 }
 
@@ -50,7 +49,7 @@ func (m *Model) startSpoolBulk(ws *workspace, command string) tea.Cmd {
 	ws.status = status{Level: statusLoading, Text: fmt.Sprintf("downloading spool file %s", identity)}
 	streamer, canStream := ws.browser.(zosmf.SpoolStreamer)
 	return m.loadingCommand(func() tea.Msg {
-		msg := spoolBulkResultMsg{Profile: profile, Identity: identity, Generation: generation, Command: command}
+		msg := spoolBulkResultMsg{Profile: profile, Identity: identity, Generation: generation}
 		if canStream {
 			msg.Lines, msg.Truncated, msg.Err = streamSpoolBulk(ctx, streamer, jobName, jobID, fileID)
 		} else {
@@ -139,18 +138,28 @@ func (m *Model) handleSpoolBulkResult(ws *workspace, msg spoolBulkResultMsg) tea
 	}
 	ws.spoolBulkIdentity = msg.Identity
 	ws.spoolBulkTruncated = msg.Truncated
+	ws.spoolBulkUpper = upperLines(ws.spoolBulk)
 	ws.spoolBulkScanned = 0
 	ws.spoolFilterHits = nil
 	ws.spoolFilterCursor = 0
 	ws.refilterSpool()
-	if command == "" || ws != &m.workspace {
+	if command == "" {
 		return nil
 	}
 	return m.applySpoolCommand(ws, command)
 }
 
+func upperLines(lines []string) []string {
+	upper := make([]string, len(lines))
+	for i, line := range lines {
+		upper[i] = strings.ToUpper(line)
+	}
+	return upper
+}
+
 // applySpoolCommand executes an already-validated incl/f command against the
-// ready bulk cache.
+// ready bulk cache. Workspace state (filter, find pattern, status) applies
+// even when ws is a background profile; only the active workspace navigates.
 func (m *Model) applySpoolCommand(ws *workspace, command string) tea.Cmd {
 	verb, argument, _ := strings.Cut(command, " ")
 	argument = strings.TrimSpace(argument)
@@ -169,6 +178,9 @@ func (m *Model) applySpoolCommand(ws *workspace, command string) tea.Cmd {
 		return nil
 	case "f":
 		ws.spoolFind = argument
+		if ws != &m.workspace {
+			return nil
+		}
 		return m.spoolFindNext()
 	}
 	return nil
@@ -191,7 +203,7 @@ func (m *Model) spoolFindNext() tea.Cmd {
 		hits := ws.spoolFilterHits
 		for offset := 1; offset <= len(hits); offset++ {
 			position := (ws.spoolFilterCursor + offset) % len(hits)
-			if !strings.Contains(strings.ToUpper(ws.spoolBulk[hits[position]]), pattern) {
+			if !strings.Contains(ws.spoolBulkUpper[hits[position]], pattern) {
 				continue
 			}
 			wrapped := position <= ws.spoolFilterCursor
@@ -212,9 +224,15 @@ func (m *Model) spoolFindNext() tea.Cmd {
 	if index := ws.spoolContentPage.selectedIndex(); index >= 0 && index < len(ws.spoolContent) {
 		current = ws.spoolContent[index].Number
 	}
+	// A truncated cache can leave the live selection past the last cached
+	// line; clamp so the scan starts at the cache end instead of folding to
+	// an arbitrary early line.
+	if current >= int64(total) {
+		current = int64(total) - 1
+	}
 	for offset := int64(1); offset <= int64(total); offset++ {
-		number := ((current+offset)%int64(total) + int64(total)) % int64(total)
-		if !strings.Contains(strings.ToUpper(ws.spoolBulk[number]), pattern) {
+		number := (current + offset) % int64(total)
+		if !strings.Contains(ws.spoolBulkUpper[number], pattern) {
 			continue
 		}
 		ws.status = spoolFindStatus(ws, number, number <= current)
