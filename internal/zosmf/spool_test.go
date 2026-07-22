@@ -50,6 +50,34 @@ func TestOpenSpoolContentRejectsEmptyIdentifiers(t *testing.T) {
 	}
 }
 
+func TestReadJobStatusFetchesOneJobDocument(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/zosmf/restjobs/jobs/TESTJOB1/JOB00023" {
+			t.Errorf("path = %s", r.URL.Path)
+		}
+		_, _ = io.WriteString(w, `{"jobname":"TESTJOB1","jobid":"JOB00023","status":"OUTPUT","retcode":"CC 0000"}`)
+	}))
+	defer server.Close()
+
+	client := New(sessionForServer(t, server), nil)
+	job, err := client.ReadJobStatus(context.Background(), "testjob1", "job00023")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.Status != "OUTPUT" || job.ReturnCode != "CC 0000" || job.JobName != "TESTJOB1" {
+		t.Fatalf("job = %+v", job)
+	}
+}
+
+func TestReadJobStatusRejectsEmptyIdentifiers(t *testing.T) {
+	client := New(sessionForServer(t, httptest.NewServer(nil)), nil)
+	for _, tc := range []struct{ name, id string }{{"", "JOB00023"}, {"TESTJOB1", ""}} {
+		if _, err := client.ReadJobStatus(context.Background(), tc.name, tc.id); err == nil {
+			t.Fatalf("want error for %q/%q", tc.name, tc.id)
+		}
+	}
+}
+
 // followerBrowser stubs JobBrowser with a scripted ReadSpoolContent.
 type followerBrowser struct {
 	read     func(ReadSpoolContentRequest) (SpoolContentPage, error)

@@ -547,6 +547,16 @@ func demoJobs(owner string) []zosmf.Job {
 	return items
 }
 
+// ReadJobStatus serves the fixed demo job's status document, mirroring the
+// real client's not-found error for unknown jobs.
+func (d *demoBrowser) ReadJobStatus(_ context.Context, jobName, jobID string) (zosmf.Job, error) {
+	job, ok := demoJobByID(d.user, jobName, jobID)
+	if !ok {
+		return zosmf.Job{}, &zosmf.HTTPError{StatusCode: http.StatusNotFound, Resource: jobName + "/" + jobID, Message: "job not found"}
+	}
+	return job, nil
+}
+
 func demoJobByID(owner, jobName, jobID string) (zosmf.Job, bool) {
 	jobName = strings.ToUpper(strings.TrimSpace(jobName))
 	jobID = strings.ToUpper(strings.TrimSpace(jobID))

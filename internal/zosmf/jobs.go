@@ -340,6 +340,20 @@ func (z *Client) ReadSpoolContent(ctx context.Context, request ReadSpoolContentR
 // spoolContentPath validates one spool file's identifiers and builds its
 // records-endpoint path plus the resource label used in errors and logs.
 func spoolContentPath(jobName, jobID, fileID string) (path, resource string, err error) {
+	path, resource, err = jobPath(jobName, jobID)
+	if err != nil {
+		return "", "", err
+	}
+	fid := strings.ToUpper(strings.TrimSpace(fileID))
+	if fid == "" {
+		return "", "", &RequestError{Field: "spool file id", Message: "must not be empty"}
+	}
+	return path + "/files/" + url.PathEscape(fid) + "/records", resource + "/" + fid, nil
+}
+
+// jobPath validates one job's identifiers and builds its jobs-endpoint path
+// plus the resource label used in errors and logs.
+func jobPath(jobName, jobID string) (path, resource string, err error) {
 	name, err := normalizeJobFilterValue("job name", jobName)
 	if err != nil {
 		return "", "", err
@@ -354,13 +368,51 @@ func spoolContentPath(jobName, jobID, fileID string) (path, resource string, err
 	if id == "" {
 		return "", "", &RequestError{Field: "job ID", Message: "must not be empty"}
 	}
-	fid := strings.ToUpper(strings.TrimSpace(fileID))
-	if fid == "" {
-		return "", "", &RequestError{Field: "spool file id", Message: "must not be empty"}
+	return "/zosmf/restjobs/jobs/" + url.PathEscape(name) + "/" + url.PathEscape(id), name + "/" + id, nil
+}
+
+// JobStatusReader fetches one job's current status document. Deliberately
+// outside JobBrowser (same convention as SpoolStreamer): interactive
+// browsing lists jobs in bulk, and only callers re-checking a job they
+// already hold — e.g. follow mode deciding when the job has finished —
+// should reach for it.
+type JobStatusReader interface {
+	ReadJobStatus(ctx context.Context, jobName, jobID string) (Job, error)
+}
+
+var (
+	_ JobStatusReader = (*Client)(nil)
+	_ JobStatusReader = (*LazyClient)(nil)
+)
+
+// ReadJobStatus retrieves one job's status document.
+func (z *Client) ReadJobStatus(ctx context.Context, jobName, jobID string) (Job, error) {
+	if err := browserContextError(ctx); err != nil {
+		return Job{}, err
 	}
-	path = "/zosmf/restjobs/jobs/" + url.PathEscape(name) + "/" + url.PathEscape(id) +
-		"/files/" + url.PathEscape(fid) + "/records"
-	return path, name + "/" + id + "/" + fid, nil
+	path, resource, err := jobPath(jobName, jobID)
+	if err != nil {
+		return Job{}, err
+	}
+	req, err := z.newAPIRequest(ctx, http.MethodGet, path, nil, nil)
+	if err != nil {
+		return Job{}, err
+	}
+	res, err := z.doRequest(req, resource, http.StatusOK)
+	if err != nil {
+		return Job{}, err
+	}
+	defer res.Body.Close()
+	body, err := readBoundedBody(res.Body, maxJobListResponseBody, "job status response")
+	if err != nil {
+		return Job{}, err
+	}
+	var job Job
+	if err := json.Unmarshal(body, &job); err != nil {
+		return Job{}, &ProtocolError{Operation: "job status", Message: "malformed JSON"}
+	}
+	z.logf("z/OSMF job status %s: %s %s", resource, job.Status, job.ReturnCode)
+	return job, nil
 }
 
 // normalizeJobFilterValue trims and uppercases a jobs-API filter value
