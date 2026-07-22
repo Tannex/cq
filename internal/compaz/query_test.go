@@ -12,6 +12,7 @@ import (
 
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/Tannex/cq/internal/zosmf"
@@ -564,6 +565,36 @@ func TestQueryPlaceholderBuiltFromOverlayFields(t *testing.T) {
 	// Without an overlay the static fallback remains.
 	if got := examplePlaceholder(nil); got != `select(.FIELD == "VALUE") | .FIELD` {
 		t.Fatalf("fallback placeholder = %q", got)
+	}
+}
+
+func TestQueryInputWidthFitsInsideThePopupBox(t *testing.T) {
+	long := strings.Repeat("a", 200)
+	for _, width := range []int{52, 60, 76, 90, 120, 200} {
+		model, _ := queryModel(t, singleRecordPage(zosmf.Record{Number: 1, Data: []byte("ABC")}))
+		applyMessage(t, model, tea.WindowSizeMsg{Width: width, Height: 24})
+		openQuery(t, model)
+		model.query.input.SetValue(long)
+		model.query.input.CursorEnd()
+
+		innerWidth := queryPopupInnerWidth(width)
+		if got := lipgloss.Width(model.query.input.View()); got > innerWidth {
+			t.Fatalf("width=%d: input view width = %d, exceeds popup inner width %d (would be clipped, hiding the cursor)", width, got, innerWidth)
+		}
+	}
+}
+
+func TestQueryInputWindowRecomputesOnResize(t *testing.T) {
+	model, _ := queryModel(t, singleRecordPage(zosmf.Record{Number: 1, Data: []byte("ABC")}))
+	applyMessage(t, model, tea.WindowSizeMsg{Width: 200, Height: 24})
+	openQuery(t, model)
+	model.query.input.SetValue(strings.Repeat("a", 200))
+	model.query.input.CursorEnd()
+
+	applyMessage(t, model, tea.WindowSizeMsg{Width: 52, Height: 24})
+	innerWidth := queryPopupInnerWidth(52)
+	if got := lipgloss.Width(model.query.input.View()); got > innerWidth {
+		t.Fatalf("after shrinking to 52: input view width = %d, exceeds popup inner width %d (stale scroll window from the wider layout)", got, innerWidth)
 	}
 }
 
