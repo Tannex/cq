@@ -2,7 +2,9 @@ package compaz
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -32,7 +34,9 @@ func IsSpoolFollowTick(msg tea.Msg) bool {
 
 // spoolFollowResultMsg carries one poll's outcome. Lines are the file's
 // growth past the bulk cache; More reports a full batch, so an immediate
-// re-poll is likely to yield further lines.
+// re-poll is likely to yield further lines. After an idle poll the job's
+// status document is re-checked (when the session can): JobChecked carries
+// its result, JobGone reports the job no longer exists.
 type spoolFollowResultMsg struct {
 	Profile    string
 	Identity   string
@@ -40,6 +44,10 @@ type spoolFollowResultMsg struct {
 	Lines      []string
 	More       bool
 	Err        error
+	JobChecked bool
+	JobGone    bool
+	JobStatus  string
+	JobRC      string
 }
 
 // startSpoolFollow enters follow mode: the whole file is cached first (the
@@ -76,13 +84,50 @@ func (m *Model) pollSpoolFollow(ws *workspace) tea.Cmd {
 		return nil
 	}
 	profile, identity, generation := ws.profile, ws.spoolContentIdentity(), ws.spoolBulkGeneration
+	statusReader, _ := ws.browser.(zosmf.JobStatusReader)
+	jobName, jobID := ws.job.JobName, ws.job.JobID
 	ctx, cancel := context.WithTimeout(context.Background(), m.deps.Timeout)
 	ws.spoolFollowCancel = cancel
 	return func() tea.Msg {
-		lines, more, err := follower.Poll(ctx)
-		cancel()
-		return spoolFollowResultMsg{Profile: profile, Identity: identity, Generation: generation, Lines: lines, More: more, Err: err}
+		defer cancel()
+		msg := spoolFollowResultMsg{Profile: profile, Identity: identity, Generation: generation}
+		msg.Lines, msg.More, msg.Err = follower.Poll(ctx)
+		if msg.Err != nil || len(msg.Lines) > 0 || statusReader == nil {
+			return msg
+		}
+		// Idle cycle: re-check whether the job is still producing output at
+		// all. Errors other than "gone" are ignored — the next tick retries.
+		job, err := statusReader.ReadJobStatus(ctx, jobName, jobID)
+		switch {
+		case isJobGone(err):
+			msg.JobGone = true
+		case err == nil:
+			msg.JobChecked = true
+			msg.JobStatus, msg.JobRC = job.Status, job.ReturnCode
+			if jobFinished(job.Status) {
+				// The job may have flushed final lines between the empty
+				// poll and the status read; drain once more before the
+				// handler stops following.
+				if final, _, err := follower.Poll(ctx); err == nil {
+					msg.Lines = final
+				}
+			}
+		}
+		return msg
 	}
+}
+
+// jobFinished reports a status document that says the job will write no
+// further output. INPUT and ACTIVE keep following; unknown values do too,
+// conservatively.
+func jobFinished(jobStatus string) bool {
+	return strings.EqualFold(strings.TrimSpace(jobStatus), "OUTPUT")
+}
+
+// isJobGone reports the not-found a purged job produces.
+func isJobGone(err error) bool {
+	var httpErr *zosmf.HTTPError
+	return errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusNotFound
 }
 
 func (m *Model) handleSpoolFollowTick(ws *workspace, msg spoolFollowTickMsg) tea.Cmd {
@@ -102,8 +147,18 @@ func (m *Model) handleSpoolFollowResult(ws *workspace, msg spoolFollowResultMsg)
 	}
 	ws.spoolFollowCancel = nil
 	if msg.Err != nil {
+		if isJobGone(msg.Err) {
+			ws.stopSpoolFollow()
+			ws.status = status{Level: statusWarn, Text: "job no longer exists; follow stopped"}
+			return nil
+		}
 		ws.status = status{Level: statusWarn, Text: "follow poll failed: " + msg.Err.Error() + " (retrying)"}
 		return m.scheduleSpoolFollowTick(ws)
+	}
+	if msg.JobGone {
+		ws.stopSpoolFollow()
+		ws.status = status{Level: statusWarn, Text: "job no longer exists; follow stopped"}
+		return nil
 	}
 	for _, line := range msg.Lines {
 		ws.spoolBulkBytes += len(line) + 1
@@ -120,6 +175,23 @@ func (m *Model) handleSpoolFollowResult(ws *workspace, msg spoolFollowResultMsg)
 	// Tail behavior: the filtered view stays pinned to the newest hit.
 	if ws.spoolInclude != "" && len(ws.spoolFilterHits) > 0 {
 		ws.spoolFilterCursor = len(ws.spoolFilterHits) - 1
+	}
+	if msg.JobChecked {
+		// Fold the fresh status document into the job row the spool screens
+		// display, whether or not it ends the follow.
+		ws.job.Status = msg.JobStatus
+		if msg.JobRC != "" {
+			ws.job.ReturnCode = msg.JobRC
+		}
+		if jobFinished(msg.JobStatus) {
+			ws.stopSpoolFollow()
+			text := "job ended"
+			if msg.JobRC != "" {
+				text += " (" + msg.JobRC + ")"
+			}
+			ws.status = status{Level: statusReady, Text: text + " — follow stopped"}
+			return nil
+		}
 	}
 	ws.status = status{Level: statusReady, Text: spoolFollowStatus(ws)}
 	if msg.More {

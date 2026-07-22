@@ -581,3 +581,16 @@ func (l *LazyClient) ReadSpoolContent(ctx context.Context, request ReadSpoolCont
 	}
 	return client.ReadSpoolContent(ctx, request)
 }
+
+// ReadJobStatus lazily initializes the client and retrieves one job's
+// status document.
+func (l *LazyClient) ReadJobStatus(ctx context.Context, jobName, jobID string) (Job, error) {
+	if err := browserContextError(ctx); err != nil {
+		return Job{}, err
+	}
+	client, err := l.get()
+	if err != nil {
+		return Job{}, err
+	}
+	return client.ReadJobStatus(ctx, jobName, jobID)
+}
