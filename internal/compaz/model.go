@@ -440,6 +440,11 @@ func (m *Model) hasTabs() bool {
 	return len(m.profiles) > 1
 }
 
+func (m *Model) jobsAvailable() bool {
+	_, ok := m.browser.(zosmf.JobBrowser)
+	return ok
+}
+
 func (m *Model) activeProfile() string {
 	if m.active < 0 || m.active >= len(m.profiles) {
 		return ""
@@ -795,7 +800,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		Screen: ws.screen, Mode: ws.recordMode,
 		InputFocused: m.inputFocused(), DialogOpen: m.mappingView != nil,
 		DialogFormFocused: m.mappingView != nil && m.mappingView.form != nil,
-		ShowHelp:          m.showHelp, Tabs: m.hasTabs(),
+		ShowHelp:          m.showHelp, Tabs: m.hasTabs(), JobsAvailable: m.jobsAvailable(),
 		FavoritesOpen: m.favPopup != nil, FavoritesInput: m.favPopup != nil && m.favPopup.inputActive(),
 		EditorOpen: m.editor != nil, EditorConfirm: m.editor != nil && m.editor.confirmDiscard,
 		QueryOpen: m.query != nil,
@@ -1014,6 +1019,10 @@ func (m *Model) handleAction(selected action) tea.Cmd {
 		return m.startRecall()
 	case actionJobs:
 		return m.openJobs()
+	case actionNextView:
+		return m.switchView(1)
+	case actionPreviousView:
+		return m.switchView(-1)
 	case actionEdit:
 		return m.beginEdit()
 	case actionQuery:
@@ -1595,6 +1604,42 @@ func (m *Model) recordOpen(name string) {
 	if m.deps.Events != nil {
 		m.deps.Events.RecordOpen(strings.ToUpper(strings.TrimSpace(name)))
 	}
+}
+
+var topLevelViews = []Screen{ScreenDataSets, ScreenJobs}
+
+func (m *Model) switchView(delta int) tea.Cmd {
+	ws := m.ws()
+	current := ws.topLevelView()
+	index := 0
+	for i, screen := range topLevelViews {
+		if screen == current {
+			index = i
+			break
+		}
+	}
+	next := topLevelViews[((index+delta)%len(topLevelViews)+len(topLevelViews))%len(topLevelViews)]
+	if next == current {
+		return nil
+	}
+	if next == ScreenJobs && !m.jobsAvailable() {
+		ws.status = status{Level: statusWarn, Text: "this session cannot browse jobs"}
+		return nil
+	}
+	m.cancelSearch()
+	ws.cancelBrowse()
+	ws.cancelDecode()
+	switch next {
+	case ScreenDataSets:
+		ws.leaveJobsFamily()
+		ws.screen = ScreenDataSets
+		ws.statusForCount(len(ws.datasets), "data sets")
+	case ScreenJobs:
+		ws.leaveDataSetsFamily()
+		ws.screen = ScreenJobs
+		ws.statusForCount(len(ws.jobs), "jobs")
+	}
+	return m.ensureActivePage()
 }
 
 func (m *Model) navigateBack() tea.Cmd {

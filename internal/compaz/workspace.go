@@ -325,6 +325,29 @@ func (ws *workspace) resetJobsState() {
 	ws.resetSpoolFilesState()
 }
 
+func (ws *workspace) topLevelView() Screen {
+	switch ws.screen {
+	case ScreenJobs, ScreenSpoolFiles, ScreenSpoolContent:
+		return ScreenJobs
+	default:
+		return ScreenDataSets
+	}
+}
+
+func (ws *workspace) leaveDataSetsFamily() {
+	if ws.screen == ScreenRecords || ws.screen == ScreenMembers {
+		ws.resetMemberState()
+		ws.dataSet = zosmf.DataSet{}
+	}
+}
+
+func (ws *workspace) leaveJobsFamily() {
+	if ws.screen == ScreenSpoolFiles || ws.screen == ScreenSpoolContent {
+		ws.resetSpoolFilesState()
+		ws.job = zosmf.Job{}
+	}
+}
+
 func (ws *workspace) cancelSession() {
 	if ws.sessionCancel != nil {
 		ws.sessionCancel()

@@ -626,3 +626,154 @@ func TestJobsFavoritesPopupJumpAppliesOwnerAndPrefix(t *testing.T) {
 		t.Fatalf("touched = %#v", store.touched)
 	}
 }
+
+func TestSwitchViewJumpsBetweenDataSetsAndJobsWithoutRefetching(t *testing.T) {
+	browser := &fakeBrowser{
+		listDataSets: func(context.Context, zosmf.ListDataSetsRequest) (zosmf.DataSetPage, error) {
+			return zosmf.DataSetPage{Items: []zosmf.DataSet{{Name: "A.DATA", Organization: "PS"}}}, nil
+		},
+		listJobs: func(context.Context, zosmf.ListJobsRequest) (zosmf.JobPage, error) {
+			return zosmf.JobPage{Items: []zosmf.Job{{JobID: "JOB00001", JobName: "NIGHTBAT"}}}, nil
+		},
+	}
+	model := readyModel(t, Options{Prefix: "A*"}, browser, "IBMUSER", "", 90, 16)
+	if model.screen != ScreenDataSets || len(model.datasets) != 1 {
+		t.Fatalf("initial screen=%d datasets=%#v", model.screen, model.datasets)
+	}
+
+	executeCommand(t, model, model.handleAction(actionNextView))
+	if model.screen != ScreenJobs || len(model.jobs) != 1 {
+		t.Fatalf("after next view screen=%d jobs=%#v", model.screen, model.jobs)
+	}
+	jobRequests := len(browser.jobRequests)
+
+	executeCommand(t, model, model.handleAction(actionPreviousView))
+	if model.screen != ScreenDataSets {
+		t.Fatalf("after previous view screen=%d", model.screen)
+	}
+	dataSetRequests := len(browser.dataSetRequests)
+
+	executeCommand(t, model, model.handleAction(actionNextView))
+	if model.screen != ScreenJobs || len(browser.jobRequests) != jobRequests {
+		t.Fatalf("returning to jobs refetched: before=%d after=%d", jobRequests, len(browser.jobRequests))
+	}
+	executeCommand(t, model, model.handleAction(actionPreviousView))
+	if model.screen != ScreenDataSets || len(browser.dataSetRequests) != dataSetRequests {
+		t.Fatalf("returning to data sets refetched: before=%d after=%d", dataSetRequests, len(browser.dataSetRequests))
+	}
+}
+
+func TestSwitchViewShedsJobsDrillDownButKeepsJobsList(t *testing.T) {
+	browser := &fakeBrowser{
+		listJobs: func(context.Context, zosmf.ListJobsRequest) (zosmf.JobPage, error) {
+			return zosmf.JobPage{Items: []zosmf.Job{{JobID: "JOB00001", JobName: "NIGHTBAT"}}}, nil
+		},
+		listSpoolFiles: func(context.Context, string, string) ([]zosmf.SpoolFile, error) {
+			return []zosmf.SpoolFile{{ID: 2, DDName: "SYSPRINT"}}, nil
+		},
+		readSpoolContent: func(context.Context, zosmf.ReadSpoolContentRequest) (zosmf.SpoolContentPage, error) {
+			return zosmf.SpoolContentPage{Lines: []string{"X"}}, nil
+		},
+	}
+	model := readyModel(t, Options{}, browser, "IBMUSER", "", 90, 16)
+	executeCommand(t, model, model.handleAction(actionJobs))
+	executeCommand(t, model, model.openSelection())
+	model.spoolFilePage.move(1)
+	executeCommand(t, model, model.openSelection())
+	if model.screen != ScreenSpoolContent {
+		t.Fatalf("did not reach spool content, screen=%d", model.screen)
+	}
+
+	executeCommand(t, model, model.handleAction(actionPreviousView))
+	if model.screen != ScreenDataSets {
+		t.Fatalf("switch did not land on data sets: screen=%d", model.screen)
+	}
+
+	jobRequests := len(browser.jobRequests)
+	executeCommand(t, model, model.handleAction(actionNextView))
+	if model.screen != ScreenJobs {
+		t.Fatalf("switch back did not land on jobs: screen=%d", model.screen)
+	}
+	if len(browser.jobRequests) != jobRequests {
+		t.Fatalf("jobs list was refetched: before=%d after=%d", jobRequests, len(browser.jobRequests))
+	}
+	if len(model.jobs) != 1 {
+		t.Fatalf("jobs cache lost: %#v", model.jobs)
+	}
+	if len(model.spoolFiles) != 0 || len(model.spoolContent) != 0 {
+		t.Fatalf("drill-down state survived the tab switch: spoolFiles=%#v spoolContent=%#v", model.spoolFiles, model.spoolContent)
+	}
+}
+
+func TestSwitchViewShedsDataSetsDrillDownButKeepsDataSetsList(t *testing.T) {
+	browser := &fakeBrowser{
+		listDataSets: func(context.Context, zosmf.ListDataSetsRequest) (zosmf.DataSetPage, error) {
+			return zosmf.DataSetPage{Items: []zosmf.DataSet{{Name: "A.DATA", Organization: "PS"}}}, nil
+		},
+		readRecords: func(_ context.Context, request zosmf.ReadRecordsRequest) (zosmf.RecordPage, error) {
+			return zosmf.RecordPage{Records: []zosmf.Record{{Number: 1, Data: []byte("X")}}}, nil
+		},
+		listJobs: func(context.Context, zosmf.ListJobsRequest) (zosmf.JobPage, error) {
+			return zosmf.JobPage{}, nil
+		},
+	}
+	model := readyModel(t, Options{Prefix: "A*", Codepage: "latin1"}, browser, "IBMUSER", "", 90, 16)
+	executeCommand(t, model, model.openSelection())
+	if model.screen != ScreenRecords {
+		t.Fatalf("did not reach records, screen=%d", model.screen)
+	}
+
+	executeCommand(t, model, model.handleAction(actionNextView))
+	if model.screen != ScreenJobs {
+		t.Fatalf("switch did not land on jobs: screen=%d", model.screen)
+	}
+
+	dataSetRequests := len(browser.dataSetRequests)
+	executeCommand(t, model, model.handleAction(actionPreviousView))
+	if model.screen != ScreenDataSets {
+		t.Fatalf("switch back did not land on data sets: screen=%d", model.screen)
+	}
+	if len(browser.dataSetRequests) != dataSetRequests {
+		t.Fatalf("data set list was refetched: before=%d after=%d", dataSetRequests, len(browser.dataSetRequests))
+	}
+	if len(model.datasets) != 1 {
+		t.Fatalf("data set cache lost: %#v", model.datasets)
+	}
+	if len(model.records) != 0 {
+		t.Fatalf("record drill-down state survived the tab switch: %#v", model.records)
+	}
+}
+
+type jobIncapableBrowser struct{}
+
+func (jobIncapableBrowser) ListDataSets(context.Context, zosmf.ListDataSetsRequest) (zosmf.DataSetPage, error) {
+	return zosmf.DataSetPage{}, nil
+}
+func (jobIncapableBrowser) ListMembers(context.Context, zosmf.ListMembersRequest) (zosmf.MemberPage, error) {
+	return zosmf.MemberPage{}, nil
+}
+func (jobIncapableBrowser) ReadRecords(context.Context, zosmf.ReadRecordsRequest) (zosmf.RecordPage, error) {
+	return zosmf.RecordPage{}, nil
+}
+func (jobIncapableBrowser) FetchText(context.Context, string) ([]byte, error) { return nil, nil }
+func (jobIncapableBrowser) Encoding() (string, error)                         { return "", nil }
+
+func TestSwitchViewWarnsWhenJobsUnsupported(t *testing.T) {
+	model := readyModel(t, Options{Prefix: "A*"}, jobIncapableBrowser{}, "IBMUSER", "", 90, 16)
+	if model.jobsAvailable() {
+		t.Fatal("test requires a job-incapable browser")
+	}
+
+	if command := model.handleAction(actionNextView); command != nil {
+		t.Fatal("switching to jobs on an unsupported session dispatched a command")
+	}
+	if model.screen != ScreenDataSets {
+		t.Fatalf("screen changed despite no job support: %d", model.screen)
+	}
+	if model.status.Level != statusWarn || !strings.Contains(model.status.Text, "cannot browse jobs") {
+		t.Fatalf("status = %#v", model.status)
+	}
+	if strip := model.viewStrip(); strip != "" {
+		t.Fatalf("view strip rendered without job support: %q", strip)
+	}
+}

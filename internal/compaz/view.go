@@ -139,6 +139,25 @@ func (m *Model) chromeRule() string {
 	return consolePalette.muted.Render(strings.Repeat("─", max(0, m.width)))
 }
 
+func (m *Model) viewStrip() string {
+	if !m.jobsAvailable() {
+		return ""
+	}
+	accent := consolePalette.cyan.Bold(true).Inherit(consolePalette.navy)
+	muted := consolePalette.navy.Foreground(ayu.comment).Faint(true)
+	current := m.topLevelView()
+	labels := map[Screen]string{ScreenDataSets: "DATASETS", ScreenJobs: "JOBS"}
+	parts := make([]string, len(topLevelViews))
+	for i, screen := range topLevelViews {
+		if screen == current {
+			parts[i] = accent.Render(labels[screen])
+		} else {
+			parts[i] = muted.Render(labels[screen])
+		}
+	}
+	return strings.Join(parts, muted.Render("·"))
+}
+
 // profileStrip renders the profile switcher for the right edge of the status
 // line within the given width budget: active profile highlighted, others
 // dimmed, unloaded ones marked with a trailing dot. The active profile is
@@ -238,7 +257,7 @@ func scrollWindow(lines []string, offset, capacity int) []string {
 // Every line is rendered through the supplied styles so all cells carry the
 // caller's background instead of falling back to the terminal default.
 func (m *Model) helpContent(accent, body lipgloss.Style) []string {
-	ctx := keyContext{Screen: m.screen, Mode: m.recordMode, InputFocused: m.inputFocused(), DialogOpen: m.mappingView != nil, DialogFormFocused: m.mappingView != nil && m.mappingView.form != nil, Tabs: m.hasTabs()}
+	ctx := keyContext{Screen: m.screen, Mode: m.recordMode, InputFocused: m.inputFocused(), DialogOpen: m.mappingView != nil, DialogFormFocused: m.mappingView != nil && m.mappingView.form != nil, Tabs: m.hasTabs(), JobsAvailable: m.jobsAvailable()}
 	groups := m.keys.fullHelp(ctx, m.overlay != nil)
 	var lines []string
 	for i, group := range groups {
@@ -448,13 +467,18 @@ func (m *Model) titleLine() string {
 	if chip != "" {
 		chipText = " " + chip
 	}
-	baseWidth := 1 + lipgloss.Width(screenName) + lipgloss.Width(plainMiddle) + lipgloss.Width(chipText)
+	strip := m.viewStrip()
+	stripText := ""
+	if strip != "" {
+		stripText = strip + plain.Render("  ")
+	}
+	baseWidth := 1 + lipgloss.Width(stripText) + lipgloss.Width(screenName) + lipgloss.Width(plainMiddle) + lipgloss.Width(chipText)
 	gap := 0
 	if baseWidth < m.width {
 		gap = m.width - baseWidth
 	}
 
-	line := plain.Render(" ") + accent.Render(screenName) + plain.Render(plainMiddle)
+	line := plain.Render(" ") + stripText + accent.Render(screenName) + plain.Render(plainMiddle)
 	if gap > 0 {
 		line += plain.Render(strings.Repeat(" ", gap))
 	}
@@ -1329,7 +1353,7 @@ func (m *Model) helpLine() string {
 	ctx := keyContext{
 		Screen: m.screen, Mode: m.recordMode, InputFocused: m.inputFocused(),
 		DialogOpen: m.mappingView != nil, DialogFormFocused: m.mappingView != nil && m.mappingView.form != nil,
-		ShowHelp: m.showHelp, Tabs: m.hasTabs(),
+		ShowHelp: m.showHelp, Tabs: m.hasTabs(), JobsAvailable: m.jobsAvailable(),
 		FavoritesOpen: m.favPopup != nil, FavoritesInput: m.favPopup != nil && m.favPopup.inputActive(),
 		EditorOpen: m.editor != nil, EditorConfirm: m.editor != nil && m.editor.confirmDiscard,
 		QueryOpen: m.query != nil,
