@@ -12,6 +12,7 @@ import (
 
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/Tannex/cq/internal/zosmf"
@@ -240,20 +241,45 @@ func TestQueryResultCapStopsSearch(t *testing.T) {
 		zosmf.Record{Number: 2, Data: []byte("XYZ")},
 	))
 	openQuery(t, model)
+	model.query.resultCap = 500
 	runQueryExpr(t, model, "range(600) | tostring")
 
 	popup := model.query
 	if !popup.done || popup.running {
 		t.Fatalf("query not finished: done=%v running=%v", popup.done, popup.running)
 	}
-	if len(popup.lines) != queryResultCap {
-		t.Fatalf("retained lines = %d, want cap %d", len(popup.lines), queryResultCap)
+	if len(popup.lines) != 500 {
+		t.Fatalf("retained lines = %d, want cap 500", len(popup.lines))
 	}
 	if popup.matches != 600 {
 		t.Fatalf("matches = %d, want 600 (counted past the cap)", popup.matches)
 	}
 	if footer := model.queryFooter(); !strings.Contains(footer, "first 500 shown") {
 		t.Fatalf("footer missing cap note: %q", footer)
+	}
+}
+
+func TestQueryCopyIncludesAllResultsPastThePreviousDefaultCap(t *testing.T) {
+	model, _ := queryModel(t, singleRecordPage(
+		zosmf.Record{Number: 1, Data: []byte("ABC")},
+		zosmf.Record{Number: 2, Data: []byte("XYZ")},
+	))
+	openQuery(t, model)
+	runQueryExpr(t, model, "range(600) | tostring")
+
+	popup := model.query
+	if popup.matches != 600 || len(popup.lines) != 600 {
+		t.Fatalf("matches=%d retained=%d, want all 600 retained under the default cap", popup.matches, len(popup.lines))
+	}
+	if footer := model.queryFooter(); strings.Contains(footer, "shown") {
+		t.Fatalf("footer reported a cap that should not apply: %q", footer)
+	}
+
+	if cmd := applyMessage(t, model, tea.KeyPressMsg(tea.Key{Code: 'y', Mod: tea.ModCtrl})); cmd == nil {
+		t.Fatal("copy dispatched no clipboard command")
+	}
+	if !strings.Contains(popup.notice, "copied 600 lines") {
+		t.Fatalf("copy notice = %q, want all 600 lines copied", popup.notice)
 	}
 }
 
@@ -539,6 +565,36 @@ func TestQueryPlaceholderBuiltFromOverlayFields(t *testing.T) {
 	// Without an overlay the static fallback remains.
 	if got := examplePlaceholder(nil); got != `select(.FIELD == "VALUE") | .FIELD` {
 		t.Fatalf("fallback placeholder = %q", got)
+	}
+}
+
+func TestQueryInputWidthFitsInsideThePopupBox(t *testing.T) {
+	long := strings.Repeat("a", 200)
+	for _, width := range []int{52, 60, 76, 90, 120, 200} {
+		model, _ := queryModel(t, singleRecordPage(zosmf.Record{Number: 1, Data: []byte("ABC")}))
+		applyMessage(t, model, tea.WindowSizeMsg{Width: width, Height: 24})
+		openQuery(t, model)
+		model.query.input.SetValue(long)
+		model.query.input.CursorEnd()
+
+		innerWidth := queryPopupInnerWidth(width)
+		if got := lipgloss.Width(model.query.input.View()); got > innerWidth {
+			t.Fatalf("width=%d: input view width = %d, exceeds popup inner width %d (would be clipped, hiding the cursor)", width, got, innerWidth)
+		}
+	}
+}
+
+func TestQueryInputWindowRecomputesOnResize(t *testing.T) {
+	model, _ := queryModel(t, singleRecordPage(zosmf.Record{Number: 1, Data: []byte("ABC")}))
+	applyMessage(t, model, tea.WindowSizeMsg{Width: 200, Height: 24})
+	openQuery(t, model)
+	model.query.input.SetValue(strings.Repeat("a", 200))
+	model.query.input.CursorEnd()
+
+	applyMessage(t, model, tea.WindowSizeMsg{Width: 52, Height: 24})
+	innerWidth := queryPopupInnerWidth(52)
+	if got := lipgloss.Width(model.query.input.View()); got > innerWidth {
+		t.Fatalf("after shrinking to 52: input view width = %d, exceeds popup inner width %d (stale scroll window from the wider layout)", got, innerWidth)
 	}
 }
 

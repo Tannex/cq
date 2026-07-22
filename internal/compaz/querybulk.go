@@ -82,7 +82,7 @@ func (m *Model) handleQueryBulk(msg queryBulkMsg) tea.Cmd {
 		return nil
 	}
 	ws.setBulkRecords(msg.Path)
-	return evalQueryArrayFile(popup.ctx, popup.compiled, ws.overlay, msg.Path, ws.profile, popup.generation)
+	return evalQueryArrayFile(popup.ctx, popup.compiled, ws.overlay, msg.Path, ws.profile, popup.generation, popup.resultCap)
 }
 
 // readFrame reads one four-byte length-prefixed record. io.EOF marks a clean
@@ -108,7 +108,7 @@ func readFrame(r *bufio.Reader) ([]byte, error) {
 
 // evalQueryArrayFile decodes every frame of the downloaded record file and
 // runs the expression once with the whole data set as one JSON array.
-func evalQueryArrayFile(ctx context.Context, compiled *query.Query, ov *overlay, path, profile string, generation uint64) tea.Cmd {
+func evalQueryArrayFile(ctx context.Context, compiled *query.Query, ov *overlay, path, profile string, generation uint64, resultCap int) tea.Cmd {
 	return func() tea.Msg {
 		msg := queryEvalMsg{Profile: profile, Generation: generation}
 		file, err := os.Open(path)
@@ -137,7 +137,7 @@ func evalQueryArrayFile(ctx context.Context, compiled *query.Query, ov *overlay,
 				values = append(values, value)
 			}
 		}
-		runQueryArray(ctx, compiled, values, &msg)
+		runQueryArray(ctx, compiled, values, resultCap, &msg)
 		return msg
 	}
 }

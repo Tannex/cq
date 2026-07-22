@@ -18,9 +18,7 @@ import (
 	"github.com/Tannex/cq/internal/zosmf"
 )
 
-// queryResultCap bounds retained result lines; the result count keeps
-// running so a capped query still reports how much it produced.
-const queryResultCap = 500
+const queryResultCap = 1_000_000
 
 // queryPopup is the composited jq console opened from the records screen: a
 // single-line expression input over a scrollable results pane. A query always
@@ -28,8 +26,9 @@ const queryResultCap = 500
 // once into the workspace's bulk cache (reused across runs while the same
 // records are browsed) and the expression is evaluated in a single pass.
 type queryPopup struct {
-	input    textinput.Model
-	compiled *query.Query
+	input     textinput.Model
+	compiled  *query.Query
+	resultCap int
 
 	// fields are the overlay's flattened field paths offered by the
 	// ctrl+space completion; comp is the open completion list, nil otherwise.
@@ -111,15 +110,37 @@ func newQueryPopup(width int) *queryPopup {
 	styles.Cursor.Blink = false
 	input.SetStyles(styles)
 	popup := &queryPopup{
-		input: input,
-		spin:  newStatusSpinner(),
+		input:     input,
+		resultCap: queryResultCap,
+		spin:      newStatusSpinner(),
 	}
 	popup.setWidth(width)
 	return popup
 }
 
+// queryPopupWidth and queryPopupInnerWidth are the query popup's box and
+// content widths for a given terminal width, shared by overlayQuery and the
+// input sizing so the two can never disagree.
+func queryPopupWidth(width int) int {
+	return min(76, width-4)
+}
+
+func queryPopupInnerWidth(width int) int {
+	return queryPopupWidth(width) - 4
+}
+
 func (p *queryPopup) setWidth(width int) {
-	p.input.SetWidth(max(8, min(68, width-12)))
+	// The extra cell keeps the input inside the box when textinput renders a
+	// mid-text cursor, which occupies one cell beyond the configured width.
+	fieldWidth := queryPopupInnerWidth(width) - lipgloss.Width(p.input.Prompt) - 1
+	p.input.SetWidth(max(8, min(68, fieldWidth)))
+	p.refreshScrollWindow()
+}
+
+// refreshScrollWindow recomputes the input's horizontal-scroll window, which
+// SetWidth alone leaves stale until the next cursor movement.
+func (p *queryPopup) refreshScrollWindow() {
+	p.input.SetCursor(p.input.Position())
 }
 
 // stopSearch cancels any in-flight evaluation, freezes the elapsed clock, and
@@ -465,7 +486,7 @@ func (m *Model) runQuery() tea.Cmd {
 	popup.elapsed = 0
 	popup.ctx, popup.cancel = context.WithCancel(context.Background())
 	if path := ws.bulkRecords(); path != "" {
-		return tea.Batch(popup.spin.Tick, evalQueryArrayFile(popup.ctx, compiled, ws.overlay, path, ws.profile, popup.generation))
+		return tea.Batch(popup.spin.Tick, evalQueryArrayFile(popup.ctx, compiled, ws.overlay, path, ws.profile, popup.generation, popup.resultCap))
 	}
 	streamer, ok := ws.browser.(zosmf.RecordStreamer)
 	if !ok {
@@ -512,10 +533,10 @@ func decodeQueryValue(ov *overlay, data []byte, msg *queryEvalMsg) (any, bool) {
 // loop and deliberately has no time budget: the popup context cancels it on
 // esc, close, and quit, which is the only bound a long-running expression
 // needs.
-func runQueryArray(ctx context.Context, compiled *query.Query, values []any, msg *queryEvalMsg) {
+func runQueryArray(ctx context.Context, compiled *query.Query, values []any, resultCap int, msg *queryEvalMsg) {
 	err := compiled.RunContext(ctx, values, func(out any) error {
 		msg.Matches++
-		if len(msg.Lines) < queryResultCap {
+		if len(msg.Lines) < resultCap {
 			msg.Lines = append(msg.Lines, query.Marshal(out))
 		}
 		return nil
@@ -544,7 +565,7 @@ func (m *Model) handleQueryEval(msg queryEvalMsg) tea.Cmd {
 	if msg.LastError != "" {
 		popup.lastErr = msg.LastError
 	}
-	if room := queryResultCap - len(popup.lines); room > 0 {
+	if room := popup.resultCap - len(popup.lines); room > 0 {
 		popup.lines = append(popup.lines, msg.Lines[:min(room, len(msg.Lines))]...)
 	}
 	popup.stopSearch()
@@ -708,7 +729,7 @@ func (m *Model) queryPanel() string {
 // anchors below the table header row, so the column names the expression
 // refers to stay readable while typing.
 func (m *Model) overlayQuery(background string) string {
-	popupWidth := min(76, m.width-4)
+	popupWidth := queryPopupWidth(m.width)
 	// Rows above the popup: title, search, rule, and the table header line;
 	// the status and help lines stay visible below.
 	top := 4
@@ -722,7 +743,7 @@ func (m *Model) overlayQuery(background string) string {
 		return background
 	}
 
-	innerWidth := popupWidth - 4
+	innerWidth := queryPopupInnerWidth(m.width)
 	contentHeight := popupHeight - 4
 
 	fill := consolePalette.popup.Width(innerWidth)
