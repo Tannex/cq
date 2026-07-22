@@ -107,13 +107,13 @@ func TestJobsOwnerFilterEditableViaTabFromPrefix(t *testing.T) {
 		t.Fatalf("owner field prefill = %q, want IBMUSER", model.jobOwnerInput.Value())
 	}
 
-	executeCommand(t, model, model.moveJobFilterFocus(1))
+	executeCommand(t, model, model.moveJobFilterFocus())
 	if !model.jobOwnerInput.Focused() || model.jobFilterInput.Focused() {
 		t.Fatal("tab did not move focus from prefix to owner")
 	}
 	model.jobOwnerInput.SetValue("OTHERUSR")
 
-	executeCommand(t, model, model.moveJobFilterFocus(-1))
+	executeCommand(t, model, model.moveJobFilterFocus())
 	if !model.jobFilterInput.Focused() || model.jobOwnerInput.Focused() {
 		t.Fatal("shift+tab did not move focus back to prefix")
 	}
@@ -145,7 +145,7 @@ func TestJobsOwnerFilterEmptyResetsToSessionUser(t *testing.T) {
 	model.jobOwner = "OTHERUSR"
 
 	executeCommand(t, model, model.handleAction(actionSearch))
-	executeCommand(t, model, model.moveJobFilterFocus(1))
+	executeCommand(t, model, model.moveJobFilterFocus())
 	model.jobOwnerInput.SetValue("")
 	executeCommand(t, model, model.acceptSearch())
 

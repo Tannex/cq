@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"strings"
 	"sync"
 
@@ -60,8 +59,7 @@ func (r *Resolver) FetchPrimary(ctx context.Context, dsn string) (string, error)
 	if err == nil {
 		return string(text), nil
 	}
-	var httpErr *zosmf.HTTPError
-	if !errors.As(err, &httpErr) || httpErr.StatusCode != http.StatusNotFound {
+	if !zosmf.IsNotFound(err) {
 		return "", err
 	}
 	member, ok := fallbackMember(dsn)
@@ -81,8 +79,7 @@ func (r *Resolver) FetchPrimary(ctx context.Context, dsn string) (string, error)
 // member-sized name with no qualifiers.
 func fallbackMember(dsn string) (string, bool) {
 	dsn = strings.ToUpper(strings.TrimSpace(dsn))
-	if open := strings.IndexByte(dsn, '('); open >= 0 && strings.HasSuffix(dsn, ")") {
-		member := dsn[open+1 : len(dsn)-1]
+	if _, member, found := zosmf.SplitMemberTarget(dsn); found {
 		return member, validMemberName(member)
 	}
 	if !strings.Contains(dsn, ".") && validMemberName(dsn) {

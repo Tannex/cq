@@ -229,21 +229,28 @@ func (ws *workspace) acceptBrowse(meta requestMeta, budget int, screen Screen) b
 	if meta.Budget != budget || meta.Screen != screen {
 		return false
 	}
-	switch meta.Screen {
+	current, ok := ws.identityFor(meta.Screen)
+	return ok && meta.Identity == current
+}
+
+// identityFor is the current identity of a browse screen's target — the value
+// stamped on new requests and matched by the stale-result check.
+func (ws *workspace) identityFor(screen Screen) (string, bool) {
+	switch screen {
 	case ScreenDataSets:
-		return meta.Identity == ws.prefix
+		return ws.prefix, true
 	case ScreenMembers:
-		return meta.Identity == ws.memberIdentity()
+		return ws.memberIdentity(), true
 	case ScreenRecords:
-		return meta.Identity == ws.recordIdentity()
+		return ws.recordIdentity(), true
 	case ScreenJobs:
-		return meta.Identity == ws.jobIdentity()
+		return ws.jobIdentity(), true
 	case ScreenSpoolFiles:
-		return meta.Identity == ws.spoolFileListIdentity()
+		return ws.spoolFileListIdentity(), true
 	case ScreenSpoolContent:
-		return meta.Identity == ws.spoolContentIdentity()
+		return ws.spoolContentIdentity(), true
 	default:
-		return false
+		return "", false
 	}
 }
 
@@ -528,11 +535,4 @@ func (ws *workspace) statusForCount(count int, noun string) {
 		return
 	}
 	ws.status = status{Level: statusReady}
-}
-
-func (ws *workspace) recordRange() (int64, int64) {
-	if len(ws.records) == 0 {
-		return 0, 0
-	}
-	return ws.records[0].Record.Number, ws.records[len(ws.records)-1].Record.Number
 }

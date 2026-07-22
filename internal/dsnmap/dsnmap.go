@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -237,7 +238,7 @@ func (s *Store) Remove(pattern string) (bool, error) {
 	pattern = NormalizePattern(pattern)
 	for i, existing := range s.mappings {
 		if existing.Pattern == pattern {
-			s.mappings = append(s.mappings[:i], s.mappings[i+1:]...)
+			s.mappings = slices.Delete(s.mappings, i, i+1)
 			return true, s.save()
 		}
 	}

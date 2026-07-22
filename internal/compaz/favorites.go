@@ -361,20 +361,8 @@ func (m *Model) jumpToDataSetFavorite() tea.Cmd {
 
 	ws := m.ws()
 	m.cancelSearch()
-	ws.cancelBrowse()
-	ws.cancelDecode()
 	ws.screen = ScreenDataSets
-	ws.prefix = entry.Pattern
-	m.prefixInput.SetValue(entry.Pattern)
-	ws.datasets = nil
-	ws.datasetTotal = nil
-	ws.dataSet = zosmf.DataSet{}
-	ws.resetMemberState()
-	ws.datasetPage.reset(m.visible, m.budget)
-	if m.budget <= 0 {
-		return nil
-	}
-	return m.startDataSets(ws, ws.datasetPage.initialPlan(""))
+	return m.applyPrefix(ws, entry.Pattern)
 }
 
 // jumpToJobFavorite applies the selected owner/prefix bookmark to the jobs
@@ -402,15 +390,8 @@ func (m *Model) jumpToJobFavorite() tea.Cmd {
 		return nil
 	}
 	m.cancelSearch()
-	ws.cancelBrowse()
 	ws.screen = ScreenJobs
-	ws.jobOwner = owner
-	ws.jobPrefix = prefix
-	ws.resetJobsState()
-	if m.budget <= 0 {
-		return nil
-	}
-	return m.startJobs(ws, ws.jobPage.initialPlan(""))
+	return m.applyJobFilter(ws, owner, prefix)
 }
 
 // openFavorite opens an exact data set favorite directly: the jump fetch

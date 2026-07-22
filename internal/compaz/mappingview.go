@@ -29,6 +29,57 @@ type mappingView struct {
 	note     string
 }
 
+// handleMappingKey owns key dispatch while the mapping view is open,
+// mirroring the editor/favorites/query popups' dedicated handlers.
+func (m *Model) handleMappingKey(ws *workspace, msg tea.KeyPressMsg, selectedAction action) tea.Cmd {
+	view := m.mappingView
+	if view.form != nil {
+		switch selectedAction {
+		case actionAccept:
+			return m.submitMappingForm(ws)
+		case actionCancel:
+			view.form = nil
+			if len(view.entries) == 0 {
+				m.mappingView = nil
+			}
+			return nil
+		case actionNextField:
+			return view.form.moveFocus(1)
+		case actionPreviousField:
+			return view.form.moveFocus(-1)
+		default:
+			return view.form.update(msg)
+		}
+	}
+	switch selectedAction {
+	case actionUp:
+		view.move(-1)
+		return nil
+	case actionDown:
+		view.move(1)
+		return nil
+	case actionAccept:
+		return m.applySelectedMapping(ws)
+	case actionMappingAdd:
+		view.openForm(CopybookSource{}, view.target, false)
+		view.setWidth(m.width)
+		return nil
+	case actionMappingEdit:
+		if entry := view.selectedEntry(); entry != nil {
+			view.openForm(mappingSource(entry.Mapping), entry.Mapping.Pattern, true)
+			view.setWidth(m.width)
+		}
+		return nil
+	case actionMappingRemove:
+		return m.removeSelectedMapping(ws)
+	case actionCancel:
+		m.mappingView = nil
+		return nil
+	default:
+		return nil
+	}
+}
+
 // mappingForm edits one mapping. The quick add form exposes only the copybook
 // DSN and the pattern; editing an existing entry additionally exposes the
 // 01-level record name as an advanced field.
@@ -62,7 +113,7 @@ func newMappingForm(source CopybookSource, pattern string, editing bool) *mappin
 		record:   newInput("RECORD   ", "optional 01-level record", 64),
 		editing:  editing,
 	}
-	form.copybook.SetValue(sourceDisplay(source))
+	form.copybook.SetValue(source.label())
 	form.pattern.SetValue(pattern)
 	form.record.SetValue(source.Record)
 	form.originalLocal = strings.TrimSpace(source.Local)
@@ -71,15 +122,6 @@ func newMappingForm(source CopybookSource, pattern string, editing bool) *mappin
 	}
 	form.focusAt(0)
 	return form
-}
-
-// sourceDisplay is the single-field rendering of a copybook source: the DSN,
-// or the local path for mappings created outside the TUI.
-func sourceDisplay(source CopybookSource) string {
-	if local := strings.TrimSpace(source.Local); local != "" {
-		return local
-	}
-	return strings.ToUpper(strings.TrimSpace(source.DSN))
 }
 
 // formSource classifies the copybook input: an untouched prefill of a

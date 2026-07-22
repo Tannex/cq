@@ -48,6 +48,13 @@ func IsConflict(err error) bool {
 	return errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusPreconditionFailed
 }
 
+// IsNotFound reports whether err is an HTTP 404, meaning the requested
+// resource does not exist on the host (a purged job, a missing data set).
+func IsNotFound(err error) bool {
+	var httpErr *HTTPError
+	return errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusNotFound
+}
+
 // ReadText retrieves a data set or member in text mode and captures its ETag.
 func (z *Client) ReadText(ctx context.Context, dsn string) (TextContent, error) {
 	if err := browserContextError(ctx); err != nil {
@@ -101,7 +108,9 @@ func (z *Client) WriteText(ctx context.Context, request WriteTextRequest) (strin
 	return res.Header.Get("Etag"), nil
 }
 
-func splitMemberTarget(value string) (dataSet, member string, found bool) {
+// SplitMemberTarget splits a DSN(MEMBER) reference into its parts. Values
+// without a member return trimmed as the data set with found false.
+func SplitMemberTarget(value string) (dataSet, member string, found bool) {
 	trimmed := strings.TrimSpace(value)
 	open := strings.IndexByte(trimmed, '(')
 	if open < 0 || !strings.HasSuffix(trimmed, ")") {
@@ -113,7 +122,7 @@ func splitMemberTarget(value string) (dataSet, member string, found bool) {
 // normalizeWriteTarget accepts DSN or DSN(MEMBER) forms, which the browse
 // normalizers reject because they treat parentheses as invalid characters.
 func normalizeWriteTarget(value string) (string, error) {
-	target, member, found := splitMemberTarget(value)
+	target, member, found := SplitMemberTarget(value)
 	dataSet, err := normalizeDataSetName(target)
 	if err != nil {
 		return "", err

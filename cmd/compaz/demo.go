@@ -93,17 +93,11 @@ func (d *demoBrowser) ReadRecords(ctx context.Context, request zosmf.ReadRecords
 		return zosmf.RecordPage{}, err
 	}
 	all := demoRecords(request.DataSet, request.Member)
-	start := request.Start
-	if start < 0 {
-		start = 0
-	}
+	start := max(request.Start, 0)
 	if start >= int64(len(all)) {
 		return zosmf.RecordPage{Records: []zosmf.Record{}, Start: start}, nil
 	}
-	end := start + int64(request.MaxItems)
-	if end > int64(len(all)) {
-		end = int64(len(all))
-	}
+	end := min(start+int64(request.MaxItems), int64(len(all)))
 	records := all[start:end]
 	return zosmf.RecordPage{
 		Records:      records,
@@ -199,17 +193,11 @@ func (d *demoBrowser) ReadSpoolContent(ctx context.Context, request zosmf.ReadSp
 		}
 	}
 	lines := demoSpoolLines(job, ddName)
-	start := request.Start
-	if start < 0 {
-		start = 0
-	}
+	start := max(request.Start, 0)
 	if start >= int64(len(lines)) {
 		return zosmf.SpoolContentPage{Start: start}, nil
 	}
-	end := start + int64(request.MaxItems)
-	if end > int64(len(lines)) {
-		end = int64(len(lines))
-	}
+	end := min(start+int64(request.MaxItems), int64(len(lines)))
 	return zosmf.SpoolContentPage{
 		Lines: lines[start:end], Start: start, MoreRows: end < int64(len(lines)),
 	}, nil
@@ -235,12 +223,7 @@ func demoBaseText(target string) string {
 }
 
 func splitDemoTarget(target string) (dataSet, member string, found bool) {
-	trimmed := strings.ToUpper(strings.TrimSpace(target))
-	open := strings.IndexByte(trimmed, '(')
-	if open < 0 || !strings.HasSuffix(trimmed, ")") {
-		return trimmed, "", false
-	}
-	return trimmed[:open], trimmed[open+1 : len(trimmed)-1], true
+	return zosmf.SplitMemberTarget(strings.ToUpper(strings.TrimSpace(target)))
 }
 
 func demoETag(target string) string {
@@ -354,10 +337,7 @@ func demoMembers(dataSet string) []zosmf.Member {
 	}
 	hash := demoHash(dataSet)
 	nameList := demoMemberNames[hash%len(demoMemberNames)]
-	count := 8 + (hash % 5) // 8..12 members
-	if count > len(nameList) {
-		count = len(nameList)
-	}
+	count := min(8+(hash%5), len(nameList)) // 8..12 members
 	members := make([]zosmf.Member, count)
 	for i := 0; i < count; i++ {
 		members[i] = zosmf.Member{
@@ -668,11 +648,7 @@ func matchJobPattern(name, pattern string) bool {
 }
 
 func demoName(index int) string {
-	name := demoNames[index%len(demoNames)]
-	if len(name) >= 20 {
-		return name[:20]
-	}
-	return name + strings.Repeat(" ", 20-len(name))
+	return fmt.Sprintf("%-20.20s", demoNames[index%len(demoNames)])
 }
 
 // demoCopybook mixes field kinds (zoned numeric, text, numeric-edited) so the
@@ -730,10 +706,7 @@ func paginate[T any](items []T, start string, maxItems int, name func(T) string)
 	if idx >= len(items) {
 		return nil, false
 	}
-	end := idx + maxItems
-	if end > len(items) {
-		end = len(items)
-	}
+	end := min(idx+maxItems, len(items))
 	return items[idx:end], end < len(items)
 }
 

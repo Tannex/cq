@@ -1,6 +1,7 @@
 package copybook
 
 import (
+	"fmt"
 	"strings"
 )
 
@@ -12,6 +13,20 @@ const (
 	FormatFixed               // cols 1-6 sequence, col 7 indicator, 8-72 code
 	FormatFree                // whole line is code, *> comments
 )
+
+// ParseFormat maps a user-supplied format name to a Format. An empty value
+// means auto; matching is case-insensitive.
+func ParseFormat(value string) (Format, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "auto":
+		return FormatAuto, nil
+	case "fixed":
+		return FormatFixed, nil
+	case "free":
+		return FormatFree, nil
+	}
+	return FormatAuto, fmt.Errorf("unknown copybook format %q (want auto, fixed, or free)", value)
+}
 
 type token struct {
 	text string // uppercased except literals, which keep quotes and case
@@ -68,11 +83,7 @@ func codeLines(src string, f Format) []struct {
 			if ind == '*' || ind == '/' || ind == '$' {
 				continue // comment or directive line
 			}
-			end := len(ln)
-			if end > 72 {
-				end = 72
-			}
-			code = ln[7:end]
+			code = ln[7:min(len(ln), 72)]
 			if ind == '-' {
 				// Continuation: rare in copybooks; join to previous line.
 				if n := len(out); n > 0 {
