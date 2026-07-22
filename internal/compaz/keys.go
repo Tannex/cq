@@ -82,6 +82,8 @@ const (
 	actionNextProfile
 	actionPreviousProfile
 	actionJobs
+	actionSpoolCommand
+	actionFindNext
 )
 
 type keyContext struct {
@@ -149,6 +151,8 @@ type KeyMap struct {
 	DiscardEdit     key.Binding
 	NextProfile     key.Binding
 	PreviousProfile key.Binding
+	SpoolCommand    key.Binding
+	FindNext        key.Binding
 }
 
 func DefaultKeyMap() KeyMap {
@@ -202,6 +206,8 @@ func DefaultKeyMap() KeyMap {
 		DiscardEdit:     key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "discard changes")),
 		NextProfile:     key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next profile")),
 		PreviousProfile: key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("shift+tab", "previous profile")),
+		SpoolCommand:    key.NewBinding(key.WithKeys(":"), key.WithHelp(":", "command")),
+		FindNext:        key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "find next")),
 	}
 }
 
@@ -400,6 +406,10 @@ func (k KeyMap) actionFor(msg tea.KeyPressMsg, ctx keyContext) action {
 		return actionEdit
 	case key.Matches(msg, k.Query) && ctx.Screen == ScreenRecords:
 		return actionQuery
+	case key.Matches(msg, k.SpoolCommand) && ctx.Screen == ScreenSpoolContent:
+		return actionSpoolCommand
+	case key.Matches(msg, k.FindNext) && ctx.Screen == ScreenSpoolContent:
+		return actionFindNext
 	case key.Matches(msg, k.Copybook) && ctx.Screen == ScreenRecords:
 		return actionCopybook
 	case key.Matches(msg, k.ClearOverlay) && ctx.Screen == ScreenRecords:
@@ -480,7 +490,7 @@ func (k KeyMap) shortHelp(ctx keyContext, overlay bool) []key.Binding {
 	case ScreenJobs:
 		bindings = append(bindings, k.Search, k.ToggleFavorite, k.Favorites)
 	case ScreenSpoolContent:
-		bindings = append(bindings, k.Locate, k.WideLeft, k.WideRight)
+		bindings = append(bindings, k.Locate, k.SpoolCommand, k.FindNext, k.WideLeft, k.WideRight)
 	}
 	if ctx.Tabs {
 		bindings = append(bindings, k.NextProfile, k.PreviousProfile)
@@ -517,7 +527,7 @@ func (k KeyMap) fullHelp(ctx keyContext, overlay bool) []helpGroup {
 	case ScreenJobs:
 		actions = append(actions, k.Search, k.ToggleFavorite, k.Favorites)
 	case ScreenSpoolContent:
-		actions = append(actions, k.Locate, k.WideLeft, k.WideRight)
+		actions = append(actions, k.Locate, k.SpoolCommand, k.FindNext, k.WideLeft, k.WideRight)
 	}
 	general := []key.Binding{k.Help, k.Quit}
 	if ctx.Tabs {

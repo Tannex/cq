@@ -295,6 +295,7 @@ type Model struct {
 	locateInput    textinput.Model
 	jobOwnerInput  textinput.Model
 	jobFilterInput textinput.Model
+	spoolCmdInput  textinput.Model
 	mappingView    *mappingView
 	favPopup       *favoritesPopup
 	editor         *editorState
@@ -392,6 +393,14 @@ func NewModel(options Options, deps Dependencies) (*Model, error) {
 	jobFilterStyles := jobFilterInput.Styles()
 	jobFilterStyles.Cursor.Blink = false
 	jobFilterInput.SetStyles(jobFilterStyles)
+	spoolCmdInput := textinput.New()
+	spoolCmdInput.Prompt = ":  "
+	spoolCmdInput.Placeholder = "incl <pattern> | f <pattern>"
+	spoolCmdInput.CharLimit = 80
+	spoolCmdInput.SetWidth(48)
+	spoolCmdStyles := spoolCmdInput.Styles()
+	spoolCmdStyles.Cursor.Blink = false
+	spoolCmdInput.SetStyles(spoolCmdStyles)
 
 	ws := newWorkspace("")
 	m := &Model{
@@ -406,6 +415,7 @@ func NewModel(options Options, deps Dependencies) (*Model, error) {
 		locateInput:    locateInput,
 		jobOwnerInput:  jobOwnerInput,
 		jobFilterInput: jobFilterInput,
+		spoolCmdInput:  spoolCmdInput,
 		profiles:       []string{""},
 	}
 	m.workspaces = []*workspace{&m.workspace}
@@ -980,8 +990,14 @@ func (m *Model) handleAction(selected action) tea.Cmd {
 			return m.jobFilterInput.Focus()
 		}
 	case actionUp:
+		if cmd, handled := m.spoolFilteredMove(-1); handled {
+			return cmd
+		}
 		return m.moveSelection(-1)
 	case actionDown:
+		if cmd, handled := m.spoolFilteredMove(1); handled {
+			return cmd
+		}
 		return m.moveSelection(1)
 	case actionPageUp:
 		if m.scrollJSON(-max(1, m.visible)) {
@@ -1018,6 +1034,11 @@ func (m *Model) handleAction(selected action) tea.Cmd {
 		return m.beginEdit()
 	case actionQuery:
 		return m.openQueryPopup()
+	case actionSpoolCommand:
+		m.spoolCmdInput.SetValue("")
+		return m.spoolCmdInput.Focus()
+	case actionFindNext:
+		return m.spoolFindNext()
 	case actionCopybook:
 		m.openMappingView(ws)
 		return nil
@@ -1320,7 +1341,7 @@ func mappingSource(mapping dsnmap.Mapping) CopybookSource {
 }
 
 func (m *Model) focusedInput() *textinput.Model {
-	for _, input := range []*textinput.Model{&m.prefixInput, &m.memberInput, &m.locateInput, &m.jobOwnerInput, &m.jobFilterInput} {
+	for _, input := range []*textinput.Model{&m.prefixInput, &m.memberInput, &m.locateInput, &m.jobOwnerInput, &m.jobFilterInput, &m.spoolCmdInput} {
 		if input.Focused() {
 			return input
 		}
@@ -1334,6 +1355,9 @@ func (m *Model) inputFocused() bool {
 
 func (m *Model) acceptSearch() tea.Cmd {
 	ws := m.ws()
+	if ws.screen == ScreenSpoolContent && m.spoolCmdInput.Focused() {
+		return m.acceptSpoolCommand()
+	}
 	if ws.screen == ScreenSpoolContent && m.locateInput.Focused() {
 		return m.acceptSpoolLocation()
 	}
@@ -1417,6 +1441,117 @@ func (m *Model) acceptRecordLocation() tea.Cmd {
 	ws.cancelDecode()
 	ws.resetRecordState()
 	return m.startRecords(ws, ws.recordPage.initialPlan(number))
+}
+
+// acceptSpoolCommand parses the spool viewer's command line: "incl <pattern>"
+// filters the view to matching lines (bare "incl" clears the filter) and
+// "f <pattern>" finds the next occurrence, repeatable with n. Both operate
+// on the loaded lines, case-insensitively.
+func (m *Model) acceptSpoolCommand() tea.Cmd {
+	ws := m.ws()
+	value := strings.TrimSpace(m.spoolCmdInput.Value())
+	m.spoolCmdInput.Blur()
+	command, argument, _ := strings.Cut(value, " ")
+	argument = strings.TrimSpace(argument)
+	switch command {
+	case "":
+		return nil
+	case "incl":
+		ws.spoolInclude = argument
+		if argument == "" {
+			ws.status = status{Level: statusReady, Text: "include filter cleared"}
+			return nil
+		}
+		ws.status = status{Level: statusReady, Text: fmt.Sprintf("incl %q: %d of %d loaded lines",
+			argument, len(spoolFilteredIndexes(ws.spoolContent, argument)), len(ws.spoolContent))}
+		return nil
+	case "f":
+		if argument == "" {
+			ws.status = status{Level: statusError, Text: "usage: f <pattern>"}
+			return nil
+		}
+		ws.spoolFind = argument
+		return m.spoolFindNext()
+	default:
+		ws.status = status{Level: statusError, Text: "unknown command (incl <pattern> | f <pattern>)"}
+		return nil
+	}
+}
+
+// spoolFindNext moves the selection to the next loaded line containing the
+// last f pattern, wrapping past the end of the loaded window.
+func (m *Model) spoolFindNext() tea.Cmd {
+	ws := m.ws()
+	if ws.spoolFind == "" {
+		ws.status = status{Level: statusWarn, Text: "no find pattern; use f <pattern>"}
+		return nil
+	}
+	total := len(ws.spoolContent)
+	if total == 0 {
+		ws.status = status{Level: statusWarn, Text: "no spool lines loaded"}
+		return nil
+	}
+	pattern := strings.ToUpper(ws.spoolFind)
+	selected := ws.spoolContentPage.selectedIndex()
+	for offset := 1; offset <= total; offset++ {
+		index := ((selected+offset)%total + total) % total
+		if !strings.Contains(strings.ToUpper(ws.spoolContent[index].Text), pattern) {
+			continue
+		}
+		ws.spoolContentPage.selectKey(strconv.FormatInt(ws.spoolContent[index].Number, 10))
+		text := fmt.Sprintf("line %d matches %q", ws.spoolContent[index].Number, ws.spoolFind)
+		if index <= selected {
+			text += " (wrapped)"
+		}
+		ws.status = status{Level: statusReady, Text: text}
+		return m.maybePrefetch(ws)
+	}
+	ws.status = status{Level: statusWarn, Text: fmt.Sprintf("%q not found in loaded lines", ws.spoolFind)}
+	return nil
+}
+
+// spoolFilteredMove steps the selection between matching lines while the
+// include filter is active; handled is false when the default selection
+// movement should run instead.
+func (m *Model) spoolFilteredMove(delta int) (tea.Cmd, bool) {
+	ws := m.ws()
+	if ws.screen != ScreenSpoolContent || ws.spoolInclude == "" {
+		return nil, false
+	}
+	indexes := spoolFilteredIndexes(ws.spoolContent, ws.spoolInclude)
+	if len(indexes) == 0 {
+		return nil, true
+	}
+	selected := ws.spoolContentPage.selectedIndex()
+	if delta > 0 {
+		for _, index := range indexes {
+			if index > selected {
+				ws.spoolContentPage.selectKey(strconv.FormatInt(ws.spoolContent[index].Number, 10))
+				return m.maybePrefetch(ws), true
+			}
+		}
+	} else {
+		for i := len(indexes) - 1; i >= 0; i-- {
+			if indexes[i] < selected {
+				ws.spoolContentPage.selectKey(strconv.FormatInt(ws.spoolContent[indexes[i]].Number, 10))
+				return m.maybePrefetch(ws), true
+			}
+		}
+	}
+	return nil, true
+}
+
+// spoolFilteredIndexes lists the indexes of lines matching the include
+// pattern, case-insensitively.
+func spoolFilteredIndexes(lines []spoolLine, pattern string) []int {
+	pattern = strings.ToUpper(pattern)
+	var indexes []int
+	for i, line := range lines {
+		if strings.Contains(strings.ToUpper(line.Text), pattern) {
+			indexes = append(indexes, i)
+		}
+	}
+	return indexes
 }
 
 // acceptSpoolLocation jumps the spool content viewer to a zero-based line

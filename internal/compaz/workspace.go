@@ -67,6 +67,10 @@ type workspace struct {
 	// spoolContent is keyed by line number (like records are keyed by
 	// record number), not by line text, since spool lines are not unique.
 	spoolContent []spoolLine
+	// spoolInclude filters the spool viewer to matching lines (the incl
+	// command); spoolFind is the last f pattern, repeated by n.
+	spoolInclude string
+	spoolFind    string
 	// spoolLongest mirrors rawLongest for the spool content viewer's
 	// horizontal pan.
 	spoolLongest     int
@@ -309,6 +313,8 @@ func (ws *workspace) resetSpoolContentState() {
 	ws.spoolLongest = 0
 	ws.spoolContentPage.reset(ws.spoolContentPage.visible, ws.spoolContentPage.budget)
 	ws.horizontal = 0
+	ws.spoolInclude = ""
+	ws.spoolFind = ""
 }
 
 func (ws *workspace) resetSpoolFilesState() {

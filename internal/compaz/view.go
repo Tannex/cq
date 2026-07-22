@@ -511,6 +511,10 @@ func (m *Model) searchLine() string {
 		line = label.Render("JOB") + "  " + value.Render(m.job.JobName+" "+m.job.JobID) +
 			"    " + label.Render("STATUS") + "  " + value.Render(displayOr(m.job.Status, "unknown"))
 	case ScreenSpoolContent:
+		if m.spoolCmdInput.Focused() {
+			line = m.spoolCmdInput.View()
+			break
+		}
 		if m.locateInput.Focused() {
 			line = m.locateInput.View()
 			break
@@ -521,6 +525,9 @@ func (m *Model) searchLine() string {
 		}
 		line = label.Render("JOB") + "  " + value.Render(m.job.JobName+" "+m.job.JobID) +
 			"    " + label.Render("DD") + "  " + value.Render(ddName)
+		if m.spoolInclude != "" {
+			line += "    " + label.Render("INCL") + "  " + value.Render(m.spoolInclude)
+		}
 	}
 	return consolePalette.panel.Width(m.width).Render(truncateStyled(line, m.width))
 }
@@ -981,6 +988,9 @@ func (m *Model) rawRecordView() string {
 // conversion server-side), so there is no copybook overlay, table/JSON
 // toggle, or jq console here — just read and scroll.
 func (m *Model) spoolContentView() string {
+	if m.spoolInclude != "" {
+		return m.spoolFilteredView()
+	}
 	numberWidth := m.spoolLineNumberWidth()
 	header := consolePalette.header.Render(fmt.Sprintf("  %-*s │ SPOOL CONTENT", numberWidth, "LINE"))
 	start, end, showEnd := endMarkerWindow(&m.spoolContentPage)
@@ -1021,6 +1031,61 @@ func (m *Model) spoolContentView() string {
 		view += "\n" + endMarker(m.width)
 	}
 	return view
+}
+
+// spoolFilteredView renders only the loaded lines matching the include
+// filter, windowed so the selection stays visible. Original line numbers are
+// kept in the gutter; the pager's end marker is not meaningful here because
+// the filtered subset is not the fetch window.
+func (m *Model) spoolFilteredView() string {
+	numberWidth := m.spoolLineNumberWidth()
+	header := consolePalette.header.Render(fmt.Sprintf("  %-*s │ SPOOL CONTENT (filtered)", numberWidth, "LINE"))
+	indexes := spoolFilteredIndexes(m.spoolContent, m.spoolInclude)
+	height := max(1, m.visible)
+	if len(indexes) == 0 {
+		empty := lipgloss.Place(m.width, height, lipgloss.Center, lipgloss.Center,
+			consolePalette.amber.Render(fmt.Sprintf("no loaded lines match incl %q", m.spoolInclude)))
+		return header + "\n" + empty
+	}
+
+	selected := m.spoolContentPage.selectedIndex()
+	position := 0
+	for i, index := range indexes {
+		if index <= selected {
+			position = i
+		}
+	}
+	start := max(0, min(position-height/2, len(indexes)-height))
+	end := min(len(indexes), start+height)
+	window := indexes[start:end]
+
+	lines := make([]string, len(window))
+	for i, index := range window {
+		lines[i] = m.spoolContent[index].Text
+	}
+	model := viewport.New(viewport.WithWidth(m.width), viewport.WithHeight(height))
+	model.SoftWrap = false
+	model.FillHeight = true
+	model.SetHorizontalStep(hScrollStep)
+	model.SetContentLines(lines)
+	model.SetXOffset(m.horizontal * hScrollStep)
+	model.LeftGutterFunc = func(context viewport.GutterContext) string {
+		if context.Index < 0 || context.Index >= len(window) {
+			return strings.Repeat(" ", numberWidth+5)
+		}
+		marker := " "
+		if window[context.Index] == selected {
+			marker = ">"
+		}
+		return fmt.Sprintf("%s %0*d │ ", marker, numberWidth, m.spoolContent[window[context.Index]].Number)
+	}
+	model.StyleLineFunc = func(index int) lipgloss.Style {
+		if index >= 0 && index < len(window) && window[index] == selected {
+			return consolePalette.selected
+		}
+		return consolePalette.plain
+	}
+	return header + "\n" + model.View()
 }
 
 // longestSpoolLineWidth scans only the given lines: forward pages only ever
