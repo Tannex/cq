@@ -125,7 +125,10 @@ func (m *Model) handleSpoolBulkResult(ws *workspace, msg spoolBulkResultMsg) tea
 	if msg.Generation != ws.spoolBulkGeneration || msg.Identity != ws.spoolContentIdentity() {
 		return nil
 	}
-	ws.spoolBulkCancel = nil
+	if ws.spoolBulkCancel != nil {
+		ws.spoolBulkCancel()
+		ws.spoolBulkCancel = nil
+	}
 	command := ws.spoolPendingCommand
 	ws.spoolPendingCommand = ""
 	if msg.Err != nil {
