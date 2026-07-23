@@ -128,6 +128,17 @@ func String(b []byte, cm *Charmap) string {
 	return sb.String()
 }
 
+// displayRune is the single definition of the placeholder policy: control
+// characters — which would let host data move the cursor, restyle the frame,
+// or break lines — render as U+00B7 MIDDLE DOT. Every Display* helper routes
+// through it.
+func displayRune(r rune) rune {
+	if unicode.IsControl(r) {
+		return '·'
+	}
+	return r
+}
+
 // DisplayString decodes a fixed-width text field for an operator display.
 // Unlike String, decoded control characters are replaced with U+00B7 MIDDLE
 // DOT, including trailing LOW-VALUE bytes. Trailing codepage
@@ -141,12 +152,7 @@ func DisplayString(b []byte, cm *Charmap) string {
 	var sb strings.Builder
 	sb.Grow(end)
 	for _, c := range b[:end] {
-		r := cm.to[c]
-		if unicode.IsControl(r) {
-			sb.WriteRune('·')
-			continue
-		}
-		sb.WriteRune(r)
+		sb.WriteRune(displayRune(cm.to[c]))
 	}
 	return sb.String()
 }
@@ -161,12 +167,7 @@ func DisplayBytes(b []byte, cm *Charmap) string {
 	var sb strings.Builder
 	sb.Grow(len(b))
 	for _, c := range b {
-		r := cm.to[c]
-		if c == 0 || unicode.IsControl(r) {
-			sb.WriteRune('·')
-			continue
-		}
-		sb.WriteRune(r)
+		sb.WriteRune(displayRune(cm.to[c]))
 	}
 	return sb.String()
 }
@@ -184,11 +185,7 @@ func DisplayText(s string) string {
 	var sb strings.Builder
 	sb.Grow(len(s))
 	for _, r := range s {
-		if unicode.IsControl(r) {
-			sb.WriteRune('·')
-			continue
-		}
-		sb.WriteRune(r)
+		sb.WriteRune(displayRune(r))
 	}
 	return sb.String()
 }

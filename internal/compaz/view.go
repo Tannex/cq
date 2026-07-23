@@ -1169,9 +1169,7 @@ func (m *Model) spoolFilteredView() string {
 			// to the newest hit, so the fresh-line fade replaces the
 			// selection bar; the gutter's > marker carries the position.
 			if index >= 0 && index < len(window) {
-				if age, ok := m.spoolFreshAge(window[index], now); ok {
-					return spoolFreshStyle(age)
-				}
+				return m.spoolFollowLineStyle(window[index], now)
 			}
 			return consolePalette.plain
 		}
@@ -1181,6 +1179,16 @@ func (m *Model) spoolFilteredView() string {
 		return consolePalette.plain
 	}
 	return header + "\n" + model.View()
+}
+
+// spoolFollowLineStyle styles one bulk line while following: fresh lines
+// carry the fade, everything else stays plain — shared by the follow and
+// filtered-follow views so the convention cannot drift.
+func (m *Model) spoolFollowLineStyle(bulkIndex int, now time.Time) lipgloss.Style {
+	if age, ok := m.spoolFreshAge(bulkIndex, now); ok {
+		return spoolFreshStyle(age)
+	}
+	return consolePalette.plain
 }
 
 // spoolFollowView renders the tail of the bulk cache while follow mode is
@@ -1225,10 +1233,7 @@ func (m *Model) spoolFollowView() string {
 		// No selected-row styling here: the cursor is pinned to the tail, so
 		// a selection bar would permanently sit on the newest line and drown
 		// the fresh-line fade. The gutter's > marker carries the position.
-		if age, ok := m.spoolFreshAge(start+index, now); ok {
-			return spoolFreshStyle(age)
-		}
-		return consolePalette.plain
+		return m.spoolFollowLineStyle(start+index, now)
 	}
 	return header + "\n" + model.View()
 }

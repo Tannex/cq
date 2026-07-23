@@ -2,7 +2,6 @@ package compaz
 
 import (
 	"context"
-	"image/color"
 	"strings"
 	"testing"
 	"time"
@@ -482,17 +481,13 @@ func TestSpoolFollowHighlightsFreshLinesAndFadesThem(t *testing.T) {
 	}
 
 	// A new line renders bold in a highlight color; a fully faded one is
-	// plain and visibly different. Blend1D returns computed color values, so
-	// compare channels rather than interface identity.
-	rgb := func(c color.Color) [3]uint32 {
-		r, g, b, _ := c.RGBA()
-		return [3]uint32{r, g, b}
-	}
+	// plain and visibly different. fgSGR canonicalizes the computed colors
+	// the same way the styling tests do.
 	newest, faded := spoolFreshStyle(0), spoolFreshStyle(spoolFreshFadeDuration)
 	if !newest.GetBold() || faded.GetBold() {
 		t.Fatalf("bold: newest=%v faded=%v, want bold only while fresh", newest.GetBold(), faded.GetBold())
 	}
-	if rgb(newest.GetForeground()) == rgb(faded.GetForeground()) {
+	if fgSGR(newest.GetForeground()) == fgSGR(faded.GetForeground()) {
 		t.Fatal("fade ramp start and end render the same color")
 	}
 

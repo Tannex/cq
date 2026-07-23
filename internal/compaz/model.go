@@ -1528,7 +1528,8 @@ func (m *Model) acceptSpoolCommand() tea.Cmd {
 		return m.runSpoolCommand(ws, "f "+argument)
 	case "follow":
 		if ws.spoolFollow {
-			return m.stopSpoolFollowNavigation(ws)
+			m.stopSpoolFollowNavigation(ws)
+			return nil
 		}
 		return m.runSpoolCommand(ws, "follow")
 	default:
@@ -2316,6 +2317,9 @@ func (m *Model) handleSpoolContentResult(ws *workspace, msg spoolContentResultMs
 	for i, text := range msg.Page.Lines {
 		// Spool output is arbitrary job output; sanitize like the records
 		// viewer does, or control bytes in a line corrupt the whole frame.
+		// Bulk-served pages arrive pre-sanitized, making this an idempotent
+		// fast-path scan there — keep it so the server-fetched path is
+		// covered by the same line.
 		incoming[i] = spoolLine{Number: msg.Page.Start + int64(i), Text: decode.DisplayText(text)}
 	}
 	var ended bool

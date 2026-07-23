@@ -226,9 +226,9 @@ func valueAtPath(value record.Object, parts []string) (record.Value, bool) {
 func compactValue(value record.Value) string {
 	switch value := value.(type) {
 	case string:
-		// Decoded text fields carry host bytes; non-display characters
-		// always render as '·' (the JSON view is covered by JSON escaping).
-		return decode.DisplayText(value)
+		// No sanitization here: every table cell passes through styledCell,
+		// the single render-side chokepoint for host-originated text.
+		return value
 	case json.Number:
 		return value.String()
 	case record.Object:

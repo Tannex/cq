@@ -138,9 +138,13 @@ func (m *Model) handleSpoolBulkResult(ws *workspace, msg spoolBulkResultMsg) tea
 	}
 	// Sanitize on ingestion (mirroring the paged path) so neither the
 	// viewers nor the incl/f scans ever see cursor-moving control bytes.
-	ws.spoolBulk = make([]string, len(msg.Lines))
+	// In place: the result message owns the slice and never reuses it.
 	for i, line := range msg.Lines {
-		ws.spoolBulk[i] = decode.DisplayText(line)
+		msg.Lines[i] = decode.DisplayText(line)
+	}
+	ws.spoolBulk = msg.Lines
+	if ws.spoolBulk == nil {
+		ws.spoolBulk = []string{}
 	}
 	ws.spoolBulkIdentity = msg.Identity
 	ws.spoolBulkTruncated = msg.Truncated

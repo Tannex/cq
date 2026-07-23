@@ -175,9 +175,9 @@ func (m *Model) handleSpoolFollowResult(ws *workspace, msg spoolFollowResultMsg)
 	ws.spoolFollowCancel = nil
 	if msg.JobGone || zosmf.IsNotFound(msg.Err) {
 		ws.stopSpoolFollow()
-		cmd := m.anchorSpoolTail(ws)
+		m.anchorSpoolTail(ws)
 		ws.status = status{Level: statusWarn, Text: "job no longer exists; follow stopped"}
-		return cmd
+		return nil
 	}
 	if msg.Err != nil {
 		ws.status = status{Level: statusWarn, Text: "follow poll failed: " + msg.Err.Error() + " (retrying)"}
@@ -216,13 +216,13 @@ func (m *Model) handleSpoolFollowResult(ws *workspace, msg spoolFollowResultMsg)
 			ws.stopSpoolFollow()
 			// Re-anchor on the tail so the final drained lines are visible;
 			// without this the pager falls back to the pre-follow window.
-			cmd := m.anchorSpoolTail(ws)
+			m.anchorSpoolTail(ws)
 			text := "job ended"
 			if msg.JobRC != "" {
 				text += " (" + msg.JobRC + ")"
 			}
 			ws.status = status{Level: statusReady, Text: text + " — follow stopped"}
-			return cmd
+			return nil
 		}
 	}
 	ws.status = status{Level: statusReady, Text: spoolFollowStatus(ws)}
@@ -311,33 +311,36 @@ func spoolFollowStatus(ws *workspace) string {
 
 // anchorSpoolTail re-anchors the pager on a full window ending at the cached
 // tail — the lines the user was just watching — with the tail selected.
-// Follow mode only runs over a complete cache, so startSpoolContent resolves
-// synchronously and the pager is populated on return; the command carries
-// any follow-up work (nil in practice at the cache end).
-func (m *Model) anchorSpoolTail(ws *workspace) tea.Cmd {
-	if ws != &m.workspace || ws.spoolInclude != "" || len(ws.spoolBulk) == 0 {
-		// The filtered view keeps its own cursor, and background workspaces
-		// re-anchor when they next become active; nothing to do.
-		return nil
+// Follow mode only runs over a complete cache, so the jump resolves
+// synchronously and the pager is populated on return: any follow-up command
+// is nil at the cache end, which is why nothing is returned here.
+func (m *Model) anchorSpoolTail(ws *workspace) {
+	if ws != &m.workspace || ws.spoolInclude != "" || !ws.spoolBulkServable() {
+		// The filtered view keeps its own cursor, background workspaces
+		// re-anchor when they next become active, and a non-servable cache
+		// would make the jump asynchronous — nothing to do.
+		return
 	}
 	tail := int64(len(ws.spoolBulk) - 1)
 	ws.cancelBrowse()
 	ws.resetSpoolWindow()
 	// A window ending on the tail, not starting at it, keeps the context the
-	// user was watching instead of a single-line window.
-	cmd := m.startSpoolContent(ws, ws.spoolContentPage.initialPlan(max(0, tail-int64(m.budget)+1)))
+	// user was watching instead of a single-line window. Not spoolJumpTo: its
+	// select-in-window fast path could keep a stale window shape whose end
+	// falls short of the tail. The discarded command is provably nil — the
+	// servable cache resolves synchronously and has nothing to prefetch at
+	// its end.
+	_ = m.startSpoolContent(ws, ws.spoolContentPage.initialPlan(max(0, tail-int64(m.budget)+1)))
 	ws.spoolContentPage.bottom()
-	return cmd
 }
 
 // stopSpoolFollowNavigation ends follow mode and re-anchors the pager on the
 // tail line the user was watching, so the view does not snap back to
 // wherever the fetch window happened to be.
-func (m *Model) stopSpoolFollowNavigation(ws *workspace) tea.Cmd {
+func (m *Model) stopSpoolFollowNavigation(ws *workspace) {
 	ws.stopSpoolFollow()
-	cmd := m.anchorSpoolTail(ws)
+	m.anchorSpoolTail(ws)
 	ws.status = status{Level: statusReady, Text: "follow stopped"}
-	return cmd
 }
 
 // spoolFollowStopActions are the keys whose first press exits follow mode
@@ -358,20 +361,17 @@ func (m *Model) spoolFollowInterrupt(selectedAction action) (tea.Cmd, bool) {
 	if ws.screen != ScreenSpoolContent || !ws.spoolFollow || !spoolFollowStopActions[selectedAction] {
 		return nil, false
 	}
-	cmd := m.stopSpoolFollowNavigation(ws)
-	switch {
-	case selectedAction == actionBack:
-		// Esc is a pure stop: end the mode, stay on the screen.
-		return cmd, true
-	case selectedAction == actionTop && ws.spoolInclude == "":
-		// Top means the file top (less's g after F); the tail anchor the
-		// stop just placed is the wrong starting point for pager movement,
-		// so jump straight there from the cache. With a filter active the
-		// fall-through filtered movement already goes to the first hit.
+	if selectedAction == actionTop && ws.spoolInclude == "" {
+		// Top means the file top (less's g after F): decide the destination
+		// before anchoring, so the tail window is not built just to be
+		// replaced. With a filter active the fall-through filtered movement
+		// already goes to the first hit.
+		ws.stopSpoolFollow()
+		ws.status = status{Level: statusReady, Text: "follow stopped"}
 		return m.spoolJumpTo(0), true
 	}
-	// cmd is the anchor's follow-up work, nil at the cache end; the caller's
-	// movement command takes precedence.
-	_ = cmd
-	return nil, false
+	m.stopSpoolFollowNavigation(ws)
+	// Esc is a pure stop — end the mode, stay on the screen; navigation keys
+	// fall through so the caller applies their movement to the anchored tail.
+	return nil, selectedAction == actionBack
 }
