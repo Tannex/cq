@@ -2,6 +2,7 @@ package zosmf
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -187,9 +188,6 @@ func TestReadSpoolContentSendsRecordRangeHeader(t *testing.T) {
 		if got := r.Header.Get("X-IBM-Record-Range"); got != "0,10" {
 			t.Errorf("X-IBM-Record-Range = %q", got)
 		}
-		if r.URL.Query().Has("fileEncoding") {
-			t.Errorf("fileEncoding sent without a profile encoding: %q", r.URL.RawQuery)
-		}
 		w.Header().Set("Content-Type", "text/plain")
 		_, _ = io.WriteString(w, "line one\nline two\n")
 	}))
@@ -210,22 +208,90 @@ func TestReadSpoolContentSendsRecordRangeHeader(t *testing.T) {
 	}
 }
 
-func TestReadSpoolContentSendsProfileEncoding(t *testing.T) {
+// TestReadSpoolContentFileEncodingParameter pins the profile-to-parameter
+// mapping in one place: profile encodings arrive in the client-side codepage
+// vocabulary and must be sent as canonical IBM-nnnn codeset names — or not
+// at all for spellings the host would reject. The JCL pseudo-file goes
+// through the same conversion as any spool DD.
+func TestReadSpoolContentFileEncodingParameter(t *testing.T) {
+	for _, tc := range []struct {
+		encoding string
+		fileID   string
+		want     string // "" means the parameter must be absent
+	}{
+		{encoding: "", fileID: "1", want: ""},
+		{encoding: "IBM-277", fileID: "1", want: "IBM-277"},
+		{encoding: "cp277", fileID: "1", want: "IBM-277"},
+		{encoding: "1047", fileID: "1", want: "IBM-1047"},
+		{encoding: "ibm037", fileID: "1", want: "IBM-037"},
+		{encoding: "latin1", fileID: "1", want: ""},
+		{encoding: "ascii", fileID: "1", want: ""},
+		{encoding: "utf-8", fileID: "1", want: ""},
+		{encoding: "cp277", fileID: "JCL", want: "IBM-277"},
+	} {
+		t.Run(tc.encoding+"/"+tc.fileID, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if got := r.URL.Query().Get("fileEncoding"); got != tc.want {
+					t.Errorf("fileEncoding = %q, want %q", got, tc.want)
+				}
+			}))
+			defer server.Close()
+
+			session := sessionForServer(t, server)
+			session.Encoding = tc.encoding
+			client := New(session, nil)
+			if _, err := client.ReadSpoolContent(context.Background(), ReadSpoolContentRequest{
+				JobName: "TESTJOB1", JobID: "JOB00023", FileID: tc.fileID, Start: 0, MaxItems: 10,
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+// TestReadSpoolContentDecodesLatin1Bytes pins the wire charset: z/OSMF text
+// payloads are ISO 8859-1, so national characters arrive as single bytes
+// that must widen to runes instead of surviving as invalid UTF-8.
+func TestReadSpoolContentDecodesLatin1Bytes(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.URL.Query().Get("fileEncoding"); got != "IBM-277" {
-			t.Errorf("fileEncoding = %q, want IBM-277", got)
-		}
-		_, _ = io.WriteString(w, "line one\n")
+		_, _ = w.Write([]byte{'S', 0xC6, 'R', 'B', 0xC5, 'R', '\n'}) // SÆRBÅR in ISO 8859-1
+	}))
+	defer server.Close()
+
+	client := New(sessionForServer(t, server), nil)
+	page, err := client.ReadSpoolContent(context.Background(), ReadSpoolContentRequest{
+		JobName: "TESTJOB1", JobID: "JOB00023", FileID: "1", Start: 0, MaxItems: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Lines) != 1 || page.Lines[0] != "SÆRBÅR" {
+		t.Fatalf("lines = %#v, want the 8859-1 bytes decoded to SÆRBÅR", page.Lines)
+	}
+}
+
+// TestReadSpoolContentAnnotatesEncodingOnServerError pins the diagnosability
+// of a rejected fileEncoding: the failure must name the parameter and value,
+// since it originates from the profile's otherwise-invisible encoding
+// property.
+func TestReadSpoolContentAnnotatesEncodingOnServerError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "codeset conversion failed", http.StatusInternalServerError)
 	}))
 	defer server.Close()
 
 	session := sessionForServer(t, server)
-	session.Encoding = "IBM-277"
+	session.Encoding = "cp277"
 	client := New(session, nil)
-	if _, err := client.ReadSpoolContent(context.Background(), ReadSpoolContentRequest{
+	_, err := client.ReadSpoolContent(context.Background(), ReadSpoolContentRequest{
 		JobName: "TESTJOB1", JobID: "JOB00023", FileID: "1", Start: 0, MaxItems: 10,
-	}); err != nil {
-		t.Fatal(err)
+	})
+	if err == nil || !strings.Contains(err.Error(), "fileEncoding=IBM-277") {
+		t.Fatalf("error = %v, want it to name the sent fileEncoding", err)
+	}
+	var httpErr *HTTPError
+	if !errors.As(err, &httpErr) {
+		t.Fatal("annotation must keep the HTTPError unwrappable")
 	}
 }
 

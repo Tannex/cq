@@ -18,9 +18,6 @@ func TestOpenSpoolContentStreamsWholeFileWithoutRecordRange(t *testing.T) {
 		if got := r.Header.Get("X-IBM-Record-Range"); got != "" {
 			t.Errorf("X-IBM-Record-Range = %q, want none for a whole-file stream", got)
 		}
-		if r.URL.Query().Has("fileEncoding") {
-			t.Errorf("fileEncoding sent without a profile encoding: %q", r.URL.RawQuery)
-		}
 		_, _ = io.WriteString(w, "line one\nline two\nline three\n")
 	}))
 	defer server.Close()
@@ -40,25 +37,58 @@ func TestOpenSpoolContentStreamsWholeFileWithoutRecordRange(t *testing.T) {
 	}
 }
 
-func TestOpenSpoolContentSendsProfileEncoding(t *testing.T) {
+// TestOpenSpoolContentFileEncodingParameter mirrors the ReadSpoolContent
+// table for the streaming path: canonical codeset names are sent, spellings
+// with no host codeset are not.
+func TestOpenSpoolContentFileEncodingParameter(t *testing.T) {
+	for _, tc := range []struct {
+		encoding string
+		want     string // "" means the parameter must be absent
+	}{
+		{encoding: "", want: ""},
+		{encoding: "cp277", want: "IBM-277"},
+		{encoding: "latin1", want: ""},
+	} {
+		t.Run(tc.encoding, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if got := r.URL.Query().Get("fileEncoding"); got != tc.want {
+					t.Errorf("fileEncoding = %q, want %q", got, tc.want)
+				}
+			}))
+			defer server.Close()
+
+			session := sessionForServer(t, server)
+			session.Encoding = tc.encoding
+			client := New(session, nil)
+			body, err := client.OpenSpoolContent(context.Background(), "TESTJOB1", "JOB00023", "5")
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = body.Close()
+		})
+	}
+}
+
+// TestOpenSpoolContentDecodesLatin1Stream pins the streaming path's wire
+// charset the same way the paged reader's test does.
+func TestOpenSpoolContentDecodesLatin1Stream(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.URL.Query().Get("fileEncoding"); got != "IBM-277" {
-			t.Errorf("fileEncoding = %q, want IBM-277", got)
-		}
-		_, _ = io.WriteString(w, "line one\n")
+		_, _ = w.Write([]byte{'B', 0xD8, 'F', '\n'}) // BØF in ISO 8859-1
 	}))
 	defer server.Close()
 
-	session := sessionForServer(t, server)
-	session.Encoding = "IBM-277"
-	client := New(session, nil)
+	client := New(sessionForServer(t, server), nil)
 	body, err := client.OpenSpoolContent(context.Background(), "TESTJOB1", "JOB00023", "5")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer body.Close()
-	if _, err := io.ReadAll(body); err != nil {
+	content, err := io.ReadAll(body)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if string(content) != "BØF\n" {
+		t.Fatalf("content = %q, want the 8859-1 byte decoded to BØF", content)
 	}
 }
 

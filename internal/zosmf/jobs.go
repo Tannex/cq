@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+
+	"github.com/Tannex/cq/internal/decode"
 )
 
 const (
@@ -289,7 +291,8 @@ func (z *Client) ReadSpoolContent(ctx context.Context, request ReadSpoolContentR
 	if err != nil {
 		return SpoolContentPage{}, err
 	}
-	req, err := z.newAPIRequest(ctx, http.MethodGet, path, z.spoolQuery(), nil)
+	query := z.spoolQuery()
+	req, err := z.newAPIRequest(ctx, http.MethodGet, path, query, nil)
 	if err != nil {
 		return SpoolContentPage{}, err
 	}
@@ -297,7 +300,7 @@ func (z *Client) ReadSpoolContent(ctx context.Context, request ReadSpoolContentR
 
 	res, err := z.doRequest(req, resource, http.StatusOK)
 	if err != nil {
-		return SpoolContentPage{}, err
+		return SpoolContentPage{}, spoolRequestError(err, query)
 	}
 	defer res.Body.Close()
 
@@ -305,7 +308,7 @@ func (z *Client) ReadSpoolContent(ctx context.Context, request ReadSpoolContentR
 	if err != nil {
 		return SpoolContentPage{}, err
 	}
-	text := strings.TrimSuffix(string(body), "\n")
+	text := strings.TrimSuffix(latin1String(body), "\n")
 	var lines []string
 	// A body of just "\n" (one blank output line) trims to "", identical to
 	// a genuinely empty body; check the untrimmed body length instead of the
@@ -329,13 +332,49 @@ func (z *Client) ReadSpoolContent(ctx context.Context, request ReadSpoolContentR
 // its fileEncoding parameter. Unlike data set records — fetched raw and
 // decoded client-side with the configured codepage — spool content is
 // converted EBCDIC-to-text by the server, which otherwise assumes its own
-// default codepage and garbles national characters.
+// default codepage and garbles national characters. The profile value is
+// mapped to the canonical IBM-nnnn codeset name first: profiles hold the
+// client-side vocabulary ("cp1047", "1047", "latin1"), and sending those
+// spellings verbatim would make the server reject every spool read. Names
+// with no host codeset send nothing, preserving the server default.
 func (z *Client) spoolQuery() url.Values {
-	encoding := strings.TrimSpace(z.session.Encoding)
-	if encoding == "" {
+	codeset, ok := decode.HostCodeset(z.session.Encoding)
+	if !ok {
 		return nil
 	}
-	return url.Values{"fileEncoding": []string{encoding}}
+	return url.Values{"fileEncoding": []string{codeset}}
+}
+
+// spoolRequestError annotates a failed spool fetch with the fileEncoding it
+// carried: the parameter comes from the profile's otherwise-invisible
+// encoding property, and a server rejection would be undiagnosable without
+// naming it.
+func spoolRequestError(err error, query url.Values) error {
+	if err == nil {
+		return nil
+	}
+	if codeset := query.Get("fileEncoding"); codeset != "" {
+		return fmt.Errorf("%w (request sent fileEncoding=%s from the profile's encoding property)", err, codeset)
+	}
+	return err
+}
+
+// latin1String decodes a spool response body. z/OSMF serves text-mode
+// payloads as ISO 8859-1 regardless of the source EBCDIC codepage (the same
+// behavior the editor's textCharmap documents), so bytes beyond ASCII must
+// be widened to runes rather than passed through as invalid UTF-8.
+func latin1String(body []byte) string {
+	for _, c := range body {
+		if c >= 0x80 {
+			var builder strings.Builder
+			builder.Grow(len(body) + len(body)/8)
+			for _, c := range body {
+				builder.WriteRune(rune(c))
+			}
+			return builder.String()
+		}
+	}
+	return string(body)
 }
 
 // spoolContentPath validates one spool file's identifiers and builds its

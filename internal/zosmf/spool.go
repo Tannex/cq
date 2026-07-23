@@ -4,6 +4,8 @@ import (
 	"context"
 	"io"
 	"net/http"
+
+	"golang.org/x/text/encoding/charmap"
 )
 
 // SpoolStreamer downloads a spool file's whole text content in one request.
@@ -30,16 +32,28 @@ func (z *Client) OpenSpoolContent(ctx context.Context, jobName, jobID, fileID st
 	if err != nil {
 		return nil, err
 	}
-	req, err := z.newAPIRequest(ctx, http.MethodGet, path, z.spoolQuery(), nil)
+	query := z.spoolQuery()
+	req, err := z.newAPIRequest(ctx, http.MethodGet, path, query, nil)
 	if err != nil {
 		return nil, err
 	}
 	res, err := z.doRequest(req, resource, http.StatusOK)
 	if err != nil {
-		return nil, err
+		return nil, spoolRequestError(err, query)
 	}
 	z.logf("z/OSMF spool content %s: streaming", resource)
-	return res.Body, nil
+	// The stream, like every z/OSMF text payload, is ISO 8859-1; convert to
+	// UTF-8 on the way through so consumers can treat lines as Go strings.
+	return &latin1ReadCloser{
+		Reader: charmap.ISO8859_1.NewDecoder().Reader(res.Body),
+		Closer: res.Body,
+	}, nil
+}
+
+// latin1ReadCloser pairs the converting reader with the network body's Close.
+type latin1ReadCloser struct {
+	io.Reader
+	io.Closer
 }
 
 // OpenSpoolContent lazily initializes the client and streams the whole spool
