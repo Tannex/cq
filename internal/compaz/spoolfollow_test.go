@@ -33,6 +33,7 @@ func spoolFollowModel(t *testing.T, content *[]string) *Model {
 	}
 	model := readyModel(t, Options{}, browser, "IBMUSER", "", 90, 16)
 	model.deps.FollowInterval = time.Millisecond
+	model.deps.FollowFadeStep = time.Millisecond
 	executeCommand(t, model, model.handleAction(actionJobs))
 	executeCommand(t, model, model.openSelection())
 	model.spoolFilePage.move(1)
@@ -51,6 +52,11 @@ func drainSpoolFollow(t *testing.T, model *Model, command tea.Cmd) bool {
 	return walkMessages(command, func(message tea.Msg) (tea.Cmd, bool) {
 		if _, ok := message.(spoolFollowTickMsg); ok {
 			return nil, true
+		}
+		if _, ok := message.(spoolFadeTickMsg); ok {
+			// Skip without applying: the fade chain reschedules itself until
+			// real time passes, which a synchronous drain must not wait for.
+			return nil, false
 		}
 		return applyMessage(t, model, message), false
 	})
@@ -146,17 +152,18 @@ func TestSpoolFollowStopsOnNavigationAndToggle(t *testing.T) {
 		t.Fatal("follow did not reach an idle tick")
 	}
 
-	// The first navigation key stops following and anchors the pager on the
-	// tail line the user was watching.
+	// The first navigation key stops following, anchors the pager on the
+	// tail line the user was watching, and still performs its own movement —
+	// the exit keypress is not swallowed.
 	executeCommand(t, model, model.handleAction(actionUp))
 	if model.spoolFollow {
 		t.Fatal("navigation did not stop follow mode")
 	}
-	if !strings.Contains(model.status.Text, "follow stopped") {
-		t.Fatalf("status = %q", model.status.Text)
+	if got := model.spoolContentPage.selectedIndex(); model.spoolContent[got].Number != 1 {
+		t.Fatalf("selection = line %d, want line 1 (tail line 2, then the Up moved)", model.spoolContent[got].Number)
 	}
-	if got := model.spoolContentPage.selectedIndex(); model.spoolContent[got].Number != 2 {
-		t.Fatalf("pager not anchored at the tail, line %d", model.spoolContent[got].Number)
+	if len(model.spoolContent) != 3 {
+		t.Fatalf("window = %d lines, want the full tail context from the cache", len(model.spoolContent))
 	}
 
 	// :follow toggles back on, and again off.
@@ -207,6 +214,7 @@ func spoolFollowStatusModel(t *testing.T, content *[]string, readJobStatus func(
 	browser := &followStatusBrowser{fakeBrowser: inner, readJobStatus: readJobStatus}
 	model := readyModel(t, Options{}, browser, "IBMUSER", "", 90, 16)
 	model.deps.FollowInterval = time.Millisecond
+	model.deps.FollowFadeStep = time.Millisecond
 	executeCommand(t, model, model.handleAction(actionJobs))
 	executeCommand(t, model, model.openSelection())
 	model.spoolFilePage.move(1)
@@ -304,8 +312,74 @@ func TestSpoolFollowDroppedByRefreshAndBack(t *testing.T) {
 	if !runSpoolFollowCommand(t, model, "follow") {
 		t.Fatal("follow did not reach an idle tick")
 	}
+	// The first Back is a pure stop: follow ends but the screen and the bulk
+	// cache stay, so an accidental Esc does not throw away the download.
 	executeCommand(t, model, model.handleAction(actionBack))
-	if model.spoolFollow || model.spoolFollower != nil || model.spoolBulk != nil {
-		t.Fatalf("back did not drop follow state: follow=%v bulk=%v", model.spoolFollow, model.spoolBulk)
+	if model.spoolFollow || model.spoolFollower != nil {
+		t.Fatal("back did not stop follow mode")
+	}
+	if model.screen != ScreenSpoolContent || model.spoolBulk == nil {
+		t.Fatalf("first back left screen=%d bulk=%v, want to stay on content with the cache", model.screen, model.spoolBulk)
+	}
+
+	// The second Back actually leaves the screen and drops the spool state.
+	executeCommand(t, model, model.handleAction(actionBack))
+	if model.screen != ScreenSpoolFiles || model.spoolBulk != nil {
+		t.Fatalf("second back screen=%d bulk=%v, want spool files with the cache dropped", model.screen, model.spoolBulk)
+	}
+}
+
+func TestSpoolFollowHighlightsFreshLinesAndFadesThem(t *testing.T) {
+	content := []string{"one", "two", "three"}
+	model := spoolFollowModel(t, &content)
+	if !runSpoolFollowCommand(t, model, "follow") {
+		t.Fatal("follow did not reach an idle tick")
+	}
+	if model.spoolFresh != nil {
+		t.Fatalf("pre-follow content marked fresh: %v", model.spoolFresh)
+	}
+
+	content = append(content, "four", "five")
+	if !spoolFollowTick(t, model) {
+		t.Fatal("poll after growth did not reschedule")
+	}
+	if len(model.spoolFresh) != 1 || model.spoolFresh[0].FirstIndex != 3 {
+		t.Fatalf("fresh batches = %v, want one starting at bulk index 3", model.spoolFresh)
+	}
+	if _, ok := model.spoolFreshAge(2, time.Now()); ok {
+		t.Fatal("pre-follow line reported as fresh")
+	}
+	if _, ok := model.spoolFreshAge(4, time.Now()); !ok {
+		t.Fatal("appended line not reported as fresh")
+	}
+
+	// A new line renders in the accent highlight, not the default style.
+	if got := model.spoolFreshStyle(0).GetForeground(); got != ayu.accent {
+		t.Fatalf("fresh style foreground = %v, want the accent", got)
+	}
+	if faded := model.spoolFreshStyle(spoolFreshFadeDuration).GetForeground(); faded == ayu.accent {
+		t.Fatal("fully faded style still renders the accent")
+	}
+
+	// Once the fade duration has passed, the tick prunes the batch and stops
+	// rescheduling itself.
+	model.spoolFresh[0].At = time.Now().Add(-spoolFreshFadeDuration - time.Second)
+	model.spoolFadeTicking = true
+	tick := spoolFadeTickMsg{Profile: model.profile, Generation: model.spoolBulkGeneration}
+	if cmd := applyMessage(t, model, tick); cmd != nil {
+		t.Fatal("fade tick kept rescheduling after every highlight expired")
+	}
+	if model.spoolFresh != nil {
+		t.Fatalf("expired batches not pruned: %v", model.spoolFresh)
+	}
+	if _, ok := model.spoolFreshAge(4, time.Now()); ok {
+		t.Fatal("pruned line still reported as fresh")
+	}
+
+	// Stopping follow clears any remaining marks outright.
+	model.markSpoolFresh(3, time.Now())
+	model.stopSpoolFollow()
+	if model.spoolFresh != nil {
+		t.Fatal("stopSpoolFollow left fresh marks behind")
 	}
 }

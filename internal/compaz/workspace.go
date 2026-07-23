@@ -95,6 +95,10 @@ type workspace struct {
 	spoolFollower     *zosmf.SpoolFollower
 	spoolFollowCancel context.CancelFunc
 	spoolBulkBytes    int
+	// spoolFresh marks follow-appended batches for the fade highlight;
+	// spoolFadeTicking guards against stacking more than one fade tick chain.
+	spoolFresh       []spoolFreshBatch
+	spoolFadeTicking bool
 	// spoolLongest mirrors rawLongest for the spool content viewer's
 	// horizontal pan.
 	spoolLongest     int
@@ -389,6 +393,9 @@ func (ws *workspace) stopSpoolFollow() {
 	}
 	ws.spoolFollow = false
 	ws.spoolFollower = nil
+	// Highlights only render while following; drop them so a later re-follow
+	// does not resurrect stale marks.
+	ws.spoolFresh = nil
 }
 
 func (ws *workspace) spoolBulkReady() bool {

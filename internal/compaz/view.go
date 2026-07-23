@@ -5,6 +5,7 @@ import (
 	"image/color"
 	"strconv"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/table"
 	"charm.land/bubbles/v2/viewport"
@@ -1183,6 +1184,7 @@ func (m *Model) spoolFollowView() string {
 	start := max(0, len(m.spoolBulk)-height)
 	window := m.spoolBulk[start:]
 	last := len(window) - 1
+	now := time.Now()
 	model := viewport.New(viewport.WithWidth(m.width), viewport.WithHeight(height))
 	model.SoftWrap = false
 	model.FillHeight = true
@@ -1203,9 +1205,37 @@ func (m *Model) spoolFollowView() string {
 		if index == last {
 			return consolePalette.selected
 		}
+		if age, ok := m.spoolFreshAge(start+index, now); ok {
+			return m.spoolFreshStyle(age)
+		}
 		return consolePalette.plain
 	}
 	return header + "\n" + model.View()
+}
+
+// spoolFreshStyle highlights a follow-appended line by age: it arrives in
+// bold accent and fades to the default foreground over
+// spoolFreshFadeDuration. Ages are quantized to the fade step so a frame
+// renders identically anywhere within one step.
+func (m *Model) spoolFreshStyle(age time.Duration) lipgloss.Style {
+	fraction := float64(age.Truncate(m.deps.FollowFadeStep)) / float64(spoolFreshFadeDuration)
+	fraction = min(max(fraction, 0), 1)
+	style := lipgloss.NewStyle().Foreground(blendColor(ayu.accent, ayu.fg, fraction))
+	if fraction < 0.4 {
+		style = style.Bold(true)
+	}
+	return style
+}
+
+// blendColor linearly interpolates between two colors; fraction 0 is from,
+// 1 is to.
+func blendColor(from, to color.Color, fraction float64) color.Color {
+	fr, fg, fb, _ := from.RGBA()
+	tr, tg, tb, _ := to.RGBA()
+	mix := func(f, t uint32) uint8 {
+		return uint8((float64(f) + (float64(t)-float64(f))*fraction) / 257)
+	}
+	return lipgloss.Color(fmt.Sprintf("#%02X%02X%02X", mix(fr, tr), mix(fg, tg), mix(fb, tb)))
 }
 
 // longestSpoolLineWidth scans only the given lines: forward pages only ever

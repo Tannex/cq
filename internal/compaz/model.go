@@ -140,6 +140,9 @@ type Dependencies struct {
 	Timeout       time.Duration
 	// FollowInterval paces the spool follow mode's idle polls.
 	FollowInterval time.Duration
+	// FollowFadeStep paces the re-render ticks that fade the highlight on
+	// freshly appended follow lines.
+	FollowFadeStep time.Duration
 }
 
 type statusLevel string
@@ -343,6 +346,9 @@ func NewModel(options Options, deps Dependencies) (*Model, error) {
 	}
 	if deps.FollowInterval <= 0 {
 		deps.FollowInterval = defaultFollowInterval
+	}
+	if deps.FollowFadeStep <= 0 {
+		deps.FollowFadeStep = defaultFollowFadeStep
 	}
 	if deps.LoadFile == nil {
 		deps.LoadFile = func(ctx context.Context, path string) ([]byte, error) {
@@ -645,6 +651,10 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if ws := m.targetWorkspace(msg.Profile); ws != nil {
 			return m, m.handleSpoolFollowResult(ws, msg)
 		}
+	case spoolFadeTickMsg:
+		if ws := m.targetWorkspace(msg.Profile); ws != nil {
+			return m, m.handleSpoolFadeTick(ws, msg)
+		}
 	case overlayResultMsg:
 		if ws := m.targetWorkspace(msg.Profile); ws != nil {
 			return m, m.handleOverlayResult(ws, msg)
@@ -937,6 +947,13 @@ func (m *Model) handlePaste(msg tea.PasteMsg) tea.Cmd {
 
 func (m *Model) handleAction(selected action) tea.Cmd {
 	ws := m.ws()
+	// Follow mode intercepts its stop keys in one place, so every navigation
+	// action gets the "first key stops following" rule without per-case
+	// guards. When not consumed, the same key's movement applies below
+	// against the freshly anchored window.
+	if cmd, consumed := m.spoolFollowInterrupt(selected); consumed {
+		return cmd
+	}
 	switch selected {
 	case actionNone:
 		return nil
@@ -991,25 +1008,16 @@ func (m *Model) handleAction(selected action) tea.Cmd {
 			return m.jobFilterInput.Focus()
 		}
 	case actionUp:
-		if cmd, handled := m.spoolFollowInterrupt(); handled {
-			return cmd
-		}
 		if cmd, handled := m.spoolFilteredMove(-1); handled {
 			return cmd
 		}
 		return m.moveSelection(-1)
 	case actionDown:
-		if cmd, handled := m.spoolFollowInterrupt(); handled {
-			return cmd
-		}
 		if cmd, handled := m.spoolFilteredMove(1); handled {
 			return cmd
 		}
 		return m.moveSelection(1)
 	case actionPageUp:
-		if cmd, handled := m.spoolFollowInterrupt(); handled {
-			return cmd
-		}
 		if cmd, handled := m.spoolFilteredMove(-max(1, m.visible)); handled {
 			return cmd
 		}
@@ -1018,9 +1026,6 @@ func (m *Model) handleAction(selected action) tea.Cmd {
 		}
 		return m.pageSelection(scrollUp)
 	case actionPageDown:
-		if cmd, handled := m.spoolFollowInterrupt(); handled {
-			return cmd
-		}
 		if cmd, handled := m.spoolFilteredMove(max(1, m.visible)); handled {
 			return cmd
 		}
@@ -1029,18 +1034,12 @@ func (m *Model) handleAction(selected action) tea.Cmd {
 		}
 		return m.pageSelection(scrollDown)
 	case actionTop:
-		if cmd, handled := m.spoolFollowInterrupt(); handled {
-			return cmd
-		}
 		if cmd, handled := m.spoolFilteredMove(-len(m.spoolFilterHits)); handled {
 			return cmd
 		}
 		m.activePagerTop()
 		return nil
 	case actionBottom:
-		if cmd, handled := m.spoolFollowInterrupt(); handled {
-			return cmd
-		}
 		if cmd, handled := m.spoolFilteredMove(len(m.spoolFilterHits)); handled {
 			return cmd
 		}
@@ -1529,7 +1528,8 @@ func (m *Model) acceptSpoolCommand() tea.Cmd {
 		return m.runSpoolCommand(ws, "f "+argument)
 	case "follow":
 		if ws.spoolFollow {
-			return m.stopSpoolFollowNavigation(ws)
+			cmd, _ := m.stopSpoolFollowNavigation(ws)
+			return cmd
 		}
 		return m.runSpoolCommand(ws, "follow")
 	default:
@@ -2226,6 +2226,15 @@ func (m *Model) startSpoolContent(ws *workspace, plan pagePlan[int64]) tea.Cmd {
 	}
 	meta, ctx := m.beginBrowse(ws, requestMeta{Screen: ScreenSpoolContent, RecordPlan: plan},
 		fmt.Sprintf("reading spool content for %s", ws.spoolContentIdentity()))
+	if ws.spoolBulkServable() {
+		// The whole file is cached (incl/f/follow downloaded it); serve the
+		// window locally instead of re-fetching lines the cache already holds.
+		// No loadingCommand: the result lands on the next message tick.
+		page := spoolPageFromBulk(ws.spoolBulk, plan.Anchor, m.budget)
+		return func() tea.Msg {
+			return spoolContentResultMsg{Meta: meta, Page: page}
+		}
+	}
 	request := zosmf.ReadSpoolContentRequest{
 		JobName: ws.job.JobName, JobID: ws.job.JobID, FileID: spoolFileKey(*ws.spoolFile),
 		Start: plan.Anchor, MaxItems: m.budget,
