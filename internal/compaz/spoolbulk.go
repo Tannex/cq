@@ -288,33 +288,13 @@ func spoolPageFromBulk(lines []string, start int64, maxItems int) zosmf.SpoolCon
 	return zosmf.SpoolContentPage{Lines: lines[start:end], Start: start, MoreRows: end < total}
 }
 
-// spoolShowFromBulk synchronously replaces the pager window with one built
-// from the bulk cache, so exits and jumps need no server round trip. It runs
-// the normal begin/result browse path with a synthesized page, keeping pager
-// bookkeeping identical to a fetch; the result's prefetch command is
-// deliberately dropped — with a complete cache, follow-up windows are served
-// on demand just as cheaply.
-func (m *Model) spoolShowFromBulk(ws *workspace, anchor int64) bool {
-	if !ws.spoolBulkServable() {
-		return false
-	}
-	ws.cancelBrowse()
-	ws.resetSpoolWindow()
-	plan := ws.spoolContentPage.initialPlan(anchor)
-	meta, _ := m.beginBrowse(ws, requestMeta{Screen: ScreenSpoolContent, RecordPlan: plan}, "")
-	m.handleSpoolContentResult(ws, spoolContentResultMsg{Meta: meta, Page: spoolPageFromBulk(ws.spoolBulk, plan.Anchor, m.budget)})
-	return true
-}
-
 // spoolJumpTo selects a line already in the pager window or re-anchors the
-// window on it, without evicting the bulk cache.
+// window on it, without evicting the bulk cache. With a complete cache,
+// startSpoolContent serves the window synchronously — no server round trip.
 func (m *Model) spoolJumpTo(number int64) tea.Cmd {
 	ws := m.ws()
 	if ws.spoolContentPage.selectKey(strconv.FormatInt(number, 10)) {
 		return m.maybePrefetch(ws)
-	}
-	if m.spoolShowFromBulk(ws, number) {
-		return nil
 	}
 	ws.cancelBrowse()
 	ws.resetSpoolWindow()

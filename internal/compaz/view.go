@@ -1154,7 +1154,19 @@ func (m *Model) spoolFilteredView() string {
 		}
 		return fmt.Sprintf("%s %0*d │ ", marker, numberWidth, window[context.Index])
 	}
+	now := time.Now()
 	model.StyleLineFunc = func(index int) lipgloss.Style {
+		if m.spoolFollow {
+			// Filtered follow mirrors the follow view: the cursor is pinned
+			// to the newest hit, so the fresh-line fade replaces the
+			// selection bar; the gutter's > marker carries the position.
+			if index >= 0 && index < len(window) {
+				if age, ok := m.spoolFreshAge(window[index], now); ok {
+					return spoolFreshStyle(age)
+				}
+			}
+			return consolePalette.plain
+		}
 		if start+index == cursor {
 			return consolePalette.selected
 		}
@@ -1206,36 +1218,33 @@ func (m *Model) spoolFollowView() string {
 		// a selection bar would permanently sit on the newest line and drown
 		// the fresh-line fade. The gutter's > marker carries the position.
 		if age, ok := m.spoolFreshAge(start+index, now); ok {
-			return m.spoolFreshStyle(age)
+			return spoolFreshStyle(age)
 		}
 		return consolePalette.plain
 	}
 	return header + "\n" + model.View()
 }
 
-// spoolFreshStyle highlights a follow-appended line by age: it arrives in
-// bold accent and fades to the default foreground over
-// spoolFreshFadeDuration. Ages are quantized to the fade step so a frame
-// renders identically anywhere within one step.
-func (m *Model) spoolFreshStyle(age time.Duration) lipgloss.Style {
-	fraction := float64(age.Truncate(m.deps.FollowFadeStep)) / float64(spoolFreshFadeDuration)
-	fraction = min(max(fraction, 0), 1)
-	style := lipgloss.NewStyle().Foreground(blendColor(ayu.accent, ayu.fg, fraction))
-	if fraction < 0.4 {
-		style = style.Bold(true)
-	}
-	return style
-}
+// spoolFreshSteps quantizes the fresh-line fade: an age maps to one of these
+// precomputed styles, so frames render identically anywhere within a step
+// and no styles are built per line per frame. The step count is independent
+// of Deps.FollowFadeStep, which only paces the re-render ticks.
+const spoolFreshSteps = 8
 
-// blendColor linearly interpolates between two colors; fraction 0 is from,
-// 1 is to.
-func blendColor(from, to color.Color, fraction float64) color.Color {
-	fr, fg, fb, _ := from.RGBA()
-	tr, tg, tb, _ := to.RGBA()
-	mix := func(f, t uint32) uint8 {
-		return uint8((float64(f) + (float64(t)-float64(f))*fraction) / 257)
+// spoolFreshRamp fades from the accent to the default foreground in
+// perceptual (CIELAB) space; the newest steps are bold.
+var spoolFreshRamp = func() [spoolFreshSteps]lipgloss.Style {
+	var ramp [spoolFreshSteps]lipgloss.Style
+	for i, blended := range lipgloss.Blend1D(spoolFreshSteps, ayu.accent, ayu.fg) {
+		ramp[i] = lipgloss.NewStyle().Foreground(blended).Bold(i < spoolFreshSteps*2/5)
 	}
-	return lipgloss.Color(fmt.Sprintf("#%02X%02X%02X", mix(fr, tr), mix(fg, tg), mix(fb, tb)))
+	return ramp
+}()
+
+// spoolFreshStyle picks the ramp style for a follow-appended line's age.
+func spoolFreshStyle(age time.Duration) lipgloss.Style {
+	step := int(age / (spoolFreshFadeDuration / spoolFreshSteps))
+	return spoolFreshRamp[min(max(step, 0), spoolFreshSteps-1)]
 }
 
 // longestSpoolLineWidth scans only the given lines: forward pages only ever

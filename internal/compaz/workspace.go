@@ -95,10 +95,10 @@ type workspace struct {
 	spoolFollower     *zosmf.SpoolFollower
 	spoolFollowCancel context.CancelFunc
 	spoolBulkBytes    int
-	// spoolFresh marks follow-appended batches for the fade highlight;
-	// spoolFadeTicking guards against stacking more than one fade tick chain.
-	spoolFresh       []spoolFreshBatch
-	spoolFadeTicking bool
+	// spoolFresh marks follow-appended batches for the fade highlight. The
+	// fade tick chain derives its lifetime from this list: seeded when it
+	// becomes non-empty, ended when pruning empties it.
+	spoolFresh []spoolFreshBatch
 	// spoolLongest mirrors rawLongest for the spool content viewer's
 	// horizontal pan.
 	spoolLongest     int

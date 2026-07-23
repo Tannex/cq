@@ -3,7 +3,6 @@ package compaz
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -89,6 +88,12 @@ func (m *Model) startSpoolFollow(ws *workspace) tea.Cmd {
 	if !ws.spoolBulkReady() {
 		return m.startSpoolBulk(ws, "follow")
 	}
+	if ws.spoolBulkTruncated {
+		// A truncated cache holds only a prefix: the follower would poll from
+		// the wrong position and the first append would hit the cap anyway.
+		ws.status = status{Level: statusWarn, Text: "spool file exceeds the cache limit; cannot follow"}
+		return nil
+	}
 	follower := zosmf.FollowSpool(jobs, ws.job.JobName, ws.job.JobID, spoolFileKey(*ws.spoolFile), spoolBulkPageSize)
 	follower.SetPosition(int64(len(ws.spoolBulk)))
 	total := 0
@@ -169,14 +174,16 @@ func (m *Model) handleSpoolFollowResult(ws *workspace, msg spoolFollowResultMsg)
 	ws.spoolFollowCancel = nil
 	if msg.JobGone || zosmf.IsNotFound(msg.Err) {
 		ws.stopSpoolFollow()
+		cmd := m.anchorSpoolTail(ws)
 		ws.status = status{Level: statusWarn, Text: "job no longer exists; follow stopped"}
-		return nil
+		return cmd
 	}
 	if msg.Err != nil {
 		ws.status = status{Level: statusWarn, Text: "follow poll failed: " + msg.Err.Error() + " (retrying)"}
 		return m.scheduleSpoolFollowTick(ws)
 	}
 	firstNew := len(ws.spoolBulk)
+	wasEmpty := len(ws.spoolFresh) == 0
 	for _, line := range msg.Lines {
 		ws.spoolBulkBytes += len(line) + 1
 		if ws.spoolBulkBytes > spoolBulkMaxBytes {
@@ -205,19 +212,29 @@ func (m *Model) handleSpoolFollowResult(ws *workspace, msg spoolFollowResultMsg)
 		}
 		if jobFinished(msg.JobStatus) {
 			ws.stopSpoolFollow()
+			// Re-anchor on the tail so the final drained lines are visible;
+			// without this the pager falls back to the pre-follow window.
+			cmd := m.anchorSpoolTail(ws)
 			text := "job ended"
 			if msg.JobRC != "" {
 				text += " (" + msg.JobRC + ")"
 			}
 			ws.status = status{Level: statusReady, Text: text + " — follow stopped"}
-			return nil
+			return cmd
 		}
 	}
 	ws.status = status{Level: statusReady, Text: spoolFollowStatus(ws)}
-	if msg.More {
-		return tea.Batch(m.pollSpoolFollow(ws), m.scheduleSpoolFadeTick(ws))
+	// Seed a fade chain only on the empty-to-non-empty transition of the
+	// fresh marks; handleSpoolFadeTick keeps exactly one chain alive after
+	// that, so no extra bookkeeping flag is needed.
+	var fade tea.Cmd
+	if wasEmpty && len(ws.spoolFresh) > 0 {
+		fade = m.scheduleSpoolFadeTick(ws)
 	}
-	return tea.Batch(m.scheduleSpoolFollowTick(ws), m.scheduleSpoolFadeTick(ws))
+	if msg.More {
+		return tea.Batch(m.pollSpoolFollow(ws), fade)
+	}
+	return tea.Batch(m.scheduleSpoolFollowTick(ws), fade)
 }
 
 func (m *Model) scheduleSpoolFollowTick(ws *workspace) tea.Cmd {
@@ -260,14 +277,15 @@ func (ws *workspace) spoolFreshAge(index int, now time.Time) (time.Duration, boo
 	return 0, false
 }
 
-// scheduleSpoolFadeTick arms one fade re-render tick while any fresh-line
-// highlight is still fading; the ticking flag keeps concurrent poll results
-// from stacking parallel tick chains.
+// scheduleSpoolFadeTick arms the next fade re-render tick while any
+// fresh-line highlight is still fading. Chains are seeded by
+// handleSpoolFollowResult on the empty-to-non-empty transition of spoolFresh
+// and kept alive here; a chain ends when the last batch is pruned (or its
+// generation dies), so exactly one chain runs per workspace.
 func (m *Model) scheduleSpoolFadeTick(ws *workspace) tea.Cmd {
-	if ws.spoolFadeTicking || len(ws.spoolFresh) == 0 {
+	if len(ws.spoolFresh) == 0 {
 		return nil
 	}
-	ws.spoolFadeTicking = true
 	msg := spoolFadeTickMsg{Profile: ws.profile, Generation: ws.spoolBulkGeneration}
 	return tea.Tick(m.deps.FollowFadeStep, func(time.Time) tea.Msg { return msg })
 }
@@ -275,7 +293,6 @@ func (m *Model) scheduleSpoolFadeTick(ws *workspace) tea.Cmd {
 // handleSpoolFadeTick re-renders (by virtue of being a message), prunes
 // finished highlights, and keeps ticking until the last one has faded.
 func (m *Model) handleSpoolFadeTick(ws *workspace, msg spoolFadeTickMsg) tea.Cmd {
-	ws.spoolFadeTicking = false
 	if msg.Generation != ws.spoolBulkGeneration {
 		return nil
 	}
@@ -290,31 +307,35 @@ func spoolFollowStatus(ws *workspace) string {
 	return fmt.Sprintf("following — %d lines", len(ws.spoolBulk))
 }
 
-// stopSpoolFollowNavigation ends follow mode and re-anchors the pager on the
-// tail line the user was watching, so the view does not snap back to
-// wherever the fetch window happened to be. anchored reports the pager
-// window is populated with the tail selected, so a navigation key can apply
-// its movement immediately.
-func (m *Model) stopSpoolFollowNavigation(ws *workspace) (cmd tea.Cmd, anchored bool) {
-	ws.stopSpoolFollow()
-	ws.status = status{Level: statusReady, Text: "follow stopped"}
-	if ws != &m.workspace || len(ws.spoolBulk) == 0 {
-		return nil, false
-	}
-	if ws.spoolInclude != "" {
-		// The filtered view keeps its own cursor; nothing to re-anchor.
-		return nil, true
+// anchorSpoolTail re-anchors the pager on a full window ending at the cached
+// tail — the lines the user was just watching — with the tail selected.
+// Follow mode only runs over a complete cache, so startSpoolContent resolves
+// synchronously and the pager is populated on return; the command carries
+// any follow-up work (nil in practice at the cache end).
+func (m *Model) anchorSpoolTail(ws *workspace) tea.Cmd {
+	if ws != &m.workspace || ws.spoolInclude != "" || len(ws.spoolBulk) == 0 {
+		// The filtered view keeps its own cursor, and background workspaces
+		// re-anchor when they next become active; nothing to do.
+		return nil
 	}
 	tail := int64(len(ws.spoolBulk) - 1)
-	// Anchor a full window ending on the tail, not starting at it, so the
-	// user keeps the context they were just watching instead of a
-	// single-line window.
-	if m.spoolShowFromBulk(ws, max(0, tail-int64(m.budget)+1)) {
-		ws.spoolContentPage.selectKey(strconv.FormatInt(tail, 10))
-		ws.status = status{Level: statusReady, Text: "follow stopped"}
-		return nil, true
-	}
-	return m.spoolJumpTo(tail), false
+	ws.cancelBrowse()
+	ws.resetSpoolWindow()
+	// A window ending on the tail, not starting at it, keeps the context the
+	// user was watching instead of a single-line window.
+	cmd := m.startSpoolContent(ws, ws.spoolContentPage.initialPlan(max(0, tail-int64(m.budget)+1)))
+	ws.spoolContentPage.bottom()
+	return cmd
+}
+
+// stopSpoolFollowNavigation ends follow mode and re-anchors the pager on the
+// tail line the user was watching, so the view does not snap back to
+// wherever the fetch window happened to be.
+func (m *Model) stopSpoolFollowNavigation(ws *workspace) tea.Cmd {
+	ws.stopSpoolFollow()
+	cmd := m.anchorSpoolTail(ws)
+	ws.status = status{Level: statusReady, Text: "follow stopped"}
+	return cmd
 }
 
 // spoolFollowStopActions are the keys whose first press exits follow mode
@@ -327,17 +348,28 @@ var spoolFollowStopActions = map[action]bool{
 }
 
 // spoolFollowInterrupt ends follow mode when selectedAction is one of its
-// stop keys. consumed reports the key was fully handled here; when follow
-// just stopped with the window anchored, it stays false so the caller
-// applies the same key's movement — the exit keypress is not swallowed.
+// stop keys. consumed reports the key was fully handled here; otherwise the
+// caller applies the same key's movement against the re-anchored window (or
+// the filtered cursor) — the exit keypress is not swallowed.
 func (m *Model) spoolFollowInterrupt(selectedAction action) (tea.Cmd, bool) {
 	ws := m.ws()
 	if ws.screen != ScreenSpoolContent || !ws.spoolFollow || !spoolFollowStopActions[selectedAction] {
 		return nil, false
 	}
-	cmd, anchored := m.stopSpoolFollowNavigation(ws)
-	if selectedAction == actionBack || !anchored {
+	cmd := m.stopSpoolFollowNavigation(ws)
+	switch {
+	case selectedAction == actionBack:
+		// Esc is a pure stop: end the mode, stay on the screen.
 		return cmd, true
+	case selectedAction == actionTop && ws.spoolInclude == "":
+		// Top means the file top (less's g after F); the tail anchor the
+		// stop just placed is the wrong starting point for pager movement,
+		// so jump straight there from the cache. With a filter active the
+		// fall-through filtered movement already goes to the first hit.
+		return m.spoolJumpTo(0), true
 	}
+	// cmd is the anchor's follow-up work, nil at the cache end; the caller's
+	// movement command takes precedence.
+	_ = cmd
 	return nil, false
 }

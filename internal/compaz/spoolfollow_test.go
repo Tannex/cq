@@ -2,6 +2,7 @@ package compaz
 
 import (
 	"context"
+	"image/color"
 	"strings"
 	"testing"
 	"time"
@@ -263,6 +264,51 @@ func TestSpoolFollowStopsWhenJobEnds(t *testing.T) {
 	if model.job.Status != "OUTPUT" || model.job.ReturnCode != "CC 0000" {
 		t.Fatalf("job row not refreshed: %+v", model.job)
 	}
+	// The auto-stop re-anchors the pager on the tail, so the job's final
+	// flush is on screen instead of the pre-follow window.
+	selected := model.spoolContentPage.selectedIndex()
+	if len(model.spoolContent) == 0 || model.spoolContent[selected].Text != "late line" {
+		t.Fatalf("pager not anchored on the final line: content=%v selected=%d", model.spoolContent, selected)
+	}
+}
+
+func TestSpoolFollowTopExitsToFileTop(t *testing.T) {
+	content := []string{"zero", "one", "two", "three"}
+	model := spoolFollowModel(t, &content)
+	if !runSpoolFollowCommand(t, model, "follow") {
+		t.Fatal("follow did not reach an idle tick")
+	}
+
+	// g stops following and jumps to the file top — the whole file is
+	// cached, so landing at the tail window's top would strand the user
+	// thousands of lines from where they asked to go.
+	executeCommand(t, model, model.handleAction(actionTop))
+	if model.spoolFollow {
+		t.Fatal("top did not stop follow mode")
+	}
+	if got := model.spoolContentPage.selectedIndex(); len(model.spoolContent) == 0 || model.spoolContent[got].Number != 0 {
+		t.Fatalf("top after follow landed on line %d, want 0", model.spoolContent[got].Number)
+	}
+}
+
+func TestSpoolFollowRefusesTruncatedCache(t *testing.T) {
+	content := []string{"one", "two"}
+	model := spoolFollowModel(t, &content)
+	// Build the cache, then mark it truncated: a prefix cache would make the
+	// follower poll from the wrong position.
+	runSpoolCommand(t, model, "incl one")
+	runSpoolCommand(t, model, "incl")
+	model.spoolBulkTruncated = true
+
+	if runSpoolFollowCommand(t, model, "follow") {
+		t.Fatal("follow scheduled a tick over a truncated cache")
+	}
+	if model.spoolFollow {
+		t.Fatal("follow started over a truncated cache")
+	}
+	if !strings.Contains(model.status.Text, "cannot follow") {
+		t.Fatalf("status = %q, want a cannot-follow warning", model.status.Text)
+	}
 }
 
 func TestSpoolFollowStopsWhenJobIsPurged(t *testing.T) {
@@ -353,18 +399,24 @@ func TestSpoolFollowHighlightsFreshLinesAndFadesThem(t *testing.T) {
 		t.Fatal("appended line not reported as fresh")
 	}
 
-	// A new line renders in the accent highlight, not the default style.
-	if got := model.spoolFreshStyle(0).GetForeground(); got != ayu.accent {
-		t.Fatalf("fresh style foreground = %v, want the accent", got)
+	// A new line renders bold in a highlight color; a fully faded one is
+	// plain and visibly different. Blend1D returns computed color values, so
+	// compare channels rather than interface identity.
+	rgb := func(c color.Color) [3]uint32 {
+		r, g, b, _ := c.RGBA()
+		return [3]uint32{r, g, b}
 	}
-	if faded := model.spoolFreshStyle(spoolFreshFadeDuration).GetForeground(); faded == ayu.accent {
-		t.Fatal("fully faded style still renders the accent")
+	newest, faded := spoolFreshStyle(0), spoolFreshStyle(spoolFreshFadeDuration)
+	if !newest.GetBold() || faded.GetBold() {
+		t.Fatalf("bold: newest=%v faded=%v, want bold only while fresh", newest.GetBold(), faded.GetBold())
+	}
+	if rgb(newest.GetForeground()) == rgb(faded.GetForeground()) {
+		t.Fatal("fade ramp start and end render the same color")
 	}
 
 	// Once the fade duration has passed, the tick prunes the batch and stops
 	// rescheduling itself.
 	model.spoolFresh[0].At = time.Now().Add(-spoolFreshFadeDuration - time.Second)
-	model.spoolFadeTicking = true
 	tick := spoolFadeTickMsg{Profile: model.profile, Generation: model.spoolBulkGeneration}
 	if cmd := applyMessage(t, model, tick); cmd != nil {
 		t.Fatal("fade tick kept rescheduling after every highlight expired")

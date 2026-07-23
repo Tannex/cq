@@ -1528,8 +1528,7 @@ func (m *Model) acceptSpoolCommand() tea.Cmd {
 		return m.runSpoolCommand(ws, "f "+argument)
 	case "follow":
 		if ws.spoolFollow {
-			cmd, _ := m.stopSpoolFollowNavigation(ws)
-			return cmd
+			return m.stopSpoolFollowNavigation(ws)
 		}
 		return m.runSpoolCommand(ws, "follow")
 	default:
@@ -2228,12 +2227,12 @@ func (m *Model) startSpoolContent(ws *workspace, plan pagePlan[int64]) tea.Cmd {
 		fmt.Sprintf("reading spool content for %s", ws.spoolContentIdentity()))
 	if ws.spoolBulkServable() {
 		// The whole file is cached (incl/f/follow downloaded it); serve the
-		// window locally instead of re-fetching lines the cache already holds.
-		// No loadingCommand: the result lands on the next message tick.
+		// window locally instead of re-fetching lines the cache already
+		// holds. Resolving synchronously keeps this the single cache-serving
+		// mechanism, avoids flashing the loading status, and lets callers
+		// (the follow-exit re-anchor) adjust the populated pager immediately.
 		page := spoolPageFromBulk(ws.spoolBulk, plan.Anchor, m.budget)
-		return func() tea.Msg {
-			return spoolContentResultMsg{Meta: meta, Page: page}
-		}
+		return m.handleSpoolContentResult(ws, spoolContentResultMsg{Meta: meta, Page: page})
 	}
 	request := zosmf.ReadSpoolContentRequest{
 		JobName: ws.job.JobName, JobID: ws.job.JobID, FileID: spoolFileKey(*ws.spoolFile),
