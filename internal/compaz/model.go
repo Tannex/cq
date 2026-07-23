@@ -2314,7 +2314,9 @@ func (m *Model) handleSpoolContentResult(ws *workspace, msg spoolContentResultMs
 	}
 	incoming := make([]spoolLine, len(msg.Page.Lines))
 	for i, text := range msg.Page.Lines {
-		incoming[i] = spoolLine{Number: msg.Page.Start + int64(i), Text: text}
+		// Spool output is arbitrary job output; sanitize like the records
+		// viewer does, or control bytes in a line corrupt the whole frame.
+		incoming[i] = spoolLine{Number: msg.Page.Start + int64(i), Text: decode.DisplayText(text)}
 	}
 	var ended bool
 	ws.spoolContent, _, ended = applyBrowsePage(

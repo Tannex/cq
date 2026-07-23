@@ -171,6 +171,28 @@ func DisplayBytes(b []byte, cm *Charmap) string {
 	return sb.String()
 }
 
+// DisplayText sanitizes already-decoded text for terminal display,
+// replacing control characters with '·' the same way DisplayBytes does for
+// raw records. This includes ESC, carriage return, backspace, and the C1
+// range: a line rendered verbatim could otherwise move the cursor or
+// restyle the frame, corrupting UI regions far from the line itself. Tabs
+// count too — the viewers assume one cell per rune.
+func DisplayText(s string) string {
+	if !strings.ContainsFunc(s, unicode.IsControl) {
+		return s
+	}
+	var sb strings.Builder
+	sb.Grow(len(s))
+	for _, r := range s {
+		if unicode.IsControl(r) {
+			sb.WriteRune('·')
+			continue
+		}
+		sb.WriteRune(r)
+	}
+	return sb.String()
+}
+
 // Text decodes text-mode bytes to UTF-8 using cm, faithfully: every byte maps
 // through the table with no trimming, padding, or control-character
 // substitution, so the result round-trips through EncodeText. It is intended

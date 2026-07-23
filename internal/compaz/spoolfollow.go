@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/Tannex/cq/internal/decode"
 	"github.com/Tannex/cq/internal/zosmf"
 )
 
@@ -185,6 +186,7 @@ func (m *Model) handleSpoolFollowResult(ws *workspace, msg spoolFollowResultMsg)
 	firstNew := len(ws.spoolBulk)
 	wasEmpty := len(ws.spoolFresh) == 0
 	for _, line := range msg.Lines {
+		line = decode.DisplayText(line)
 		ws.spoolBulkBytes += len(line) + 1
 		if ws.spoolBulkBytes > spoolBulkMaxBytes {
 			ws.spoolBulkTruncated = true

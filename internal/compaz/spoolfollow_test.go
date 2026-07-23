@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -372,6 +373,63 @@ func TestSpoolFollowDroppedByRefreshAndBack(t *testing.T) {
 	executeCommand(t, model, model.handleAction(actionBack))
 	if model.screen != ScreenSpoolFiles || model.spoolBulk != nil {
 		t.Fatalf("second back screen=%d bulk=%v, want spool files with the cache dropped", model.screen, model.spoolBulk)
+	}
+}
+
+// assertFrameHygiene fails when a rendered frame carries any control rune
+// besides newlines once the UI's own ANSI styling is stripped: leftover
+// controls are content bytes that would move the cursor or restyle the real
+// terminal, corrupting unrelated regions like the status line.
+func assertFrameHygiene(t *testing.T, frame string) {
+	t.Helper()
+	for _, r := range ansi.Strip(frame) {
+		if r != '\n' && unicode.IsControl(r) {
+			t.Fatalf("frame leaks control rune %U into the terminal", r)
+		}
+	}
+}
+
+// TestSpoolViewsSanitizeHostileContent pins the ingestion sanitizer: binary
+// spool output (ANSI escapes, carriage returns, backspaces, C1 controls)
+// must render as visible placeholders in every spool view, never as raw
+// bytes the terminal would interpret.
+func TestSpoolViewsSanitizeHostileContent(t *testing.T) {
+	hostile := "A\x1b[31mB\rC\bD\tE" + string(rune(0x85)) + "F"
+	content := []string{hostile, "plain line"}
+	model := spoolFollowModel(t, &content)
+
+	// Paged view.
+	assertFrameHygiene(t, model.mainView())
+	for _, line := range model.spoolContent {
+		if strings.ContainsFunc(line.Text, unicode.IsControl) {
+			t.Fatalf("paged line kept control bytes: %q", line.Text)
+		}
+	}
+	if !strings.Contains(model.spoolContent[0].Text, "A·[31mB·C·D·E·F") {
+		t.Fatalf("hostile line not sanitized to placeholders: %q", model.spoolContent[0].Text)
+	}
+
+	// Bulk cache (incl filter) and the filtered view.
+	runSpoolCommand(t, model, "incl plain")
+	assertFrameHygiene(t, model.mainView())
+	for _, line := range model.spoolBulk {
+		if strings.ContainsFunc(line, unicode.IsControl) {
+			t.Fatalf("bulk line kept control bytes: %q", line)
+		}
+	}
+	runSpoolCommand(t, model, "incl")
+
+	// Follow view, including lines appended by a poll.
+	if !runSpoolFollowCommand(t, model, "follow") {
+		t.Fatal("follow did not reach an idle tick")
+	}
+	content = append(content, "tail \x1b]0;title\x07 line")
+	if !spoolFollowTick(t, model) {
+		t.Fatal("poll after growth did not reschedule")
+	}
+	assertFrameHygiene(t, model.mainView())
+	if tail := model.spoolBulk[len(model.spoolBulk)-1]; strings.ContainsFunc(tail, unicode.IsControl) {
+		t.Fatalf("followed line kept control bytes: %q", tail)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/Tannex/cq/internal/decode"
 	"github.com/Tannex/cq/internal/zosmf"
 )
 
@@ -135,9 +136,11 @@ func (m *Model) handleSpoolBulkResult(ws *workspace, msg spoolBulkResultMsg) tea
 		ws.status = status{Level: statusError, Text: "spool download failed: " + msg.Err.Error()}
 		return nil
 	}
-	ws.spoolBulk = msg.Lines
-	if ws.spoolBulk == nil {
-		ws.spoolBulk = []string{}
+	// Sanitize on ingestion (mirroring the paged path) so neither the
+	// viewers nor the incl/f scans ever see cursor-moving control bytes.
+	ws.spoolBulk = make([]string, len(msg.Lines))
+	for i, line := range msg.Lines {
+		ws.spoolBulk[i] = decode.DisplayText(line)
 	}
 	ws.spoolBulkIdentity = msg.Identity
 	ws.spoolBulkTruncated = msg.Truncated
