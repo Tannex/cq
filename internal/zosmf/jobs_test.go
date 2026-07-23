@@ -187,6 +187,9 @@ func TestReadSpoolContentSendsRecordRangeHeader(t *testing.T) {
 		if got := r.Header.Get("X-IBM-Record-Range"); got != "0,10" {
 			t.Errorf("X-IBM-Record-Range = %q", got)
 		}
+		if r.URL.Query().Has("fileEncoding") {
+			t.Errorf("fileEncoding sent without a profile encoding: %q", r.URL.RawQuery)
+		}
 		w.Header().Set("Content-Type", "text/plain")
 		_, _ = io.WriteString(w, "line one\nline two\n")
 	}))
@@ -204,6 +207,25 @@ func TestReadSpoolContentSendsRecordRangeHeader(t *testing.T) {
 	}
 	if page.MoreRows {
 		t.Fatal("MoreRows should be false: returned fewer lines than requested")
+	}
+}
+
+func TestReadSpoolContentSendsProfileEncoding(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("fileEncoding"); got != "IBM-277" {
+			t.Errorf("fileEncoding = %q, want IBM-277", got)
+		}
+		_, _ = io.WriteString(w, "line one\n")
+	}))
+	defer server.Close()
+
+	session := sessionForServer(t, server)
+	session.Encoding = "IBM-277"
+	client := New(session, nil)
+	if _, err := client.ReadSpoolContent(context.Background(), ReadSpoolContentRequest{
+		JobName: "TESTJOB1", JobID: "JOB00023", FileID: "1", Start: 0, MaxItems: 10,
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 

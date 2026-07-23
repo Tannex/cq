@@ -30,7 +30,7 @@ func (z *Client) OpenSpoolContent(ctx context.Context, jobName, jobID, fileID st
 	if err != nil {
 		return nil, err
 	}
-	req, err := z.newAPIRequest(ctx, http.MethodGet, path, nil, nil)
+	req, err := z.newAPIRequest(ctx, http.MethodGet, path, z.spoolQuery(), nil)
 	if err != nil {
 		return nil, err
 	}

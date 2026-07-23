@@ -18,6 +18,9 @@ func TestOpenSpoolContentStreamsWholeFileWithoutRecordRange(t *testing.T) {
 		if got := r.Header.Get("X-IBM-Record-Range"); got != "" {
 			t.Errorf("X-IBM-Record-Range = %q, want none for a whole-file stream", got)
 		}
+		if r.URL.Query().Has("fileEncoding") {
+			t.Errorf("fileEncoding sent without a profile encoding: %q", r.URL.RawQuery)
+		}
 		_, _ = io.WriteString(w, "line one\nline two\nline three\n")
 	}))
 	defer server.Close()
@@ -34,6 +37,28 @@ func TestOpenSpoolContentStreamsWholeFileWithoutRecordRange(t *testing.T) {
 	}
 	if string(content) != "line one\nline two\nline three\n" {
 		t.Fatalf("content = %q", content)
+	}
+}
+
+func TestOpenSpoolContentSendsProfileEncoding(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("fileEncoding"); got != "IBM-277" {
+			t.Errorf("fileEncoding = %q, want IBM-277", got)
+		}
+		_, _ = io.WriteString(w, "line one\n")
+	}))
+	defer server.Close()
+
+	session := sessionForServer(t, server)
+	session.Encoding = "IBM-277"
+	client := New(session, nil)
+	body, err := client.OpenSpoolContent(context.Background(), "TESTJOB1", "JOB00023", "5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer body.Close()
+	if _, err := io.ReadAll(body); err != nil {
+		t.Fatal(err)
 	}
 }
 

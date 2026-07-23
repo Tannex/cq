@@ -289,7 +289,7 @@ func (z *Client) ReadSpoolContent(ctx context.Context, request ReadSpoolContentR
 	if err != nil {
 		return SpoolContentPage{}, err
 	}
-	req, err := z.newAPIRequest(ctx, http.MethodGet, path, nil, nil)
+	req, err := z.newAPIRequest(ctx, http.MethodGet, path, z.spoolQuery(), nil)
 	if err != nil {
 		return SpoolContentPage{}, err
 	}
@@ -323,6 +323,19 @@ func (z *Client) ReadSpoolContent(ctx context.Context, request ReadSpoolContentR
 		moreRows = true
 	}
 	return SpoolContentPage{Lines: lines, Start: request.Start, MoreRows: moreRows}, nil
+}
+
+// spoolQuery carries the profile encoding to the spool records endpoint as
+// its fileEncoding parameter. Unlike data set records — fetched raw and
+// decoded client-side with the configured codepage — spool content is
+// converted EBCDIC-to-text by the server, which otherwise assumes its own
+// default codepage and garbles national characters.
+func (z *Client) spoolQuery() url.Values {
+	encoding := strings.TrimSpace(z.session.Encoding)
+	if encoding == "" {
+		return nil
+	}
+	return url.Values{"fileEncoding": []string{encoding}}
 }
 
 // spoolContentPath validates one spool file's identifiers and builds its
