@@ -1202,9 +1202,9 @@ func (m *Model) spoolFollowView() string {
 		return fmt.Sprintf("%s %0*d │ ", marker, numberWidth, start+context.Index)
 	}
 	model.StyleLineFunc = func(index int) lipgloss.Style {
-		if index == last {
-			return consolePalette.selected
-		}
+		// No selected-row styling here: the cursor is pinned to the tail, so
+		// a selection bar would permanently sit on the newest line and drown
+		// the fresh-line fade. The gutter's > marker carries the position.
 		if age, ok := m.spoolFreshAge(start+index, now); ok {
 			return m.spoolFreshStyle(age)
 		}
