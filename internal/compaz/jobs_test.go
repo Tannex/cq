@@ -229,15 +229,14 @@ func TestJobsBackNavigationChain(t *testing.T) {
 	if model.screen != ScreenJobs || len(model.spoolFiles) != 0 || model.job.JobName != "" {
 		t.Fatalf("back from spool files screen=%d files=%#v job=%#v", model.screen, model.spoolFiles, model.job)
 	}
+	// Jobs is a top-level view like data sets: Back stops here, and leaving
+	// is the view toggle's job.
 	executeCommand(t, model, model.navigateBack())
-	if model.screen != ScreenDataSets {
-		t.Fatalf("back from jobs screen=%d", model.screen)
+	if model.screen != ScreenJobs {
+		t.Fatalf("back from jobs screen=%d, want to stay on ScreenJobs", model.screen)
 	}
-	// Unlike members-of-a-dataset, jobs is not a child of the data set
-	// screen; its cache is retained across a visit to Back, just like the
-	// data set list itself would be if it had a parent screen.
 	if len(model.jobs) != 1 {
-		t.Fatalf("jobs cache was cleared on back-to-parent: %#v", model.jobs)
+		t.Fatalf("jobs cache was cleared by back: %#v", model.jobs)
 	}
 }
 
@@ -521,9 +520,12 @@ func TestModelEndToEndBrowsesJobsSpoolFilesAndContent(t *testing.T) {
 
 	executeCommand(t, model, model.navigateBack())
 	executeCommand(t, model, model.navigateBack())
-	executeCommand(t, model, model.navigateBack())
+	if model.screen != ScreenJobs {
+		t.Fatalf("back x2 landed on screen=%d, want ScreenJobs", model.screen)
+	}
+	executeCommand(t, model, model.switchView())
 	if model.screen != ScreenDataSets {
-		t.Fatalf("back x3 landed on screen=%d, want ScreenDataSets", model.screen)
+		t.Fatalf("view toggle landed on screen=%d, want ScreenDataSets", model.screen)
 	}
 
 	foundJobsRequest, foundSpoolContentRequest := false, false
