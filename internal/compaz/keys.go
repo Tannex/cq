@@ -413,8 +413,8 @@ func (k KeyMap) actionFor(msg tea.KeyPressMsg, ctx keyContext) action {
 	case key.Matches(msg, k.Edit) && (ctx.Screen == ScreenDataSets || ctx.Screen == ScreenMembers):
 		return actionEdit
 	// Query and Diagnostics act on decoded records, so both keys stay dead
-	// until a copybook overlay is loaded — the footer hints advertise them
-	// under exactly the same condition.
+	// until a copybook overlay is loaded — the ? popup advertises them under
+	// exactly the same condition.
 	case key.Matches(msg, k.Query) && ctx.Screen == ScreenRecords && ctx.Overlay:
 		return actionQuery
 	case key.Matches(msg, k.SpoolCommand) && ctx.Screen == ScreenSpoolContent:
@@ -452,7 +452,19 @@ func (k KeyMap) actionFor(msg tea.KeyPressMsg, ctx keyContext) action {
 	}
 }
 
-func (k KeyMap) shortHelp(ctx keyContext, overlay bool) []key.Binding {
+// drillDownScreens are the screens with a parent to go back to; navigateBack
+// walks the same set (its top-level cases are deliberately absent there), so
+// a new drill-down screen must join both or its "esc back" hint and the key
+// itself fall out of step.
+func drillDownScreen(screen Screen) bool {
+	switch screen {
+	case ScreenMembers, ScreenRecords, ScreenSpoolFiles, ScreenSpoolContent:
+		return true
+	}
+	return false
+}
+
+func (k KeyMap) shortHelp(ctx keyContext) []key.Binding {
 	if ctx.EditorOpen {
 		if ctx.EditorConfirm {
 			return []key.Binding{k.DiscardEdit, k.Cancel}
@@ -492,15 +504,15 @@ func (k KeyMap) shortHelp(ctx keyContext, overlay bool) []key.Binding {
 		return []key.Binding{k.Accept, k.Cancel}
 	}
 	// Browse screens keep the strip minimal — the full key list lives in the
-	// ? popup. The modal branches above stay explicit because ? types into a
-	// focused input and cannot open help there. Drill-down screens add Back:
-	// "how do I get out" is the one hint users reach for reflexively.
-	bindings := []key.Binding{k.Help, k.Quit}
-	switch ctx.Screen {
-	case ScreenMembers, ScreenRecords, ScreenSpoolFiles, ScreenSpoolContent:
-		bindings = append(bindings, k.Back)
+	// ? popup. The popup branches above stay explicit because their bindings
+	// exist nowhere else: a focused input types ? instead of opening help,
+	// and the list popups' keys are not part of any screen's full help.
+	// Drill-down screens add Back: "how do I get out" is the one hint users
+	// reach for reflexively.
+	if drillDownScreen(ctx.Screen) {
+		return []key.Binding{k.Help, k.Quit, k.Back}
 	}
-	return bindings
+	return []key.Binding{k.Help, k.Quit}
 }
 
 type helpGroup struct {
@@ -510,7 +522,7 @@ type helpGroup struct {
 
 func (k KeyMap) fullHelp(ctx keyContext, overlay bool) []helpGroup {
 	if ctx.DialogOpen || ctx.InputFocused || ctx.QueryOpen {
-		return []helpGroup{{Name: "KEYS", Bindings: k.shortHelp(ctx, overlay)}}
+		return []helpGroup{{Name: "KEYS", Bindings: k.shortHelp(ctx)}}
 	}
 	pageUp, pageDown := k.PageUp, k.PageDown
 	if ctx.Screen == ScreenRecords && ctx.Mode == ModeJSON {
