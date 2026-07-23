@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Tannex/cq/internal/decode"
 	"github.com/Tannex/cq/internal/zosmf"
 )
 
@@ -22,7 +23,8 @@ func FuzzSpoolContentRendering(f *testing.F) {
 	f.Add("", "pattern")
 
 	f.Fuzz(func(t *testing.T, text, pattern string) {
-		content := strings.Split(text, "\n")
+		lines := strings.Split(text, "\n")
+		content := lines
 		model := spoolFollowModel(t, &content)
 		_ = model.mainView()
 
@@ -34,7 +36,7 @@ func FuzzSpoolContentRendering(f *testing.F) {
 
 		if runSpoolFollowCommand(t, model, "follow") {
 			_ = model.mainView()
-			content = append(content, strings.Split(text, "\n")...)
+			content = append(content, lines...)
 			spoolFollowTick(t, model)
 			_ = model.mainView()
 			executeCommand(t, model, model.handleAction(actionUp))
@@ -50,9 +52,24 @@ func FuzzSpoolContentRendering(f *testing.F) {
 func FuzzRecordContentRendering(f *testing.F) {
 	f.Add([]byte("HELLO WORLD"))
 	f.Add([]byte{0x00, 0xFF, 0x1B, '[', '3', '1', 'm'})
-	f.Add([]byte("//JOB1    JOB (ACCT),'NAME'")) // JCL-shaped, for the highlighter
-	f.Add([]byte("       IDENTIFICATION DIVISION."))
 	f.Add([]byte(strings.Repeat("\xEE", 8000)))
+	// The model decodes with cp037, so the JCL/COBOL seeds that feed the
+	// syntax detector and highlighter must be EBCDIC bytes — ASCII shapes
+	// decode to control-rune soup and never reach highlighting.
+	cm, err := decode.Codepage("cp037")
+	if err != nil {
+		f.Fatal(err)
+	}
+	for _, source := range []string{
+		"//JOB1    JOB (ACCT),'NAME'",
+		"       IDENTIFICATION DIVISION.",
+	} {
+		encoded, err := decode.EncodeString(source, 80, cm)
+		if err != nil {
+			f.Fatal(err)
+		}
+		f.Add(encoded)
+	}
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		half := len(data) / 2

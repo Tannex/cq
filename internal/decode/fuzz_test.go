@@ -13,18 +13,17 @@ func FuzzDisplayBytes(f *testing.F) {
 	f.Add([]byte{0x40, 0xC8, 0xC5, 0xD3, 0xD3, 0xD6})       // EBCDIC text
 	f.Add(make([]byte, 4096))
 
-	codepages := []*Charmap{}
-	for _, name := range []string{"cp037", "latin1"} {
-		cm, err := Codepage(name)
-		if err != nil {
-			f.Fatal(err)
-		}
-		codepages = append(codepages, cm)
+	ebcdic, err := Codepage("cp037")
+	if err != nil {
+		f.Fatal(err)
+	}
+	ascii, err := Codepage("latin1")
+	if err != nil {
+		f.Fatal(err)
 	}
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		for _, cm := range codepages {
-			_ = DisplayBytes(data, cm)
-		}
+		_ = DisplayBytes(data, ebcdic)
+		_ = DisplayBytes(data, ascii)
 	})
 }

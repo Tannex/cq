@@ -20,6 +20,7 @@ const fuzzCopybook = `
    05 BAL PIC S9(4) COMP.
    05 RATE COMP-2.
    05 EDITED PIC ZZ,ZZ9.99-.
+   05 SGN PIC S9(3) SIGN LEADING SEPARATE.
    05 FLAG PIC X.
       88 FLAG-ON VALUE "Y".
    05 ITEM PIC 9(3) OCCURS 1 TO 4 TIMES DEPENDING ON CNT.
@@ -67,6 +68,10 @@ func FuzzDecoderHostileRecords(f *testing.F) {
 			}
 			_, _ = d.Matches(raw)
 			_, _ = d.Decode(raw)
+			// DecodeDisplay is the parallel typed decode the copybook
+			// overlay renders with; its invalid-byte formatters exist
+			// precisely for hostile input, so they must be fuzzed too.
+			_, _ = d.DecodeDisplay(raw)
 		}
 	})
 }
