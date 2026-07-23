@@ -226,7 +226,9 @@ func valueAtPath(value record.Object, parts []string) (record.Value, bool) {
 func compactValue(value record.Value) string {
 	switch value := value.(type) {
 	case string:
-		return value
+		// Decoded text fields carry host bytes; non-display characters
+		// always render as '·' (the JSON view is covered by JSON escaping).
+		return decode.DisplayText(value)
 	case json.Number:
 		return value.String()
 	case record.Object:

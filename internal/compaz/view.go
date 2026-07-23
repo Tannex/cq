@@ -464,6 +464,10 @@ func (m *Model) titleLine() string {
 			chip = m.user
 		}
 	}
+	// Job names, DD names, and data set names come from the host;
+	// non-display characters always render as '·'.
+	screenName = decode.DisplayText(screenName)
+	body = decode.DisplayText(body)
 
 	accent := consolePalette.cyan.Bold(true).Inherit(consolePalette.navy)
 	plain := consolePalette.navy.Foreground(ayu.fg)
@@ -655,6 +659,10 @@ const emptyCellMark = "·"
 // readable; the table truncates with ANSI-aware truncation, so pre-styled
 // strings survive narrow terminals.
 func styledCell(text string, style lipgloss.Style, onCursor bool) string {
+	// Cell values are host-originated (data set, member, job, and spool
+	// fields); non-display characters always render as '·'. Sanitizing here,
+	// before styling, keeps the cell's own ANSI intact.
+	text = decode.DisplayText(text)
 	if text == "" {
 		if onCursor {
 			return emptyCellMark
@@ -1447,6 +1455,9 @@ func (m *Model) statusLine() string {
 			text = detail
 		}
 	}
+	// Status text can embed host-originated content (server error bodies,
+	// find/filter echoes); non-display characters always render as '·'.
+	text = decode.DisplayText(text)
 	indicator := " "
 	if level == statusLoading && len(m.spinner.Spinner.Frames) > 0 {
 		indicator = consolePalette.amber.Render(m.spinner.View())

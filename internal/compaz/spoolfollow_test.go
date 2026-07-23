@@ -433,6 +433,30 @@ func TestSpoolViewsSanitizeHostileContent(t *testing.T) {
 	}
 }
 
+// TestHostValuesSanitizedInChrome pins the general rule: any host-originated
+// value — job names in tables and titles, server text in the status line —
+// shows non-display characters as '·', never as raw bytes.
+func TestHostValuesSanitizedInChrome(t *testing.T) {
+	browser := &fakeBrowser{
+		listJobs: func(context.Context, zosmf.ListJobsRequest) (zosmf.JobPage, error) {
+			return zosmf.JobPage{Items: []zosmf.Job{{
+				JobID: "JOB1\r01", JobName: "EVIL\x1b[31mJB", Status: "OUT\bPUT",
+			}}}, nil
+		},
+	}
+	model := readyModel(t, Options{}, browser, "IBMUSER", "", 90, 16)
+	executeCommand(t, model, model.handleAction(actionJobs))
+
+	frame := model.mainView()
+	assertFrameHygiene(t, frame)
+	if !strings.Contains(ansi.Strip(frame), "EVIL·") {
+		t.Fatalf("hostile job name not rendered with placeholders:\n%s", ansi.Strip(frame))
+	}
+
+	model.status = status{Level: statusError, Text: "server said: \x1b]0;own\x07 no"}
+	assertFrameHygiene(t, model.mainView())
+}
+
 func TestSpoolFollowHighlightsFreshLinesAndFadesThem(t *testing.T) {
 	content := []string{"one", "two", "three"}
 	model := spoolFollowModel(t, &content)
