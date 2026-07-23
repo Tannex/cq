@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -177,10 +178,8 @@ func (z *Client) doRequest(req *http.Request, resource string, successCodes ...i
 		}
 		return nil, fmt.Errorf("z/OSMF request for %s: %w", resource, err)
 	}
-	for _, statusCode := range successCodes {
-		if res.StatusCode == statusCode {
-			return res, nil
-		}
+	if slices.Contains(successCodes, res.StatusCode) {
+		return res, nil
 	}
 	defer res.Body.Close()
 	return nil, z.httpError(res, resource)

@@ -47,16 +47,9 @@ func (s CopybookSource) validate() (CopybookSource, copybook.Format, error) {
 	if (s.Local == "") == (s.DSN == "") {
 		return CopybookSource{}, copybook.FormatAuto, errors.New("set exactly one copybook source: local file or DSN")
 	}
-	var format copybook.Format
-	switch s.Format {
-	case "auto":
-		format = copybook.FormatAuto
-	case "fixed":
-		format = copybook.FormatFixed
-	case "free":
-		format = copybook.FormatFree
-	default:
-		return CopybookSource{}, copybook.FormatAuto, fmt.Errorf("copybook format %q is invalid; use auto, fixed, or free", s.Format)
+	format, err := copybook.ParseFormat(s.Format)
+	if err != nil {
+		return CopybookSource{}, copybook.FormatAuto, err
 	}
 	return s, format, nil
 }
@@ -125,7 +118,7 @@ func buildOverlay(ctx context.Context, source CopybookSource, codepage string, b
 	if err != nil {
 		return nil, fmt.Errorf("build copybook layout %s: %w", source.label(), err)
 	}
-	selected, err := selectOverlayRecord(records, source.Record)
+	selected, err := layout.SelectRecord(records, source.Record)
 	if err != nil {
 		return nil, err
 	}
@@ -140,25 +133,6 @@ func buildOverlay(ctx context.Context, source CopybookSource, codepage string, b
 	return &overlay{
 		Source: source, Record: selected, Decoder: decoder, Columns: overlayColumns(selected),
 	}, nil
-}
-
-func selectOverlayRecord(records []*layout.Record, name string) (*layout.Record, error) {
-	if len(records) == 0 {
-		return nil, errors.New("copybook has no records")
-	}
-	if name == "" {
-		return records[0], nil
-	}
-	for _, candidate := range records {
-		if candidate.Name == name {
-			return candidate, nil
-		}
-	}
-	names := make([]string, 0, len(records))
-	for _, candidate := range records {
-		names = append(names, candidate.Name)
-	}
-	return nil, fmt.Errorf("copybook has no record %q; available records: %s", name, strings.Join(names, ", "))
 }
 
 func overlayColumns(rec *layout.Record) []fieldColumn {

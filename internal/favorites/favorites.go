@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -235,7 +236,7 @@ func (s *Store) Toggle(profile string, kind Kind, name string) (bool, error) {
 	}
 	for i, favorite := range s.favorites {
 		if favorite.visibleTo(profile) && favorite.Kind == kind && favorite.Pattern == name {
-			s.favorites = append(s.favorites[:i], s.favorites[i+1:]...)
+			s.favorites = slices.Delete(s.favorites, i, i+1)
 			return false, s.save()
 		}
 	}
@@ -328,7 +329,7 @@ func (s *Store) Remove(profile string, kind Kind, pattern string) (bool, error) 
 	pattern = dsnmap.NormalizePattern(pattern)
 	for i, favorite := range s.favorites {
 		if favorite.visibleTo(profile) && favorite.Kind == kind && favorite.Pattern == pattern {
-			s.favorites = append(s.favorites[:i], s.favorites[i+1:]...)
+			s.favorites = slices.Delete(s.favorites, i, i+1)
 			return true, s.save()
 		}
 	}

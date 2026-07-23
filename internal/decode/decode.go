@@ -416,9 +416,7 @@ func formatDecimal(digits []byte, negative bool, scale int) string {
 		negative = false
 	}
 
-	if scale < 0 {
-		scale = 0
-	}
+	scale = max(scale, 0)
 
 	// Left-pad with zeros if we don't have enough digits for the scale
 	// plus at least one integer digit.

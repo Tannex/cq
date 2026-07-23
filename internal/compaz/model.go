@@ -840,19 +840,24 @@ func (m *Model) scrollJSON(delta int) bool {
 	return true
 }
 
-func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
-	ws := m.ws()
-	ctx := keyContext{
-		Screen: ws.screen, Mode: ws.recordMode,
+// keyCtx snapshots the active workspace and popup state the key map needs:
+// the single source for key dispatch and both help renderers.
+func (m *Model) keyCtx() keyContext {
+	return keyContext{
+		Screen: m.screen, Mode: m.recordMode,
 		InputFocused: m.inputFocused(), DialogOpen: m.mappingView != nil,
 		DialogFormFocused: m.mappingView != nil && m.mappingView.form != nil,
 		ShowHelp:          m.showHelp, Tabs: m.hasTabs(), JobsAvailable: m.jobsAvailable(),
-		Overlay:           ws.overlay != nil,
+		Overlay:           m.overlay != nil,
 		FavoritesOpen: m.favPopup != nil, FavoritesInput: m.favPopup != nil && m.favPopup.inputActive(),
 		EditorOpen: m.editor != nil, EditorConfirm: m.editor != nil && m.editor.confirmDiscard,
 		QueryOpen: m.query != nil,
 	}
-	selectedAction := m.keys.actionFor(msg, ctx)
+}
+
+func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
+	ws := m.ws()
+	selectedAction := m.keys.actionFor(msg, m.keyCtx())
 	if m.editor != nil {
 		return m.handleEditorKey(msg, selectedAction)
 	}
@@ -862,52 +867,8 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	if m.query != nil {
 		return m.handleQueryKey(msg, selectedAction)
 	}
-	if view := m.mappingView; view != nil {
-		if view.form != nil {
-			switch selectedAction {
-			case actionAccept:
-				return m.submitMappingForm(ws)
-			case actionCancel:
-				view.form = nil
-				if len(view.entries) == 0 {
-					m.mappingView = nil
-				}
-				return nil
-			case actionNextField:
-				return view.form.moveFocus(1)
-			case actionPreviousField:
-				return view.form.moveFocus(-1)
-			default:
-				return view.form.update(msg)
-			}
-		}
-		switch selectedAction {
-		case actionUp:
-			view.move(-1)
-			return nil
-		case actionDown:
-			view.move(1)
-			return nil
-		case actionAccept:
-			return m.applySelectedMapping(ws)
-		case actionMappingAdd:
-			view.openForm(CopybookSource{}, view.target, false)
-			view.setWidth(m.width)
-			return nil
-		case actionMappingEdit:
-			if entry := view.selectedEntry(); entry != nil {
-				view.openForm(mappingSource(entry.Mapping), entry.Mapping.Pattern, true)
-				view.setWidth(m.width)
-			}
-			return nil
-		case actionMappingRemove:
-			return m.removeSelectedMapping(ws)
-		case actionCancel:
-			m.mappingView = nil
-			return nil
-		default:
-			return nil
-		}
+	if m.mappingView != nil {
+		return m.handleMappingKey(ws, msg, selectedAction)
 	}
 	if m.inputFocused() {
 		switch selectedAction {
@@ -916,10 +877,8 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		case actionCancel:
 			m.cancelSearch()
 			return nil
-		case actionNextField:
-			return m.moveJobFilterFocus(1)
-		case actionPreviousField:
-			return m.moveJobFilterFocus(-1)
+		case actionNextField, actionPreviousField:
+			return m.moveJobFilterFocus()
 		default:
 			input := m.focusedInput()
 			updated, cmd := input.Update(msg)
@@ -1102,10 +1061,8 @@ func (m *Model) handleAction(selected action) tea.Cmd {
 		return m.startRecall()
 	case actionJobs:
 		return m.openJobs()
-	case actionNextView:
-		return m.switchView(1)
-	case actionPreviousView:
-		return m.switchView(-1)
+	case actionNextView, actionPreviousView:
+		return m.switchView()
 	case actionEdit:
 		return m.beginEdit()
 	case actionQuery:
@@ -1453,14 +1410,7 @@ func (m *Model) acceptSearch() tea.Cmd {
 		}
 		m.jobOwnerInput.Blur()
 		m.jobFilterInput.Blur()
-		ws.cancelBrowse()
-		ws.jobOwner = owner
-		ws.jobPrefix = prefix
-		ws.resetJobsState()
-		if m.budget <= 0 {
-			return nil
-		}
-		return m.startJobs(ws, ws.jobPage.initialPlan(""))
+		return m.applyJobFilter(ws, owner, prefix)
 	}
 	if m.prefixInput.Focused() {
 		prefix := strings.ToUpper(strings.TrimSpace(m.prefixInput.Value()))
@@ -1469,18 +1419,7 @@ func (m *Model) acceptSearch() tea.Cmd {
 			return nil
 		}
 		m.prefixInput.Blur()
-		ws.cancelBrowse()
-		ws.cancelDecode()
-		ws.prefix = prefix
-		ws.datasetPage.reset(m.visible, m.budget)
-		ws.datasets = nil
-		ws.datasetTotal = nil
-		ws.dataSet = zosmf.DataSet{}
-		ws.resetMemberState()
-		if m.budget <= 0 {
-			return nil
-		}
-		return m.startDataSets(ws, ws.datasetPage.initialPlan(""))
+		return m.applyPrefix(ws, prefix)
 	}
 	pattern := strings.ToUpper(strings.TrimSpace(m.memberInput.Value()))
 	if pattern != "" && len(pattern) < 8 && !strings.ContainsAny(pattern, "*%") {
@@ -1496,6 +1435,38 @@ func (m *Model) acceptSearch() tea.Cmd {
 		return nil
 	}
 	return m.startMembers(ws, ws.memberPage.initialPlan(""))
+}
+
+// applyPrefix commits a new data set prefix filter — clearing the dependent
+// dataset/member state — and starts the listing. Shared by the search accept
+// and favorite jump paths so the reset stays in one place.
+func (m *Model) applyPrefix(ws *workspace, prefix string) tea.Cmd {
+	ws.cancelBrowse()
+	ws.cancelDecode()
+	ws.prefix = prefix
+	m.prefixInput.SetValue(prefix)
+	ws.datasets = nil
+	ws.datasetTotal = nil
+	ws.dataSet = zosmf.DataSet{}
+	ws.resetMemberState()
+	ws.datasetPage.reset(m.visible, m.budget)
+	if m.budget <= 0 {
+		return nil
+	}
+	return m.startDataSets(ws, ws.datasetPage.initialPlan(""))
+}
+
+// applyJobFilter commits the jobs owner/prefix filter and refetches. Shared
+// by the search accept and favorite jump paths.
+func (m *Model) applyJobFilter(ws *workspace, owner, prefix string) tea.Cmd {
+	ws.cancelBrowse()
+	ws.jobOwner = owner
+	ws.jobPrefix = prefix
+	ws.resetJobsState()
+	if m.budget <= 0 {
+		return nil
+	}
+	return m.startJobs(ws, ws.jobPage.initialPlan(""))
 }
 
 func (m *Model) acceptRecordLocation() tea.Cmd {
@@ -1609,23 +1580,17 @@ func (m *Model) cancelSearch() {
 	}
 }
 
-// moveJobFilterFocus cycles focus between the jobs screen's two search-line
+// moveJobFilterFocus swaps focus between the jobs screen's two search-line
 // fields (owner and prefix), the only input-focused screen with more than
 // one field to Tab between.
-func (m *Model) moveJobFilterFocus(delta int) tea.Cmd {
-	inputs := []*textinput.Model{&m.jobOwnerInput, &m.jobFilterInput}
-	current := 0
-	for i, input := range inputs {
-		if input.Focused() {
-			current = i
-			break
-		}
+func (m *Model) moveJobFilterFocus() tea.Cmd {
+	next := &m.jobOwnerInput
+	if m.jobOwnerInput.Focused() {
+		next = &m.jobFilterInput
 	}
-	next := ((current+delta)%len(inputs) + len(inputs)) % len(inputs)
-	for _, input := range inputs {
-		input.Blur()
-	}
-	return inputs[next].Focus()
+	m.jobOwnerInput.Blur()
+	m.jobFilterInput.Blur()
+	return next.Focus()
 }
 
 func (m *Model) activePager() pagerNavigator {
@@ -1761,19 +1726,12 @@ func (m *Model) recordOpen(name string) {
 
 var topLevelViews = []Screen{ScreenDataSets, ScreenJobs}
 
-func (m *Model) switchView(delta int) tea.Cmd {
+// switchView toggles between the two top-level views (data sets and jobs).
+func (m *Model) switchView() tea.Cmd {
 	ws := m.ws()
-	current := ws.topLevelView()
-	index := 0
-	for i, screen := range topLevelViews {
-		if screen == current {
-			index = i
-			break
-		}
-	}
-	next := topLevelViews[((index+delta)%len(topLevelViews)+len(topLevelViews))%len(topLevelViews)]
-	if next == current {
-		return nil
+	next := ScreenJobs
+	if ws.topLevelView() == ScreenJobs {
+		next = ScreenDataSets
 	}
 	if next == ScreenJobs && !m.jobsAvailable() {
 		ws.status = status{Level: statusWarn, Text: "this session cannot browse jobs"}
@@ -2146,20 +2104,31 @@ func (m *Model) maybePrefetch(ws *workspace) tea.Cmd {
 	return nil
 }
 
+// beginBrowse owns the request prologue every start* shares — and with it the
+// invariant that generation, pending request, and cancel func stay in
+// lockstep: cancel the previous fetch, bump the generation, stamp the
+// request's identity, register it as pending, and arm its timeout. meta
+// carries the screen and exactly one plan; everything else is filled here.
+func (m *Model) beginBrowse(ws *workspace, meta requestMeta, statusText string) (requestMeta, context.Context) {
+	ws.cancelBrowse()
+	ws.browseGeneration++
+	meta.Generation = ws.browseGeneration
+	meta.Identity, _ = ws.identityFor(meta.Screen)
+	meta.Profile = ws.profile
+	meta.Budget = m.budget
+	ws.browsePending = &meta
+	ctx, cancel := context.WithTimeout(context.Background(), m.deps.Timeout)
+	ws.browseCancel = cancel
+	ws.status = status{Level: statusLoading, Text: statusText}
+	return meta, ctx
+}
+
 func (m *Model) startDataSets(ws *workspace, plan pagePlan[string]) tea.Cmd {
 	if !ws.canFetch(m.budget) || ws.prefix == "" {
 		return nil
 	}
-	ws.cancelBrowse()
-	ws.browseGeneration++
-	meta := requestMeta{
-		Generation: ws.browseGeneration, Screen: ScreenDataSets,
-		Identity: ws.prefix, Profile: ws.profile, Budget: m.budget, NamePlan: plan,
-	}
-	ws.browsePending = &meta
-	ctx, cancel := context.WithTimeout(context.Background(), m.deps.Timeout)
-	ws.browseCancel = cancel
-	ws.status = status{Level: statusLoading, Text: fmt.Sprintf("listing data sets for %s", ws.prefix)}
+	meta, ctx := m.beginBrowse(ws, requestMeta{Screen: ScreenDataSets, NamePlan: plan},
+		fmt.Sprintf("listing data sets for %s", ws.prefix))
 	browser := ws.browser
 	request := zosmf.ListDataSetsRequest{Prefix: ws.prefix, Start: plan.Anchor, MaxItems: m.budget}
 	return m.loadingCommand(func() tea.Msg {
@@ -2172,16 +2141,8 @@ func (m *Model) startMembers(ws *workspace, plan pagePlan[string]) tea.Cmd {
 	if !ws.canFetch(m.budget) || ws.dataSet.Name == "" {
 		return nil
 	}
-	ws.cancelBrowse()
-	ws.browseGeneration++
-	meta := requestMeta{
-		Generation: ws.browseGeneration, Screen: ScreenMembers,
-		Identity: ws.memberIdentity(), Profile: ws.profile, Budget: m.budget, NamePlan: plan,
-	}
-	ws.browsePending = &meta
-	ctx, cancel := context.WithTimeout(context.Background(), m.deps.Timeout)
-	ws.browseCancel = cancel
-	ws.status = status{Level: statusLoading, Text: fmt.Sprintf("listing members of %s with filter %s", ws.dataSet.Name, displayOr(ws.memberPattern, "*"))}
+	meta, ctx := m.beginBrowse(ws, requestMeta{Screen: ScreenMembers, NamePlan: plan},
+		fmt.Sprintf("listing members of %s with filter %s", ws.dataSet.Name, displayOr(ws.memberPattern, "*")))
 	browser := ws.browser
 	request := zosmf.ListMembersRequest{DataSet: ws.dataSet.Name, Start: plan.Anchor, Pattern: ws.memberPattern, MaxItems: m.budget}
 	return m.loadingCommand(func() tea.Msg {
@@ -2194,21 +2155,12 @@ func (m *Model) startRecords(ws *workspace, plan pagePlan[int64]) tea.Cmd {
 	if !ws.canFetch(m.budget) || ws.dataSet.Name == "" {
 		return nil
 	}
-	ws.cancelBrowse()
-	ws.browseGeneration++
 	member := ""
 	if ws.member != nil {
 		member = ws.member.Name
 	}
-	identity := ws.recordIdentity()
-	meta := requestMeta{
-		Generation: ws.browseGeneration, Screen: ScreenRecords,
-		Identity: identity, Profile: ws.profile, Budget: m.budget, RecordPlan: plan,
-	}
-	ws.browsePending = &meta
-	ctx, cancel := context.WithTimeout(context.Background(), m.deps.Timeout)
-	ws.browseCancel = cancel
-	ws.status = status{Level: statusLoading, Text: fmt.Sprintf("reading records from %s", identity)}
+	meta, ctx := m.beginBrowse(ws, requestMeta{Screen: ScreenRecords, RecordPlan: plan},
+		fmt.Sprintf("reading records from %s", ws.recordIdentity()))
 	browser := ws.browser
 	request := zosmf.ReadRecordsRequest{DataSet: ws.dataSet.Name, Member: member, Start: plan.Anchor, MaxItems: m.budget}
 	return m.loadingCommand(func() tea.Msg {
@@ -2229,7 +2181,7 @@ func (m *Model) openJobs() tea.Cmd {
 		ws.status = status{Level: statusWarn, Text: "still connecting; try again once the session is ready"}
 		return nil
 	}
-	if _, ok := ws.browser.(zosmf.JobBrowser); !ok {
+	if !m.jobsAvailable() {
 		ws.status = status{Level: statusWarn, Text: "this session cannot browse jobs"}
 		return nil
 	}
@@ -2244,16 +2196,8 @@ func (m *Model) startJobs(ws *workspace, plan pagePlan[string]) tea.Cmd {
 	if !ok || !ws.canFetch(m.budget) {
 		return nil
 	}
-	ws.cancelBrowse()
-	ws.browseGeneration++
-	meta := requestMeta{
-		Generation: ws.browseGeneration, Screen: ScreenJobs,
-		Identity: ws.jobIdentity(), Profile: ws.profile, Budget: m.budget, NamePlan: plan,
-	}
-	ws.browsePending = &meta
-	ctx, cancel := context.WithTimeout(context.Background(), m.deps.Timeout)
-	ws.browseCancel = cancel
-	ws.status = status{Level: statusLoading, Text: fmt.Sprintf("listing jobs for %s owned by %s", displayOr(ws.jobPrefix, "*"), displayOr(ws.jobOwner, "*"))}
+	meta, ctx := m.beginBrowse(ws, requestMeta{Screen: ScreenJobs, NamePlan: plan},
+		fmt.Sprintf("listing jobs for %s owned by %s", displayOr(ws.jobPrefix, "*"), displayOr(ws.jobOwner, "*")))
 	request := zosmf.ListJobsRequest{Owner: ws.jobOwner, Prefix: ws.jobPrefix, MaxItems: m.budget}
 	return m.loadingCommand(func() tea.Msg {
 		page, err := jobs.ListJobs(ctx, request)
@@ -2266,17 +2210,8 @@ func (m *Model) startSpoolFiles(ws *workspace, plan pagePlan[string]) tea.Cmd {
 	if !ok || !ws.canFetch(m.budget) || ws.job.JobName == "" {
 		return nil
 	}
-	ws.cancelBrowse()
-	ws.browseGeneration++
-	identity := ws.spoolFileListIdentity()
-	meta := requestMeta{
-		Generation: ws.browseGeneration, Screen: ScreenSpoolFiles,
-		Identity: identity, Profile: ws.profile, Budget: m.budget, NamePlan: plan,
-	}
-	ws.browsePending = &meta
-	ctx, cancel := context.WithTimeout(context.Background(), m.deps.Timeout)
-	ws.browseCancel = cancel
-	ws.status = status{Level: statusLoading, Text: fmt.Sprintf("listing spool files for %s", identity)}
+	meta, ctx := m.beginBrowse(ws, requestMeta{Screen: ScreenSpoolFiles, NamePlan: plan},
+		fmt.Sprintf("listing spool files for %s", ws.spoolFileListIdentity()))
 	jobName, jobID := ws.job.JobName, ws.job.JobID
 	return m.loadingCommand(func() tea.Msg {
 		files, err := jobs.ListSpoolFiles(ctx, jobName, jobID)
@@ -2289,17 +2224,8 @@ func (m *Model) startSpoolContent(ws *workspace, plan pagePlan[int64]) tea.Cmd {
 	if !ok || !ws.canFetch(m.budget) || ws.job.JobName == "" || ws.spoolFile == nil {
 		return nil
 	}
-	ws.cancelBrowse()
-	ws.browseGeneration++
-	identity := ws.spoolContentIdentity()
-	meta := requestMeta{
-		Generation: ws.browseGeneration, Screen: ScreenSpoolContent,
-		Identity: identity, Profile: ws.profile, Budget: m.budget, RecordPlan: plan,
-	}
-	ws.browsePending = &meta
-	ctx, cancel := context.WithTimeout(context.Background(), m.deps.Timeout)
-	ws.browseCancel = cancel
-	ws.status = status{Level: statusLoading, Text: fmt.Sprintf("reading spool content for %s", identity)}
+	meta, ctx := m.beginBrowse(ws, requestMeta{Screen: ScreenSpoolContent, RecordPlan: plan},
+		fmt.Sprintf("reading spool content for %s", ws.spoolContentIdentity()))
 	request := zosmf.ReadSpoolContentRequest{
 		JobName: ws.job.JobName, JobID: ws.job.JobID, FileID: spoolFileKey(*ws.spoolFile),
 		Start: plan.Anchor, MaxItems: m.budget,

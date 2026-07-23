@@ -289,10 +289,7 @@ func (p *pager[A]) page(direction scrollDirection) {
 		return
 	}
 	p.normalizeWindow()
-	offset := p.cursorOffset()
-	if offset < 0 {
-		offset = 0
-	}
+	offset := max(p.cursorOffset(), 0)
 	target := p.selected + int(direction)*p.visible
 	target = min(max(0, target), len(p.keys)-1)
 	p.selected = target

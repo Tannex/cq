@@ -3,7 +3,9 @@
 package layout
 
 import (
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/Tannex/cq/internal/copybook"
 )
@@ -68,6 +70,27 @@ type Record struct {
 
 // Variable reports whether the record length depends on the data.
 func (r *Record) Variable() bool { return r.MinLength != r.MaxLength }
+
+// SelectRecord picks the record to decode: the named 01 level, or the first
+// when name is empty.
+func SelectRecord(recs []*Record, name string) (*Record, error) {
+	if len(recs) == 0 {
+		return nil, errors.New("copybook has no records")
+	}
+	if name == "" {
+		return recs[0], nil
+	}
+	for _, r := range recs {
+		if r.Name == name {
+			return r, nil
+		}
+	}
+	names := make([]string, 0, len(recs))
+	for _, r := range recs {
+		names = append(names, r.Name)
+	}
+	return nil, fmt.Errorf("copybook has no record %q; available records: %s", name, strings.Join(names, ", "))
+}
 
 // Build resolves all copybook items into record layouts. When the copybook
 // is a fragment (no 01 levels, several top-level items), the items are

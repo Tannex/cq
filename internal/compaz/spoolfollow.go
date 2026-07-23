@@ -2,9 +2,7 @@ package compaz
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 
@@ -99,7 +97,7 @@ func (m *Model) pollSpoolFollow(ws *workspace) tea.Cmd {
 		// all. Errors other than "gone" are ignored — the next tick retries.
 		job, err := statusReader.ReadJobStatus(ctx, jobName, jobID)
 		switch {
-		case isJobGone(err):
+		case zosmf.IsNotFound(err):
 			msg.JobGone = true
 		case err == nil:
 			msg.JobChecked = true
@@ -124,12 +122,6 @@ func jobFinished(jobStatus string) bool {
 	return strings.EqualFold(strings.TrimSpace(jobStatus), "OUTPUT")
 }
 
-// isJobGone reports the not-found a purged job produces.
-func isJobGone(err error) bool {
-	var httpErr *zosmf.HTTPError
-	return errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusNotFound
-}
-
 func (m *Model) handleSpoolFollowTick(ws *workspace, msg spoolFollowTickMsg) tea.Cmd {
 	if msg.Generation != ws.spoolBulkGeneration || msg.Identity != ws.spoolContentIdentity() || !ws.spoolFollow {
 		return nil
@@ -146,19 +138,14 @@ func (m *Model) handleSpoolFollowResult(ws *workspace, msg spoolFollowResultMsg)
 		return nil
 	}
 	ws.spoolFollowCancel = nil
-	if msg.Err != nil {
-		if isJobGone(msg.Err) {
-			ws.stopSpoolFollow()
-			ws.status = status{Level: statusWarn, Text: "job no longer exists; follow stopped"}
-			return nil
-		}
-		ws.status = status{Level: statusWarn, Text: "follow poll failed: " + msg.Err.Error() + " (retrying)"}
-		return m.scheduleSpoolFollowTick(ws)
-	}
-	if msg.JobGone {
+	if msg.JobGone || zosmf.IsNotFound(msg.Err) {
 		ws.stopSpoolFollow()
 		ws.status = status{Level: statusWarn, Text: "job no longer exists; follow stopped"}
 		return nil
+	}
+	if msg.Err != nil {
+		ws.status = status{Level: statusWarn, Text: "follow poll failed: " + msg.Err.Error() + " (retrying)"}
+		return m.scheduleSpoolFollowTick(ws)
 	}
 	for _, line := range msg.Lines {
 		ws.spoolBulkBytes += len(line) + 1

@@ -8,6 +8,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -39,10 +40,6 @@ var debugLog = log.New(io.Discard, "cq: ", 0)
 // loadDefaultZoweSession remains injectable at the executable boundary so
 // integration tests never touch a user's real Zowe configuration or keyring.
 var loadDefaultZoweSession = zowe.LoadDefault
-
-func reportedVersion() string {
-	return buildinfo.Reported()
-}
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -111,7 +108,7 @@ examples:
 	}
 	fs.Parse(args)
 	if *showVersion {
-		fmt.Fprintf(os.Stdout, "cq %s\n", reportedVersion())
+		fmt.Fprintf(os.Stdout, "cq %s\n", buildinfo.Reported())
 		return nil
 	}
 	codepageExplicit := false
@@ -149,16 +146,9 @@ examples:
 
 	var source dataSetSource = zosmf.NewLazy(loadDefaultZoweSession, debugLog.Printf)
 
-	var cbFormat copybook.Format
-	switch *format {
-	case "auto":
-		cbFormat = copybook.FormatAuto
-	case "fixed":
-		cbFormat = copybook.FormatFixed
-	case "free":
-		cbFormat = copybook.FormatFree
-	default:
-		return fmt.Errorf("unknown -format %q (want auto, fixed, or free)", *format)
+	cbFormat, err := copybook.ParseFormat(*format)
+	if err != nil {
+		return err
 	}
 
 	var q *query.Query
@@ -203,7 +193,7 @@ examples:
 		return queryLayout(os.Stdout, recs, q, *rawOut, *pretty)
 	}
 
-	rec, err := pickRecord(recs, *recName)
+	rec, err := layout.SelectRecord(recs, *recName)
 	if err != nil {
 		return err
 	}
@@ -277,22 +267,6 @@ examples:
 	return decodeAll(os.Stdout, d, in, *pretty, *maxRecs, q, *rawOut)
 }
 
-func pickRecord(recs []*layout.Record, name string) (*layout.Record, error) {
-	if name == "" {
-		return recs[0], nil
-	}
-	for _, r := range recs {
-		if r.Name == name {
-			return r, nil
-		}
-	}
-	var names []string
-	for _, r := range recs {
-		names = append(names, r.Name)
-	}
-	return nil, fmt.Errorf("no record named %q in copybook (have %v)", name, names)
-}
-
 // layoutDoc shapes the layout JSON for one record.
 type layoutDoc struct {
 	Record    string          `json:"record"`
@@ -321,7 +295,17 @@ func printLayout(w io.Writer, recs []*layout.Record, pretty bool) error {
 	return enc.Encode(layoutDocuments(recs))
 }
 
+// decodeAll buffers w: decoding emits a couple of small writes per record,
+// and unbuffered each would be its own syscall.
 func decodeAll(w io.Writer, d *record.Decoder, in io.Reader, pretty bool, max int, q *query.Query, rawOut bool) error {
+	bw := bufio.NewWriterSize(w, 256<<10)
+	if err := decodeAllBuffered(bw, d, in, pretty, max, q, rawOut); err != nil {
+		return err
+	}
+	return bw.Flush()
+}
+
+func decodeAllBuffered(w io.Writer, d *record.Decoder, in io.Reader, pretty bool, max int, q *query.Query, rawOut bool) error {
 	emit := emitter(w, rawOut, pretty)
 	if q == nil {
 		if _, err := io.WriteString(w, "["); err != nil {

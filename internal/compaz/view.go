@@ -139,23 +139,28 @@ func (m *Model) chromeRule() string {
 	return consolePalette.muted.Render(strings.Repeat("─", max(0, m.width)))
 }
 
+// viewStrip styles and labels never change per frame; labels parallel
+// topLevelViews.
+var (
+	viewStripLabels = []string{"DATA SETS", "JOBS"}
+	viewStripAccent = consolePalette.cyan.Bold(true).Inherit(consolePalette.navy)
+	viewStripMuted  = consolePalette.navy.Foreground(ayu.comment).Faint(true)
+)
+
 func (m *Model) viewStrip() string {
 	if !m.jobsAvailable() {
 		return ""
 	}
-	accent := consolePalette.cyan.Bold(true).Inherit(consolePalette.navy)
-	muted := consolePalette.navy.Foreground(ayu.comment).Faint(true)
 	current := m.topLevelView()
-	labels := map[Screen]string{ScreenDataSets: "DATA SETS", ScreenJobs: "JOBS"}
 	parts := make([]string, len(topLevelViews))
 	for i, screen := range topLevelViews {
 		if screen == current {
-			parts[i] = accent.Render(labels[screen])
+			parts[i] = viewStripAccent.Render(viewStripLabels[i])
 		} else {
-			parts[i] = muted.Render(labels[screen])
+			parts[i] = viewStripMuted.Render(viewStripLabels[i])
 		}
 	}
-	return strings.Join(parts, muted.Render("·"))
+	return strings.Join(parts, viewStripMuted.Render("·"))
 }
 
 // profileStrip renders the profile switcher for the right edge of the status
@@ -259,8 +264,7 @@ func scrollWindow(lines []string, offset, capacity int) []string {
 // Every line is rendered through the supplied styles so all cells carry the
 // caller's background instead of falling back to the terminal default.
 func (m *Model) helpContent(accent, body lipgloss.Style) []string {
-	ctx := keyContext{Screen: m.screen, Mode: m.recordMode, InputFocused: m.inputFocused(), DialogOpen: m.mappingView != nil, DialogFormFocused: m.mappingView != nil && m.mappingView.form != nil, Tabs: m.hasTabs(), JobsAvailable: m.jobsAvailable()}
-	groups := m.keys.fullHelp(ctx, m.overlay != nil)
+	groups := m.keys.fullHelp(m.keyCtx(), m.overlay != nil)
 	var lines []string
 	for i, group := range groups {
 		if i > 0 {
@@ -372,7 +376,7 @@ func (m *Model) mappingViewContent() string {
 		copybookWidth := 0
 		for _, entry := range view.entries {
 			patternWidth = max(patternWidth, len(entry.Mapping.Pattern))
-			copybookWidth = max(copybookWidth, len(sourceDisplay(mappingSource(entry.Mapping))))
+			copybookWidth = max(copybookWidth, len(mappingSource(entry.Mapping).label()))
 		}
 		patternWidth = min(max(patternWidth, 7), 36)
 		copybookWidth = min(max(copybookWidth, 8), 44)
@@ -384,7 +388,7 @@ func (m *Model) mappingViewContent() string {
 			}
 			row := fmt.Sprintf("%-*s  %-*s  %s",
 				patternWidth, truncateCell(entry.Mapping.Pattern, patternWidth),
-				copybookWidth, truncateCell(sourceDisplay(mappingSource(entry.Mapping)), copybookWidth),
+				copybookWidth, truncateCell(mappingSource(entry.Mapping).label(), copybookWidth),
 				entry.Mapping.Record)
 			style := consolePalette.plain
 			if i == view.selected {
@@ -416,13 +420,7 @@ func (m *Model) mappingViewContent() string {
 
 // truncateCell clamps a plain (unstyled) cell to width with an ellipsis.
 func truncateCell(value string, width int) string {
-	if len(value) <= width {
-		return value
-	}
-	if width <= 1 {
-		return value[:width]
-	}
-	return value[:width-1] + "…"
+	return truncateStyled(value, width)
 }
 
 func (m *Model) titleLine() string {
@@ -1101,15 +1099,22 @@ func (m *Model) spoolContentView() string {
 	return view
 }
 
+// spoolBulkNumberWidth sizes the bulk-index gutter shared by the filtered and
+// follow spool views.
+func (m *Model) spoolBulkNumberWidth() int {
+	width := 4
+	if len(m.spoolBulk) > 0 {
+		width = max(width, len(strconv.Itoa(len(m.spoolBulk)-1)))
+	}
+	return width
+}
+
 // spoolFilteredView renders the bulk-cache lines matching the include
 // filter, windowed around the filter cursor. The gutter shows the bulk
 // index, which is the zero-based line number; the pager's end marker is not
 // meaningful here because the filtered subset is not the fetch window.
 func (m *Model) spoolFilteredView() string {
-	numberWidth := 4
-	if len(m.spoolBulk) > 0 {
-		numberWidth = max(numberWidth, len(strconv.Itoa(len(m.spoolBulk)-1)))
-	}
+	numberWidth := m.spoolBulkNumberWidth()
 	title := "SPOOL CONTENT (filtered)"
 	if m.spoolBulkTruncated {
 		title += " — cache truncated"
@@ -1162,10 +1167,7 @@ func (m *Model) spoolFilteredView() string {
 // bulk-index gutter; with an include filter active the filtered view renders
 // instead, itself pinned to the newest hit.
 func (m *Model) spoolFollowView() string {
-	numberWidth := 4
-	if len(m.spoolBulk) > 0 {
-		numberWidth = max(numberWidth, len(strconv.Itoa(len(m.spoolBulk)-1)))
-	}
+	numberWidth := m.spoolBulkNumberWidth()
 	title := "SPOOL CONTENT (following)"
 	if m.spoolBulkTruncated {
 		title += " — cache truncated"
@@ -1412,10 +1414,14 @@ func (m *Model) statusLine() string {
 	}
 	label := m.renderStatusLabel(level)
 
+	// The strip-less fallback for terminals too narrow to fit a profile strip.
+	plainLine := func() string {
+		return truncateStyled(fmt.Sprintf(" %s %s  %s", indicator, label, text), m.width)
+	}
+
 	const minWidthForStrip = 40
 	if m.width < minWidthForStrip {
-		line := fmt.Sprintf(" %s %s  %s", indicator, label, text)
-		return truncateStyled(line, m.width)
+		return plainLine()
 	}
 
 	prefix := fmt.Sprintf(" %s %s  ", indicator, label)
@@ -1425,15 +1431,13 @@ func (m *Model) statusLine() string {
 	// narrow terminals.
 	right := m.profileStrip(m.width - prefixWidth - 10)
 	if right == "" {
-		line := fmt.Sprintf(" %s %s  %s", indicator, label, text)
-		return truncateStyled(line, m.width)
+		return plainLine()
 	}
 
 	rightWidth := lipgloss.Width(right)
 	maxTextWidth := m.width - prefixWidth - rightWidth
 	if maxTextWidth < 10 {
-		line := fmt.Sprintf(" %s %s  %s", indicator, label, text)
-		return truncateStyled(line, m.width)
+		return plainLine()
 	}
 
 	truncatedText := truncateStyled(text, maxTextWidth)
@@ -1515,15 +1519,7 @@ func selectedDiagnostic(diagnostics []record.Diagnostic, overlay *overlay, horiz
 }
 
 func (m *Model) helpLine() string {
-	ctx := keyContext{
-		Screen: m.screen, Mode: m.recordMode, InputFocused: m.inputFocused(),
-		DialogOpen: m.mappingView != nil, DialogFormFocused: m.mappingView != nil && m.mappingView.form != nil,
-		ShowHelp: m.showHelp, Tabs: m.hasTabs(), JobsAvailable: m.jobsAvailable(),
-		FavoritesOpen: m.favPopup != nil, FavoritesInput: m.favPopup != nil && m.favPopup.inputActive(),
-		EditorOpen: m.editor != nil, EditorConfirm: m.editor != nil && m.editor.confirmDiscard,
-		QueryOpen: m.query != nil,
-	}
-	line := m.help.ShortHelpView(m.keys.shortHelp(ctx, m.overlay != nil))
+	line := m.help.ShortHelpView(m.keys.shortHelp(m.keyCtx(), m.overlay != nil))
 	return consolePalette.muted.Width(m.width).Render(truncateStyled(" "+line, m.width))
 }
 

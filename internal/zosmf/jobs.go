@@ -248,27 +248,15 @@ func (z *Client) ListJobs(ctx context.Context, request ListJobsRequest) (JobPage
 
 // ListSpoolFiles lists every spool/DD file for one job.
 func (z *Client) ListSpoolFiles(ctx context.Context, jobName, jobID string) ([]SpoolFile, error) {
-	name, err := normalizeJobFilterValue("job name", jobName)
+	jobsPath, resource, err := jobPath(jobName, jobID)
 	if err != nil {
 		return nil, err
 	}
-	if name == "" {
-		return nil, &RequestError{Field: "job name", Message: "must not be empty"}
-	}
-	id, err := normalizeJobFilterValue("job ID", jobID)
+	req, err := z.newAPIRequest(ctx, http.MethodGet, jobsPath+"/files", nil, nil)
 	if err != nil {
 		return nil, err
 	}
-	if id == "" {
-		return nil, &RequestError{Field: "job ID", Message: "must not be empty"}
-	}
-
-	path := "/zosmf/restjobs/jobs/" + url.PathEscape(name) + "/" + url.PathEscape(id) + "/files"
-	req, err := z.newAPIRequest(ctx, http.MethodGet, path, nil, nil)
-	if err != nil {
-		return nil, err
-	}
-	res, err := z.doRequest(req, name+"/"+id, http.StatusOK)
+	res, err := z.doRequest(req, resource, http.StatusOK)
 	if err != nil {
 		return nil, err
 	}
