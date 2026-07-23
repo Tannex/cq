@@ -308,7 +308,7 @@ func (z *Client) ReadSpoolContent(ctx context.Context, request ReadSpoolContentR
 	if err != nil {
 		return SpoolContentPage{}, err
 	}
-	text := strings.TrimSuffix(latin1String(body), "\n")
+	text := strings.TrimSuffix(hostTextString(body, res.Header.Get("Content-Type")), "\n")
 	var lines []string
 	// A body of just "\n" (one blank output line) trims to "", identical to
 	// a genuinely empty body; check the untrimmed body length instead of the
@@ -357,24 +357,6 @@ func spoolRequestError(err error, query url.Values) error {
 		return fmt.Errorf("%w (request sent fileEncoding=%s from the profile's encoding property)", err, codeset)
 	}
 	return err
-}
-
-// latin1String decodes a spool response body. z/OSMF serves text-mode
-// payloads as ISO 8859-1 regardless of the source EBCDIC codepage (the same
-// behavior the editor's textCharmap documents), so bytes beyond ASCII must
-// be widened to runes rather than passed through as invalid UTF-8.
-func latin1String(body []byte) string {
-	for _, c := range body {
-		if c >= 0x80 {
-			var builder strings.Builder
-			builder.Grow(len(body) + len(body)/8)
-			for _, c := range body {
-				builder.WriteRune(rune(c))
-			}
-			return builder.String()
-		}
-	}
-	return string(body)
 }
 
 // spoolContentPath validates one spool file's identifiers and builds its

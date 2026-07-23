@@ -249,24 +249,48 @@ func TestReadSpoolContentFileEncodingParameter(t *testing.T) {
 	}
 }
 
-// TestReadSpoolContentDecodesLatin1Bytes pins the wire charset: z/OSMF text
-// payloads are ISO 8859-1, so national characters arrive as single bytes
-// that must widen to runes instead of surviving as invalid UTF-8.
-func TestReadSpoolContentDecodesLatin1Bytes(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte{'S', 0xC6, 'R', 'B', 0xC5, 'R', '\n'}) // SÆRBÅR in ISO 8859-1
-	}))
-	defer server.Close()
+// TestReadSpoolContentDecodesHostText pins the wire-charset policy: the
+// host's network codeset is configuration dependent, so a declared charset
+// wins, and undeclared bodies pass through when they validate as UTF-8 and
+// are read as ISO 8859-1 otherwise.
+func TestReadSpoolContentDecodesHostText(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		contentType string
+		body        []byte
+		want        string
+	}{
+		{"undeclared 8859-1", "", []byte{'S', 0xC6, 'R', 'B', 0xC5, 'R', '\n'}, "SÆRBÅR"},
+		{"undeclared UTF-8", "text/plain", []byte("BØF\n"), "BØF"},
+		{"declared 8859-1", "text/plain; charset=ISO-8859-1", []byte{'B', 0xD8, 'F', '\n'}, "BØF"},
+		// A declared UTF-8 body must never be widened: the 0xC3 0x85 pair
+		// is Å, not Ã…
+		{"declared UTF-8", "text/plain; charset=UTF-8", []byte("ÅRHUS\n"), "ÅRHUS"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if tc.contentType != "" {
+					w.Header().Set("Content-Type", tc.contentType)
+				} else {
+					// Suppress net/http's content sniffing so the case
+					// really exercises an absent header.
+					w.Header()["Content-Type"] = nil
+				}
+				_, _ = w.Write(tc.body)
+			}))
+			defer server.Close()
 
-	client := New(sessionForServer(t, server), nil)
-	page, err := client.ReadSpoolContent(context.Background(), ReadSpoolContentRequest{
-		JobName: "TESTJOB1", JobID: "JOB00023", FileID: "1", Start: 0, MaxItems: 10,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(page.Lines) != 1 || page.Lines[0] != "SÆRBÅR" {
-		t.Fatalf("lines = %#v, want the 8859-1 bytes decoded to SÆRBÅR", page.Lines)
+			client := New(sessionForServer(t, server), nil)
+			page, err := client.ReadSpoolContent(context.Background(), ReadSpoolContentRequest{
+				JobName: "TESTJOB1", JobID: "JOB00023", FileID: "1", Start: 0, MaxItems: 10,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(page.Lines) != 1 || page.Lines[0] != tc.want {
+				t.Fatalf("lines = %#v, want %q", page.Lines, tc.want)
+			}
+		})
 	}
 }
 

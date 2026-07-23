@@ -69,26 +69,49 @@ func TestOpenSpoolContentFileEncodingParameter(t *testing.T) {
 	}
 }
 
-// TestOpenSpoolContentDecodesLatin1Stream pins the streaming path's wire
-// charset the same way the paged reader's test does.
-func TestOpenSpoolContentDecodesLatin1Stream(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte{'B', 0xD8, 'F', '\n'}) // BØF in ISO 8859-1
-	}))
-	defer server.Close()
+// TestOpenSpoolContentDecodesHostTextStream pins the streaming path's
+// wire-charset policy the same way the paged reader's test does: declared
+// charsets win; undeclared streams are sniffed, so UTF-8 passes through and
+// anything else is read as ISO 8859-1.
+func TestOpenSpoolContentDecodesHostTextStream(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		contentType string
+		body        []byte
+		want        string
+	}{
+		{"undeclared 8859-1", "", []byte{'B', 0xD8, 'F', '\n'}, "BØF\n"},
+		{"undeclared UTF-8", "text/plain", []byte("BØF\n"), "BØF\n"},
+		{"declared 8859-1", "text/plain; charset=ISO-8859-1", []byte{'B', 0xD8, 'F', '\n'}, "BØF\n"},
+		{"declared UTF-8", "text/plain; charset=UTF-8", []byte("ÅRHUS\n"), "ÅRHUS\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if tc.contentType != "" {
+					w.Header().Set("Content-Type", tc.contentType)
+				} else {
+					// Suppress net/http's content sniffing so the case
+					// really exercises an absent header.
+					w.Header()["Content-Type"] = nil
+				}
+				_, _ = w.Write(tc.body)
+			}))
+			defer server.Close()
 
-	client := New(sessionForServer(t, server), nil)
-	body, err := client.OpenSpoolContent(context.Background(), "TESTJOB1", "JOB00023", "5")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer body.Close()
-	content, err := io.ReadAll(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(content) != "BØF\n" {
-		t.Fatalf("content = %q, want the 8859-1 byte decoded to BØF", content)
+			client := New(sessionForServer(t, server), nil)
+			body, err := client.OpenSpoolContent(context.Background(), "TESTJOB1", "JOB00023", "5")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer body.Close()
+			content, err := io.ReadAll(body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(content) != tc.want {
+				t.Fatalf("content = %q, want %q", content, tc.want)
+			}
+		})
 	}
 }
 
