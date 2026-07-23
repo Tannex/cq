@@ -159,24 +159,41 @@ func TestShowHelpSuppressesNavigationAndEnablesScrolling(t *testing.T) {
 	}
 }
 
-func TestRecordShortHelpExposesClearOverlay(t *testing.T) {
+// TestBrowseShortHelpStaysMinimal pins the deliberate strip diet: browse
+// screens advertise only help/quit (plus Back on drill-downs) and leave the
+// full key list to the ? popup. Overlay keys live in fullHelp only.
+func TestBrowseShortHelpStaysMinimal(t *testing.T) {
 	keys := DefaultKeyMap()
-	withoutOverlay := keys.shortHelp(keyContext{Screen: ScreenRecords}, false)
-	withOverlay := keys.shortHelp(keyContext{Screen: ScreenRecords}, true)
 
-	containsClear := func(bindings []key.Binding) bool {
+	contains := func(bindings []key.Binding, want key.Binding) bool {
 		for _, binding := range bindings {
-			if slices.Equal(binding.Keys(), keys.ClearOverlay.Keys()) {
+			if slices.Equal(binding.Keys(), want.Keys()) {
 				return true
 			}
 		}
 		return false
 	}
-	if containsClear(withoutOverlay) {
-		t.Fatal("clear overlay appeared in short help without an overlay")
+
+	records := keys.shortHelp(keyContext{Screen: ScreenRecords}, true)
+	if contains(records, keys.ClearOverlay) || contains(records, keys.Locate) {
+		t.Fatalf("browse short help advertises more than help/quit/back: %#v", records)
 	}
-	if !containsClear(withOverlay) {
-		t.Fatal("clear overlay missing from short help with an active overlay")
+	if !contains(records, keys.Help) || !contains(records, keys.Quit) || !contains(records, keys.Back) {
+		t.Fatalf("records short help missing help/quit/back: %#v", records)
+	}
+	if datasets := keys.shortHelp(keyContext{Screen: ScreenDataSets}, false); contains(datasets, keys.Back) {
+		t.Fatal("top-level data sets screen advertises Back with nothing to go back to")
+	}
+
+	groups := keys.fullHelp(keyContext{Screen: ScreenRecords}, true)
+	inFull := false
+	for _, group := range groups {
+		if contains(group.Bindings, keys.ClearOverlay) {
+			inFull = true
+		}
+	}
+	if !inFull {
+		t.Fatal("clear overlay missing from the full help popup with an active overlay")
 	}
 }
 
@@ -246,23 +263,6 @@ func TestProfileKeysSwitchOnlyWhenTabsEnabledAndUnfocused(t *testing.T) {
 
 func TestProfileHelpAppearsOnlyWithTabs(t *testing.T) {
 	keys := DefaultKeyMap()
-	withoutTabs := keys.shortHelp(keyContext{Screen: ScreenDataSets, Tabs: false}, false)
-	withTabs := keys.shortHelp(keyContext{Screen: ScreenDataSets, Tabs: true}, false)
-
-	contains := func(bindings []key.Binding, want key.Binding) bool {
-		for _, binding := range bindings {
-			if slices.Equal(binding.Keys(), want.Keys()) {
-				return true
-			}
-		}
-		return false
-	}
-	if contains(withoutTabs, keys.NextProfile) {
-		t.Fatal("next profile appeared in short help without tabs")
-	}
-	if !contains(withTabs, keys.NextProfile) || !contains(withTabs, keys.PreviousProfile) {
-		t.Fatalf("profile keys missing from tab short help: %#v", withTabs)
-	}
 
 	fullWithout := keys.fullHelp(keyContext{Screen: ScreenDataSets, Tabs: false}, false)
 	fullWith := keys.fullHelp(keyContext{Screen: ScreenDataSets, Tabs: true}, false)

@@ -491,35 +491,14 @@ func (k KeyMap) shortHelp(ctx keyContext, overlay bool) []key.Binding {
 		}
 		return []key.Binding{k.Accept, k.Cancel}
 	}
-	// Open is advertised only on the screens where openSelection acts, and
-	// drill-down screens advertise Back — the key that actually leaves them.
-	// Help and Quit come before the wide view/profile-tab bindings so they
-	// survive when the help model drops trailing items on narrow terminals.
-	bindings := []key.Binding{k.Up, k.Down}
+	// Browse screens keep the strip minimal — the full key list lives in the
+	// ? popup. The modal branches above stay explicit because ? types into a
+	// focused input and cannot open help there. Drill-down screens add Back:
+	// "how do I get out" is the one hint users reach for reflexively.
+	bindings := []key.Binding{k.Help, k.Quit}
 	switch ctx.Screen {
-	case ScreenDataSets:
-		bindings = append(bindings, k.Open, k.Search, k.ToggleFavorite, k.Favorites, k.Edit, k.Recall, k.Jobs)
-	case ScreenMembers:
-		bindings = append(bindings, k.Open, k.Search, k.Edit, k.Back)
-	case ScreenRecords:
-		bindings = append(bindings, k.Locate, k.WideLeft, k.WideRight, k.Copybook)
-		if overlay {
-			bindings = append(bindings, k.Query, k.ToggleOverlay, k.ToggleView, k.ClearOverlay)
-		}
+	case ScreenMembers, ScreenRecords, ScreenSpoolFiles, ScreenSpoolContent:
 		bindings = append(bindings, k.Back)
-	case ScreenJobs:
-		bindings = append(bindings, k.Open, k.Search, k.ToggleFavorite, k.Favorites)
-	case ScreenSpoolFiles:
-		bindings = append(bindings, k.Open, k.Back)
-	case ScreenSpoolContent:
-		bindings = append(bindings, k.Locate, k.SpoolCommand, k.FindNext, k.WideLeft, k.WideRight, k.Back)
-	}
-	bindings = append(bindings, k.Help, k.Quit)
-	if ctx.JobsAvailable {
-		bindings = append(bindings, k.PreviousView, k.NextView)
-	}
-	if ctx.Tabs {
-		bindings = append(bindings, k.NextProfile, k.PreviousProfile)
 	}
 	return bindings
 }
