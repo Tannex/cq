@@ -30,16 +30,19 @@ func (z *Client) OpenSpoolContent(ctx context.Context, jobName, jobID, fileID st
 	if err != nil {
 		return nil, err
 	}
-	req, err := z.newAPIRequest(ctx, http.MethodGet, path, nil, nil)
+	query := z.spoolQuery()
+	req, err := z.newAPIRequest(ctx, http.MethodGet, path, query, nil)
 	if err != nil {
 		return nil, err
 	}
 	res, err := z.doRequest(req, resource, http.StatusOK)
 	if err != nil {
-		return nil, err
+		return nil, spoolRequestError(err, query)
 	}
 	z.logf("z/OSMF spool content %s: streaming", resource)
-	return res.Body, nil
+	// The host converts the stream to its network codeset; normalize to
+	// UTF-8 (see text.go) so consumers can treat lines as Go strings.
+	return hostTextReader(res.Body, res.Header.Get("Content-Type")), nil
 }
 
 // OpenSpoolContent lazily initializes the client and streams the whole spool

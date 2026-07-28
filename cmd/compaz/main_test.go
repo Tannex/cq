@@ -34,7 +34,7 @@ func TestLoadSessionReturnsWhenContextIsCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
 	go func() {
-		_, err := loadSession(ctx, "")
+		_, err := loadSession(ctx, "", "")
 		result <- err
 	}()
 	<-started
@@ -60,12 +60,23 @@ func TestLoadSessionMapsLoadedSession(t *testing.T) {
 	}
 	t.Cleanup(func() { loadDefaultSession = originalLoader })
 
-	session, err := loadSession(context.Background(), "")
+	session, err := loadSession(context.Background(), "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if session.Browser == nil || session.User != "IBMUSER" || session.Encoding != "cp1047" {
 		t.Fatalf("session = %#v", session)
+	}
+
+	// The -codepage flag overrides the profile encoding at the session
+	// boundary, so the zosmf client's server-side conversion follows the
+	// same precedence as client-side decoding.
+	session, err = loadSession(context.Background(), "", "cp037")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.Encoding != "cp037" {
+		t.Fatalf("override session encoding = %q, want cp037", session.Encoding)
 	}
 }
 

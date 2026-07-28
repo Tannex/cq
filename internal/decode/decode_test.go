@@ -43,6 +43,35 @@ func TestCodepageNormalization(t *testing.T) {
 	}
 }
 
+func TestHostCodeset(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		want string
+		ok   bool
+	}{
+		{"cp037", "IBM-037", true},
+		{"IBM-277", "IBM-277", true},
+		{"ibm1047", "IBM-1047", true},
+		{"1140", "IBM-1140", true},
+		{" cp277 ", "IBM-277", true},
+		// Codepages cq's decoder does not table still map: the host may
+		// support them even when client-side decode does not.
+		{"cp500", "IBM-500", true},
+		{"latin1", "", false},
+		{"ascii", "", false},
+		{"utf-8", "", false},
+		{"", "", false},
+		{"bogus", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := HostCodeset(tc.name)
+			if got != tc.want || ok != tc.ok {
+				t.Fatalf("HostCodeset(%q) = %q, %v; want %q, %v", tc.name, got, ok, tc.want, tc.ok)
+			}
+		})
+	}
+}
+
 func TestCodepageUnknown(t *testing.T) {
 	for _, name := range []string{"bogus", "cp500", "cp1234", ""} {
 		t.Run(name, func(t *testing.T) {
