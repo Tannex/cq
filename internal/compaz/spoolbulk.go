@@ -10,6 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/Tannex/cq/internal/decode"
 	"github.com/Tannex/cq/internal/zosmf"
 )
 
@@ -134,6 +135,12 @@ func (m *Model) handleSpoolBulkResult(ws *workspace, msg spoolBulkResultMsg) tea
 	if msg.Err != nil {
 		ws.status = status{Level: statusError, Text: "spool download failed: " + msg.Err.Error()}
 		return nil
+	}
+	// Sanitize on ingestion (mirroring the paged path) so neither the
+	// viewers nor the incl/f scans ever see cursor-moving control bytes.
+	// In place: the result message owns the slice and never reuses it.
+	for i, line := range msg.Lines {
+		msg.Lines[i] = decode.DisplayText(line)
 	}
 	ws.spoolBulk = msg.Lines
 	if ws.spoolBulk == nil {
@@ -268,8 +275,29 @@ func spoolNotFoundStatus(ws *workspace, scope string) status {
 	return status{Level: statusWarn, Text: text}
 }
 
+// spoolBulkServable reports whether the bulk cache can answer pager windows
+// in place of the server: it must be current and hold the whole file (a
+// truncated cache is only a prefix, so windows past its end need the host).
+func (ws *workspace) spoolBulkServable() bool {
+	return ws.spoolBulkReady() && !ws.spoolBulkTruncated
+}
+
+// spoolPageFromBulk cuts one pager window out of the complete bulk cache,
+// shaped exactly like a server response so the browse-result path applies
+// unchanged.
+func spoolPageFromBulk(lines []string, start int64, maxItems int) zosmf.SpoolContentPage {
+	start = max(start, 0)
+	total := int64(len(lines))
+	if start >= total {
+		return zosmf.SpoolContentPage{Start: start}
+	}
+	end := min(start+int64(maxItems), total)
+	return zosmf.SpoolContentPage{Lines: lines[start:end], Start: start, MoreRows: end < total}
+}
+
 // spoolJumpTo selects a line already in the pager window or re-anchors the
-// window on it, without evicting the bulk cache.
+// window on it, without evicting the bulk cache. With a complete cache,
+// startSpoolContent serves the window synchronously — no server round trip.
 func (m *Model) spoolJumpTo(number int64) tea.Cmd {
 	ws := m.ws()
 	if ws.spoolContentPage.selectKey(strconv.FormatInt(number, 10)) {

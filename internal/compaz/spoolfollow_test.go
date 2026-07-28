@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -33,6 +34,7 @@ func spoolFollowModel(t *testing.T, content *[]string) *Model {
 	}
 	model := readyModel(t, Options{}, browser, "IBMUSER", "", 90, 16)
 	model.deps.FollowInterval = time.Millisecond
+	model.deps.FollowFadeStep = time.Millisecond
 	executeCommand(t, model, model.handleAction(actionJobs))
 	executeCommand(t, model, model.openSelection())
 	model.spoolFilePage.move(1)
@@ -51,6 +53,11 @@ func drainSpoolFollow(t *testing.T, model *Model, command tea.Cmd) bool {
 	return walkMessages(command, func(message tea.Msg) (tea.Cmd, bool) {
 		if _, ok := message.(spoolFollowTickMsg); ok {
 			return nil, true
+		}
+		if _, ok := message.(spoolFadeTickMsg); ok {
+			// Skip without applying: the fade chain reschedules itself until
+			// real time passes, which a synchronous drain must not wait for.
+			return nil, false
 		}
 		return applyMessage(t, model, message), false
 	})
@@ -146,17 +153,18 @@ func TestSpoolFollowStopsOnNavigationAndToggle(t *testing.T) {
 		t.Fatal("follow did not reach an idle tick")
 	}
 
-	// The first navigation key stops following and anchors the pager on the
-	// tail line the user was watching.
+	// The first navigation key stops following, anchors the pager on the
+	// tail line the user was watching, and still performs its own movement —
+	// the exit keypress is not swallowed.
 	executeCommand(t, model, model.handleAction(actionUp))
 	if model.spoolFollow {
 		t.Fatal("navigation did not stop follow mode")
 	}
-	if !strings.Contains(model.status.Text, "follow stopped") {
-		t.Fatalf("status = %q", model.status.Text)
+	if got := model.spoolContentPage.selectedIndex(); model.spoolContent[got].Number != 1 {
+		t.Fatalf("selection = line %d, want line 1 (tail line 2, then the Up moved)", model.spoolContent[got].Number)
 	}
-	if got := model.spoolContentPage.selectedIndex(); model.spoolContent[got].Number != 2 {
-		t.Fatalf("pager not anchored at the tail, line %d", model.spoolContent[got].Number)
+	if len(model.spoolContent) != 3 {
+		t.Fatalf("window = %d lines, want the full tail context from the cache", len(model.spoolContent))
 	}
 
 	// :follow toggles back on, and again off.
@@ -207,6 +215,7 @@ func spoolFollowStatusModel(t *testing.T, content *[]string, readJobStatus func(
 	browser := &followStatusBrowser{fakeBrowser: inner, readJobStatus: readJobStatus}
 	model := readyModel(t, Options{}, browser, "IBMUSER", "", 90, 16)
 	model.deps.FollowInterval = time.Millisecond
+	model.deps.FollowFadeStep = time.Millisecond
 	executeCommand(t, model, model.handleAction(actionJobs))
 	executeCommand(t, model, model.openSelection())
 	model.spoolFilePage.move(1)
@@ -254,6 +263,51 @@ func TestSpoolFollowStopsWhenJobEnds(t *testing.T) {
 	}
 	if model.job.Status != "OUTPUT" || model.job.ReturnCode != "CC 0000" {
 		t.Fatalf("job row not refreshed: %+v", model.job)
+	}
+	// The auto-stop re-anchors the pager on the tail, so the job's final
+	// flush is on screen instead of the pre-follow window.
+	selected := model.spoolContentPage.selectedIndex()
+	if len(model.spoolContent) == 0 || model.spoolContent[selected].Text != "late line" {
+		t.Fatalf("pager not anchored on the final line: content=%v selected=%d", model.spoolContent, selected)
+	}
+}
+
+func TestSpoolFollowTopExitsToFileTop(t *testing.T) {
+	content := []string{"zero", "one", "two", "three"}
+	model := spoolFollowModel(t, &content)
+	if !runSpoolFollowCommand(t, model, "follow") {
+		t.Fatal("follow did not reach an idle tick")
+	}
+
+	// g stops following and jumps to the file top — the whole file is
+	// cached, so landing at the tail window's top would strand the user
+	// thousands of lines from where they asked to go.
+	executeCommand(t, model, model.handleAction(actionTop))
+	if model.spoolFollow {
+		t.Fatal("top did not stop follow mode")
+	}
+	if got := model.spoolContentPage.selectedIndex(); len(model.spoolContent) == 0 || model.spoolContent[got].Number != 0 {
+		t.Fatalf("top after follow landed on line %d, want 0", model.spoolContent[got].Number)
+	}
+}
+
+func TestSpoolFollowRefusesTruncatedCache(t *testing.T) {
+	content := []string{"one", "two"}
+	model := spoolFollowModel(t, &content)
+	// Build the cache, then mark it truncated: a prefix cache would make the
+	// follower poll from the wrong position.
+	runSpoolCommand(t, model, "incl one")
+	runSpoolCommand(t, model, "incl")
+	model.spoolBulkTruncated = true
+
+	if runSpoolFollowCommand(t, model, "follow") {
+		t.Fatal("follow scheduled a tick over a truncated cache")
+	}
+	if model.spoolFollow {
+		t.Fatal("follow started over a truncated cache")
+	}
+	if !strings.Contains(model.status.Text, "cannot follow") {
+		t.Fatalf("status = %q, want a cannot-follow warning", model.status.Text)
 	}
 }
 
@@ -304,8 +358,157 @@ func TestSpoolFollowDroppedByRefreshAndBack(t *testing.T) {
 	if !runSpoolFollowCommand(t, model, "follow") {
 		t.Fatal("follow did not reach an idle tick")
 	}
+	// The first Back is a pure stop: follow ends but the screen and the bulk
+	// cache stay, so an accidental Esc does not throw away the download.
 	executeCommand(t, model, model.handleAction(actionBack))
-	if model.spoolFollow || model.spoolFollower != nil || model.spoolBulk != nil {
-		t.Fatalf("back did not drop follow state: follow=%v bulk=%v", model.spoolFollow, model.spoolBulk)
+	if model.spoolFollow || model.spoolFollower != nil {
+		t.Fatal("back did not stop follow mode")
+	}
+	if model.screen != ScreenSpoolContent || model.spoolBulk == nil {
+		t.Fatalf("first back left screen=%d bulk=%v, want to stay on content with the cache", model.screen, model.spoolBulk)
+	}
+
+	// The second Back actually leaves the screen and drops the spool state.
+	executeCommand(t, model, model.handleAction(actionBack))
+	if model.screen != ScreenSpoolFiles || model.spoolBulk != nil {
+		t.Fatalf("second back screen=%d bulk=%v, want spool files with the cache dropped", model.screen, model.spoolBulk)
+	}
+}
+
+// assertFrameHygiene fails when a rendered frame carries any control rune
+// besides newlines once the UI's own ANSI styling is stripped: leftover
+// controls are content bytes that would move the cursor or restyle the real
+// terminal, corrupting unrelated regions like the status line.
+func assertFrameHygiene(t *testing.T, frame string) {
+	t.Helper()
+	for _, r := range ansi.Strip(frame) {
+		if r != '\n' && unicode.IsControl(r) {
+			t.Fatalf("frame leaks control rune %U into the terminal", r)
+		}
+	}
+}
+
+// TestSpoolViewsSanitizeHostileContent pins the ingestion sanitizer: binary
+// spool output (ANSI escapes, carriage returns, backspaces, C1 controls)
+// must render as visible placeholders in every spool view, never as raw
+// bytes the terminal would interpret.
+func TestSpoolViewsSanitizeHostileContent(t *testing.T) {
+	hostile := "A\x1b[31mB\rC\bD\tE" + string(rune(0x85)) + "F"
+	content := []string{hostile, "plain line"}
+	model := spoolFollowModel(t, &content)
+
+	// Paged view.
+	assertFrameHygiene(t, model.mainView())
+	for _, line := range model.spoolContent {
+		if strings.ContainsFunc(line.Text, unicode.IsControl) {
+			t.Fatalf("paged line kept control bytes: %q", line.Text)
+		}
+	}
+	if !strings.Contains(model.spoolContent[0].Text, "A·[31mB·C·D·E·F") {
+		t.Fatalf("hostile line not sanitized to placeholders: %q", model.spoolContent[0].Text)
+	}
+
+	// Bulk cache (incl filter) and the filtered view.
+	runSpoolCommand(t, model, "incl plain")
+	assertFrameHygiene(t, model.mainView())
+	for _, line := range model.spoolBulk {
+		if strings.ContainsFunc(line, unicode.IsControl) {
+			t.Fatalf("bulk line kept control bytes: %q", line)
+		}
+	}
+	runSpoolCommand(t, model, "incl")
+
+	// Follow view, including lines appended by a poll.
+	if !runSpoolFollowCommand(t, model, "follow") {
+		t.Fatal("follow did not reach an idle tick")
+	}
+	content = append(content, "tail \x1b]0;title\x07 line")
+	if !spoolFollowTick(t, model) {
+		t.Fatal("poll after growth did not reschedule")
+	}
+	assertFrameHygiene(t, model.mainView())
+	if tail := model.spoolBulk[len(model.spoolBulk)-1]; strings.ContainsFunc(tail, unicode.IsControl) {
+		t.Fatalf("followed line kept control bytes: %q", tail)
+	}
+}
+
+// TestHostValuesSanitizedInChrome pins the general rule: any host-originated
+// value — job names in tables and titles, server text in the status line —
+// shows non-display characters as '·', never as raw bytes.
+func TestHostValuesSanitizedInChrome(t *testing.T) {
+	browser := &fakeBrowser{
+		listJobs: func(context.Context, zosmf.ListJobsRequest) (zosmf.JobPage, error) {
+			return zosmf.JobPage{Items: []zosmf.Job{{
+				JobID: "JOB1\r01", JobName: "EVIL\x1b[31mJB", Status: "OUT\bPUT",
+			}}}, nil
+		},
+	}
+	model := readyModel(t, Options{}, browser, "IBMUSER", "", 90, 16)
+	executeCommand(t, model, model.handleAction(actionJobs))
+
+	frame := model.mainView()
+	assertFrameHygiene(t, frame)
+	if !strings.Contains(ansi.Strip(frame), "EVIL·") {
+		t.Fatalf("hostile job name not rendered with placeholders:\n%s", ansi.Strip(frame))
+	}
+
+	model.status = status{Level: statusError, Text: "server said: \x1b]0;own\x07 no"}
+	assertFrameHygiene(t, model.mainView())
+}
+
+func TestSpoolFollowHighlightsFreshLinesAndFadesThem(t *testing.T) {
+	content := []string{"one", "two", "three"}
+	model := spoolFollowModel(t, &content)
+	if !runSpoolFollowCommand(t, model, "follow") {
+		t.Fatal("follow did not reach an idle tick")
+	}
+	if model.spoolFresh != nil {
+		t.Fatalf("pre-follow content marked fresh: %v", model.spoolFresh)
+	}
+
+	content = append(content, "four", "five")
+	if !spoolFollowTick(t, model) {
+		t.Fatal("poll after growth did not reschedule")
+	}
+	if len(model.spoolFresh) != 1 || model.spoolFresh[0].FirstIndex != 3 {
+		t.Fatalf("fresh batches = %v, want one starting at bulk index 3", model.spoolFresh)
+	}
+	if _, ok := model.spoolFreshAge(2, time.Now()); ok {
+		t.Fatal("pre-follow line reported as fresh")
+	}
+	if _, ok := model.spoolFreshAge(4, time.Now()); !ok {
+		t.Fatal("appended line not reported as fresh")
+	}
+
+	// A new line renders bold in a highlight color; a fully faded one is
+	// plain and visibly different. fgSGR canonicalizes the computed colors
+	// the same way the styling tests do.
+	newest, faded := spoolFreshStyle(0), spoolFreshStyle(spoolFreshFadeDuration)
+	if !newest.GetBold() || faded.GetBold() {
+		t.Fatalf("bold: newest=%v faded=%v, want bold only while fresh", newest.GetBold(), faded.GetBold())
+	}
+	if fgSGR(newest.GetForeground()) == fgSGR(faded.GetForeground()) {
+		t.Fatal("fade ramp start and end render the same color")
+	}
+
+	// Once the fade duration has passed, the tick prunes the batch and stops
+	// rescheduling itself.
+	model.spoolFresh[0].At = time.Now().Add(-spoolFreshFadeDuration - time.Second)
+	tick := spoolFadeTickMsg{Profile: model.profile, Generation: model.spoolBulkGeneration}
+	if cmd := applyMessage(t, model, tick); cmd != nil {
+		t.Fatal("fade tick kept rescheduling after every highlight expired")
+	}
+	if model.spoolFresh != nil {
+		t.Fatalf("expired batches not pruned: %v", model.spoolFresh)
+	}
+	if _, ok := model.spoolFreshAge(4, time.Now()); ok {
+		t.Fatal("pruned line still reported as fresh")
+	}
+
+	// Stopping follow clears any remaining marks outright.
+	model.markSpoolFresh(3, time.Now())
+	model.stopSpoolFollow()
+	if model.spoolFresh != nil {
+		t.Fatal("stopSpoolFollow left fresh marks behind")
 	}
 }

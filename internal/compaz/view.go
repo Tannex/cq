@@ -5,6 +5,7 @@ import (
 	"image/color"
 	"strconv"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/table"
 	"charm.land/bubbles/v2/viewport"
@@ -463,6 +464,10 @@ func (m *Model) titleLine() string {
 			chip = m.user
 		}
 	}
+	// Job names, DD names, and data set names come from the host;
+	// non-display characters always render as '·'.
+	screenName = decode.DisplayText(screenName)
+	body = decode.DisplayText(body)
 
 	accent := consolePalette.cyan.Bold(true).Inherit(consolePalette.navy)
 	plain := consolePalette.navy.Foreground(ayu.fg)
@@ -654,6 +659,10 @@ const emptyCellMark = "·"
 // readable; the table truncates with ANSI-aware truncation, so pre-styled
 // strings survive narrow terminals.
 func styledCell(text string, style lipgloss.Style, onCursor bool) string {
+	// Cell values are host-originated (data set, member, job, and spool
+	// fields); non-display characters always render as '·'. Sanitizing here,
+	// before styling, keeps the cell's own ANSI intact.
+	text = decode.DisplayText(text)
 	if text == "" {
 		if onCursor {
 			return emptyCellMark
@@ -1153,13 +1162,33 @@ func (m *Model) spoolFilteredView() string {
 		}
 		return fmt.Sprintf("%s %0*d │ ", marker, numberWidth, window[context.Index])
 	}
+	now := time.Now()
 	model.StyleLineFunc = func(index int) lipgloss.Style {
+		if m.spoolFollow {
+			// Filtered follow mirrors the follow view: the cursor is pinned
+			// to the newest hit, so the fresh-line fade replaces the
+			// selection bar; the gutter's > marker carries the position.
+			if index >= 0 && index < len(window) {
+				return m.spoolFollowLineStyle(window[index], now)
+			}
+			return consolePalette.plain
+		}
 		if start+index == cursor {
 			return consolePalette.selected
 		}
 		return consolePalette.plain
 	}
 	return header + "\n" + model.View()
+}
+
+// spoolFollowLineStyle styles one bulk line while following: fresh lines
+// carry the fade, everything else stays plain — shared by the follow and
+// filtered-follow views so the convention cannot drift.
+func (m *Model) spoolFollowLineStyle(bulkIndex int, now time.Time) lipgloss.Style {
+	if age, ok := m.spoolFreshAge(bulkIndex, now); ok {
+		return spoolFreshStyle(age)
+	}
+	return consolePalette.plain
 }
 
 // spoolFollowView renders the tail of the bulk cache while follow mode is
@@ -1183,6 +1212,7 @@ func (m *Model) spoolFollowView() string {
 	start := max(0, len(m.spoolBulk)-height)
 	window := m.spoolBulk[start:]
 	last := len(window) - 1
+	now := time.Now()
 	model := viewport.New(viewport.WithWidth(m.width), viewport.WithHeight(height))
 	model.SoftWrap = false
 	model.FillHeight = true
@@ -1200,12 +1230,34 @@ func (m *Model) spoolFollowView() string {
 		return fmt.Sprintf("%s %0*d │ ", marker, numberWidth, start+context.Index)
 	}
 	model.StyleLineFunc = func(index int) lipgloss.Style {
-		if index == last {
-			return consolePalette.selected
-		}
-		return consolePalette.plain
+		// No selected-row styling here: the cursor is pinned to the tail, so
+		// a selection bar would permanently sit on the newest line and drown
+		// the fresh-line fade. The gutter's > marker carries the position.
+		return m.spoolFollowLineStyle(start+index, now)
 	}
 	return header + "\n" + model.View()
+}
+
+// spoolFreshSteps quantizes the fresh-line fade: an age maps to one of these
+// precomputed styles, so frames render identically anywhere within a step
+// and no styles are built per line per frame. The step count is independent
+// of Deps.FollowFadeStep, which only paces the re-render ticks.
+const spoolFreshSteps = 8
+
+// spoolFreshRamp fades from the accent to the default foreground in
+// perceptual (CIELAB) space; the newest steps are bold.
+var spoolFreshRamp = func() [spoolFreshSteps]lipgloss.Style {
+	var ramp [spoolFreshSteps]lipgloss.Style
+	for i, blended := range lipgloss.Blend1D(spoolFreshSteps, ayu.accent, ayu.fg) {
+		ramp[i] = lipgloss.NewStyle().Foreground(blended).Bold(i < spoolFreshSteps*2/5)
+	}
+	return ramp
+}()
+
+// spoolFreshStyle picks the ramp style for a follow-appended line's age.
+func spoolFreshStyle(age time.Duration) lipgloss.Style {
+	step := int(age / (spoolFreshFadeDuration / spoolFreshSteps))
+	return spoolFreshRamp[min(max(step, 0), spoolFreshSteps-1)]
 }
 
 // longestSpoolLineWidth scans only the given lines: forward pages only ever
@@ -1408,6 +1460,9 @@ func (m *Model) statusLine() string {
 			text = detail
 		}
 	}
+	// Status text can embed host-originated content (server error bodies,
+	// find/filter echoes); non-display characters always render as '·'.
+	text = decode.DisplayText(text)
 	indicator := " "
 	if level == statusLoading && len(m.spinner.Spinner.Frames) > 0 {
 		indicator = consolePalette.amber.Render(m.spinner.View())
