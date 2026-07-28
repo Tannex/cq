@@ -159,24 +159,67 @@ func TestShowHelpSuppressesNavigationAndEnablesScrolling(t *testing.T) {
 	}
 }
 
-func TestRecordShortHelpExposesClearOverlay(t *testing.T) {
-	keys := DefaultKeyMap()
-	withoutOverlay := keys.shortHelp(keyContext{Screen: ScreenRecords}, false)
-	withOverlay := keys.shortHelp(keyContext{Screen: ScreenRecords}, true)
+// containsBinding reports whether bindings includes one with want's keys —
+// the single notion of binding membership every help test shares.
+func containsBinding(bindings []key.Binding, want key.Binding) bool {
+	return slices.ContainsFunc(bindings, func(binding key.Binding) bool {
+		return slices.Equal(binding.Keys(), want.Keys())
+	})
+}
 
-	containsClear := func(bindings []key.Binding) bool {
-		for _, binding := range bindings {
-			if slices.Equal(binding.Keys(), keys.ClearOverlay.Keys()) {
-				return true
-			}
+// fullHelpContains reports whether any group of the ? popup lists want.
+func fullHelpContains(groups []helpGroup, want key.Binding) bool {
+	return slices.ContainsFunc(groups, func(group helpGroup) bool {
+		return containsBinding(group.Bindings, want)
+	})
+}
+
+// sameBindings reports the strips are element-wise identical by keys.
+func sameBindings(got, want []key.Binding) bool {
+	return slices.EqualFunc(got, want, func(a, b key.Binding) bool {
+		return slices.Equal(a.Keys(), b.Keys())
+	})
+}
+
+// TestBrowseShortHelpStaysMinimal pins the deliberate strip diet exactly:
+// top-level browse screens advertise help/quit and nothing else, drill-downs
+// add only Back, and everything removed from the strip must remain
+// discoverable in the ? popup under the same conditions as before.
+func TestBrowseShortHelpStaysMinimal(t *testing.T) {
+	keys := DefaultKeyMap()
+
+	minimal := []key.Binding{keys.Help, keys.Quit}
+	withBack := []key.Binding{keys.Help, keys.Quit, keys.Back}
+	for screen, want := range map[Screen][]key.Binding{
+		ScreenDataSets: minimal, ScreenJobs: minimal,
+		ScreenMembers: withBack, ScreenRecords: withBack,
+		ScreenSpoolFiles: withBack, ScreenSpoolContent: withBack,
+	} {
+		if got := keys.shortHelp(keyContext{Screen: screen}); !sameBindings(got, want) {
+			t.Fatalf("screen %d strip = %#v, want exactly %#v", screen, got, want)
 		}
-		return false
 	}
-	if containsClear(withoutOverlay) {
-		t.Fatal("clear overlay appeared in short help without an overlay")
+
+	// Overlay keys stay overlay-conditional in the popup: present with an
+	// overlay, absent without one (they are dead keys until one is loaded).
+	withOverlay := keys.fullHelp(keyContext{Screen: ScreenRecords}, true)
+	withoutOverlay := keys.fullHelp(keyContext{Screen: ScreenRecords}, false)
+	for _, binding := range []key.Binding{keys.ClearOverlay, keys.Query, keys.ToggleOverlay, keys.ToggleView} {
+		if !fullHelpContains(withOverlay, binding) {
+			t.Fatalf("popup missing %v with an active overlay", binding.Help())
+		}
+		if fullHelpContains(withoutOverlay, binding) {
+			t.Fatalf("popup advertises dead key %v without an overlay", binding.Help())
+		}
 	}
-	if !containsClear(withOverlay) {
-		t.Fatal("clear overlay missing from short help with an active overlay")
+
+	// The view-toggle keys' only remaining advertisement is the popup's
+	// GENERAL group, gated on the session actually browsing jobs.
+	if !fullHelpContains(keys.fullHelp(keyContext{Screen: ScreenDataSets, JobsAvailable: true}, false), keys.NextView) {
+		t.Fatal("popup missing the view toggle with jobs available")
+	}
+	if fullHelpContains(keys.fullHelp(keyContext{Screen: ScreenDataSets}, false), keys.NextView) {
+		t.Fatal("popup advertises the view toggle without job support")
 	}
 }
 
@@ -246,35 +289,13 @@ func TestProfileKeysSwitchOnlyWhenTabsEnabledAndUnfocused(t *testing.T) {
 
 func TestProfileHelpAppearsOnlyWithTabs(t *testing.T) {
 	keys := DefaultKeyMap()
-	withoutTabs := keys.shortHelp(keyContext{Screen: ScreenDataSets, Tabs: false}, false)
-	withTabs := keys.shortHelp(keyContext{Screen: ScreenDataSets, Tabs: true}, false)
-
-	contains := func(bindings []key.Binding, want key.Binding) bool {
-		for _, binding := range bindings {
-			if slices.Equal(binding.Keys(), want.Keys()) {
-				return true
-			}
-		}
-		return false
-	}
-	if contains(withoutTabs, keys.NextProfile) {
-		t.Fatal("next profile appeared in short help without tabs")
-	}
-	if !contains(withTabs, keys.NextProfile) || !contains(withTabs, keys.PreviousProfile) {
-		t.Fatalf("profile keys missing from tab short help: %#v", withTabs)
-	}
 
 	fullWithout := keys.fullHelp(keyContext{Screen: ScreenDataSets, Tabs: false}, false)
 	fullWith := keys.fullHelp(keyContext{Screen: ScreenDataSets, Tabs: true}, false)
 	bindingInGroup := func(groups []helpGroup, groupName string, want key.Binding) bool {
 		for _, group := range groups {
-			if group.Name != groupName {
-				continue
-			}
-			for _, binding := range group.Bindings {
-				if slices.Equal(binding.Keys(), want.Keys()) {
-					return true
-				}
+			if group.Name == groupName && containsBinding(group.Bindings, want) {
+				return true
 			}
 		}
 		return false

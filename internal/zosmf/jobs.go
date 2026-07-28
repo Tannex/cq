@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+
+	"github.com/Tannex/cq/internal/decode"
 )
 
 const (
@@ -289,7 +291,8 @@ func (z *Client) ReadSpoolContent(ctx context.Context, request ReadSpoolContentR
 	if err != nil {
 		return SpoolContentPage{}, err
 	}
-	req, err := z.newAPIRequest(ctx, http.MethodGet, path, nil, nil)
+	query := z.spoolQuery()
+	req, err := z.newAPIRequest(ctx, http.MethodGet, path, query, nil)
 	if err != nil {
 		return SpoolContentPage{}, err
 	}
@@ -297,7 +300,7 @@ func (z *Client) ReadSpoolContent(ctx context.Context, request ReadSpoolContentR
 
 	res, err := z.doRequest(req, resource, http.StatusOK)
 	if err != nil {
-		return SpoolContentPage{}, err
+		return SpoolContentPage{}, spoolRequestError(err, query)
 	}
 	defer res.Body.Close()
 
@@ -305,7 +308,7 @@ func (z *Client) ReadSpoolContent(ctx context.Context, request ReadSpoolContentR
 	if err != nil {
 		return SpoolContentPage{}, err
 	}
-	text := strings.TrimSuffix(string(body), "\n")
+	text := strings.TrimSuffix(hostTextString(body, res.Header.Get("Content-Type")), "\n")
 	var lines []string
 	// A body of just "\n" (one blank output line) trims to "", identical to
 	// a genuinely empty body; check the untrimmed body length instead of the
@@ -323,6 +326,37 @@ func (z *Client) ReadSpoolContent(ctx context.Context, request ReadSpoolContentR
 		moreRows = true
 	}
 	return SpoolContentPage{Lines: lines, Start: request.Start, MoreRows: moreRows}, nil
+}
+
+// spoolQuery carries the profile encoding to the spool records endpoint as
+// its fileEncoding parameter. Unlike data set records — fetched raw and
+// decoded client-side with the configured codepage — spool content is
+// converted EBCDIC-to-text by the server, which otherwise assumes its own
+// default codepage and garbles national characters. The profile value is
+// mapped to the canonical IBM-nnnn codeset name first: profiles hold the
+// client-side vocabulary ("cp1047", "1047", "latin1"), and sending those
+// spellings verbatim would make the server reject every spool read. Names
+// with no host codeset send nothing, preserving the server default.
+func (z *Client) spoolQuery() url.Values {
+	codeset, ok := decode.HostCodeset(z.session.Encoding)
+	if !ok {
+		return nil
+	}
+	return url.Values{"fileEncoding": []string{codeset}}
+}
+
+// spoolRequestError annotates a failed spool fetch with the fileEncoding it
+// carried: the parameter comes from the profile's otherwise-invisible
+// encoding property, and a server rejection would be undiagnosable without
+// naming it.
+func spoolRequestError(err error, query url.Values) error {
+	if err == nil {
+		return nil
+	}
+	if codeset := query.Get("fileEncoding"); codeset != "" {
+		return fmt.Errorf("%w (request sent fileEncoding=%s from the profile's encoding property)", err, codeset)
+	}
+	return err
 }
 
 // spoolContentPath validates one spool file's identifiers and builds its

@@ -1792,11 +1792,9 @@ func (m *Model) navigateBack() tea.Cmd {
 		ws.job = zosmf.Job{}
 		ws.statusForCount(len(ws.jobs), "jobs")
 		return m.ensureActivePage()
-	case ScreenJobs:
-		ws.cancelBrowse()
-		ws.screen = ScreenDataSets
-		ws.statusForCount(len(ws.datasets), "data sets")
-		return m.ensureActivePage()
+		// ScreenJobs and ScreenDataSets are deliberately absent: both are
+		// top-level views with nothing to go back to. Switching between them
+		// is the view toggle's job, not an Esc surprise.
 	}
 	return nil
 }

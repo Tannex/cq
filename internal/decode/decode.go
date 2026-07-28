@@ -96,6 +96,25 @@ func Codepage(name string) (*Charmap, error) {
 	return nil, fmt.Errorf("decode: unknown codepage %q, supported: %s", name, strings.Join(names, ", "))
 }
 
+// HostCodeset maps a user-supplied codepage name to the canonical z/OS
+// codeset name servers expect (e.g. "cp1047", "1047", "IBM-1047" all yield
+// "IBM-1047"). ok is false for names with no host codeset — the ascii/latin1
+// pseudo-codepages and anything that does not reduce to a numeric codepage —
+// so callers can omit a server-side conversion parameter rather than send a
+// spelling the host would reject.
+func HostCodeset(name string) (string, bool) {
+	digits := normalizeCodepageName(name)
+	if digits == "" {
+		return "", false
+	}
+	for _, c := range digits {
+		if c < '0' || c > '9' {
+			return "", false
+		}
+	}
+	return "IBM-" + digits, true
+}
+
 func normalizeCodepageName(name string) string {
 	n := strings.ToLower(strings.TrimSpace(name))
 	switch {

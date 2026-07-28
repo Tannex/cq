@@ -37,6 +37,84 @@ func TestOpenSpoolContentStreamsWholeFileWithoutRecordRange(t *testing.T) {
 	}
 }
 
+// TestOpenSpoolContentFileEncodingParameter mirrors the ReadSpoolContent
+// table for the streaming path: canonical codeset names are sent, spellings
+// with no host codeset are not.
+func TestOpenSpoolContentFileEncodingParameter(t *testing.T) {
+	for _, tc := range []struct {
+		encoding string
+		want     string // "" means the parameter must be absent
+	}{
+		{encoding: "", want: ""},
+		{encoding: "cp277", want: "IBM-277"},
+		{encoding: "latin1", want: ""},
+	} {
+		t.Run(tc.encoding, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if got := r.URL.Query().Get("fileEncoding"); got != tc.want {
+					t.Errorf("fileEncoding = %q, want %q", got, tc.want)
+				}
+			}))
+			defer server.Close()
+
+			session := sessionForServer(t, server)
+			session.Encoding = tc.encoding
+			client := New(session, nil)
+			body, err := client.OpenSpoolContent(context.Background(), "TESTJOB1", "JOB00023", "5")
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = body.Close()
+		})
+	}
+}
+
+// TestOpenSpoolContentDecodesHostTextStream pins the streaming path's
+// wire-charset policy the same way the paged reader's test does: declared
+// charsets win; undeclared streams are sniffed, so UTF-8 passes through and
+// anything else is read as ISO 8859-1.
+func TestOpenSpoolContentDecodesHostTextStream(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		contentType string
+		body        []byte
+		want        string
+	}{
+		{"undeclared 8859-1", "", []byte{'B', 0xD8, 'F', '\n'}, "BØF\n"},
+		{"undeclared UTF-8", "text/plain", []byte("BØF\n"), "BØF\n"},
+		{"declared 8859-1", "text/plain; charset=ISO-8859-1", []byte{'B', 0xD8, 'F', '\n'}, "BØF\n"},
+		{"declared UTF-8", "text/plain; charset=UTF-8", []byte("ÅRHUS\n"), "ÅRHUS\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if tc.contentType != "" {
+					w.Header().Set("Content-Type", tc.contentType)
+				} else {
+					// Suppress net/http's content sniffing so the case
+					// really exercises an absent header.
+					w.Header()["Content-Type"] = nil
+				}
+				_, _ = w.Write(tc.body)
+			}))
+			defer server.Close()
+
+			client := New(sessionForServer(t, server), nil)
+			body, err := client.OpenSpoolContent(context.Background(), "TESTJOB1", "JOB00023", "5")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer body.Close()
+			content, err := io.ReadAll(body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(content) != tc.want {
+				t.Fatalf("content = %q, want %q", content, tc.want)
+			}
+		})
+	}
+}
+
 func TestOpenSpoolContentRejectsEmptyIdentifiers(t *testing.T) {
 	client := New(sessionForServer(t, httptest.NewServer(nil)), nil)
 	for _, tc := range []struct{ name, id, file string }{

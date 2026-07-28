@@ -1574,7 +1574,7 @@ func selectedDiagnostic(diagnostics []record.Diagnostic, overlay *overlay, horiz
 }
 
 func (m *Model) helpLine() string {
-	line := m.help.ShortHelpView(m.keys.shortHelp(m.keyCtx(), m.overlay != nil))
+	line := m.help.ShortHelpView(m.keys.shortHelp(m.keyCtx()))
 	return consolePalette.muted.Width(m.width).Render(truncateStyled(" "+line, m.width))
 }
 

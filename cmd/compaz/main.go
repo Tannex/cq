@@ -45,7 +45,11 @@ func main() {
 	}
 }
 
-func loadSession(ctx context.Context, profile string) (compaz.Session, error) {
+// loadSession resolves the Zowe session. codepageOverride carries the
+// -codepage flag: it must reach the zosmf client too, not just the TUI's
+// charmap, so server-side spool conversion (fileEncoding) follows the same
+// flag-then-profile precedence as every client-side decode.
+func loadSession(ctx context.Context, profile, codepageOverride string) (compaz.Session, error) {
 	if err := ctx.Err(); err != nil {
 		return compaz.Session{}, err
 	}
@@ -75,8 +79,12 @@ func loadSession(ctx context.Context, profile string) (compaz.Session, error) {
 		if result.err != nil {
 			return compaz.Session{}, result.err
 		}
+		session := result.session
+		if override := strings.TrimSpace(codepageOverride); override != "" {
+			session.Encoding = override
+		}
 		return compaz.Session{
-			Browser: zosmf.New(result.session, nil), User: result.session.User, Encoding: result.session.Encoding,
+			Browser: zosmf.New(session, nil), User: session.User, Encoding: session.Encoding,
 		}, nil
 	}
 }
@@ -132,7 +140,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 	deps := compaz.Dependencies{
 		DSNSearchPath: config.DSNSearchPath,
-		LoadSession:   loadSession,
+		LoadSession: func(ctx context.Context, profile string) (compaz.Session, error) {
+			return loadSession(ctx, profile, options.Codepage)
+		},
 		ListProfiles:  listProfiles,
 		Mappings:      dsnmap.DefaultStore(nil),
 		Favorites:     favorites.DefaultStore(nil),
