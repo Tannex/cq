@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"golang.org/x/text/encoding/charmap"
 )
@@ -196,9 +197,12 @@ func DisplayBytes(b []byte, cm *Charmap) string {
 // raw records. This includes ESC, carriage return, backspace, and the C1
 // range: a line rendered verbatim could otherwise move the cursor or
 // restyle the frame, corrupting UI regions far from the line itself. Tabs
-// count too — the viewers assume one cell per rune.
+// count too — the viewers assume one cell per rune. Invalid UTF-8 bytes
+// become U+FFFD: the output must be valid UTF-8, or a downstream renderer
+// may widen a raw byte like 0x80 into the C1 control rune the sanitizer
+// just promised could not reach the terminal.
 func DisplayText(s string) string {
-	if !strings.ContainsFunc(s, unicode.IsControl) {
+	if utf8.ValidString(s) && !strings.ContainsFunc(s, unicode.IsControl) {
 		return s
 	}
 	var sb strings.Builder

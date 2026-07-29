@@ -4,6 +4,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode"
+	"unicode/utf8"
 )
 
 // --- Codepage -----------------------------------------------------------
@@ -187,6 +189,32 @@ func TestDisplayBytesPreservesWidthAndSuppressesControls(t *testing.T) {
 	}
 	if got := DisplayBytes([]byte{0x00, 0x00}, nil); got != "··" {
 		t.Fatalf("DisplayBytes nil charmap = %q", got)
+	}
+}
+
+// TestDisplayTextEmitsValidUTF8 pins the sanitizer's output contract: even
+// for input carrying raw non-UTF-8 bytes, the result is valid UTF-8 with no
+// control runes. A raw 0x80 byte passed through would let a downstream
+// renderer widen it into the C1 control rune U+0080 — the exact class of
+// byte the sanitizer exists to stop.
+func TestDisplayTextEmitsValidUTF8(t *testing.T) {
+	for _, s := range []string{
+		"\xff\xfe invalid \x80 utf8",
+		"clean but with \x1b[31m controls",
+		"already clean",
+		"\x80",
+		"",
+	} {
+		got := DisplayText(s)
+		if !utf8.ValidString(got) {
+			t.Fatalf("DisplayText(%q) = %q, not valid UTF-8", s, got)
+		}
+		if strings.ContainsFunc(got, unicode.IsControl) {
+			t.Fatalf("DisplayText(%q) = %q, still carries control runes", s, got)
+		}
+	}
+	if got := DisplayText("\x80"); got != "�" {
+		t.Fatalf("DisplayText(invalid byte) = %q, want a visible replacement rune", got)
 	}
 }
 

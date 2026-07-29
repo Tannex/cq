@@ -159,6 +159,25 @@ func TestShowHelpSuppressesNavigationAndEnablesScrolling(t *testing.T) {
 	}
 }
 
+// TestDrillDownScreensMatchNavigateBack makes the drift warning on
+// drillDownScreen mechanical: a screen advertises "esc back" exactly when
+// navigateBack actually leaves it. A new screen that joins one set without
+// the other fails here instead of shipping a dead hint or an unhinted key.
+func TestDrillDownScreensMatchNavigateBack(t *testing.T) {
+	for _, screen := range []Screen{
+		ScreenDataSets, ScreenMembers, ScreenRecords,
+		ScreenJobs, ScreenSpoolFiles, ScreenSpoolContent,
+	} {
+		model := readyModel(t, Options{}, &fakeBrowser{}, "IBMUSER", "", 90, 16)
+		model.screen = screen
+		executeCommand(t, model, model.navigateBack())
+		if moved := model.screen != screen; moved != drillDownScreen(screen) {
+			t.Errorf("screen %d: navigateBack moved=%v but drillDownScreen=%v — the hint and the key disagree",
+				screen, moved, drillDownScreen(screen))
+		}
+	}
+}
+
 // containsBinding reports whether bindings includes one with want's keys —
 // the single notion of binding membership every help test shares.
 func containsBinding(bindings []key.Binding, want key.Binding) bool {

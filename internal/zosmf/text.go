@@ -33,7 +33,12 @@ func hostTextCharset(contentType string) string {
 	return strings.ToLower(params["charset"])
 }
 
-// hostTextString decodes one buffered text body per the policy above.
+// hostTextString decodes one buffered text body per the policy above. The
+// undeclared-charset sniff inspects the same bounded prefix as
+// hostTextReader, so a spool file decodes identically whether it arrives
+// through the paged reads or the bulk stream — a whole-body check here would
+// let a non-UTF-8 byte past the sniff limit flip only the buffered path to
+// ISO 8859-1.
 func hostTextString(body []byte, contentType string) string {
 	switch hostTextCharset(contentType) {
 	case "utf-8", "utf8":
@@ -41,7 +46,8 @@ func hostTextString(body []byte, contentType string) string {
 	case "iso-8859-1", "iso8859-1", "latin-1", "latin1":
 		return latin1String(body)
 	}
-	if utf8.Valid(body) {
+	prefix := body[:min(len(body), hostTextSniffLimit)]
+	if utf8.Valid(trimSplitRune(prefix)) {
 		return string(body)
 	}
 	return latin1String(body)

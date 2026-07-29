@@ -33,6 +33,31 @@ func TestHostTextStringPolicy(t *testing.T) {
 	}
 }
 
+// TestHostTextPathsAgreeBeyondSniffLimit pins the paged/stream parity: an
+// undeclared body whose first non-UTF-8 byte sits past the sniff limit must
+// decode identically through hostTextString (paged reads) and
+// hostTextReader (the bulk stream). Both commit to UTF-8 on the prefix and
+// pass the late byte through untouched; a whole-body check on either side
+// would flip just that side to ISO 8859-1 and desynchronize the two views
+// of the same spool file.
+func TestHostTextPathsAgreeBeyondSniffLimit(t *testing.T) {
+	body := bytes.Repeat([]byte{'A'}, hostTextSniffLimit)
+	body = append(body, 0xD8, ' ', 'E', 'N', 'D') // 0xD8 alone is not valid UTF-8
+
+	buffered := hostTextString(body, "")
+	streamed, err := io.ReadAll(hostTextReader(io.NopCloser(bytes.NewReader(body)), ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if buffered != string(streamed) {
+		t.Fatalf("paths disagree: buffered tail %q, streamed tail %q",
+			buffered[len(buffered)-8:], streamed[len(streamed)-8:])
+	}
+	if !strings.HasSuffix(buffered, "\xD8 END") {
+		t.Fatalf("late byte not passed through raw: tail %q", buffered[len(buffered)-8:])
+	}
+}
+
 // TestHostTextReaderSniffBoundarySplitRune pins the sniff's trim: a UTF-8
 // rune straddling the peek limit must not tip an undeclared stream into the
 // ISO 8859-1 interpretation.

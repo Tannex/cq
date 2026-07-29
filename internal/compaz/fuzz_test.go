@@ -12,8 +12,10 @@ import (
 // FuzzSpoolContentRendering pushes hostile spool text — ANSI escapes,
 // control bytes, invalid UTF-8, very long lines — through the whole spool
 // pipeline: paged viewer, bulk download, include filter, find, follow view
-// with the fresh-line fade, and the exit re-anchor. Every state must render;
-// nothing may panic.
+// with the fresh-line fade, and the exit re-anchor. Every state must render
+// without panicking, and no frame may leak a content control rune to the
+// terminal (assertFrameHygiene) — the property the ingestion sanitizer
+// exists to guarantee.
 func FuzzSpoolContentRendering(f *testing.F) {
 	f.Add("plain line\nsecond line", "ERROR")
 	f.Add("\x1b[31mred\x1b[0m\nline with \x00 NUL and \x07 bell", "red")
@@ -26,21 +28,21 @@ func FuzzSpoolContentRendering(f *testing.F) {
 		lines := strings.Split(text, "\n")
 		content := lines
 		model := spoolFollowModel(t, &content)
-		_ = model.mainView()
+		assertFrameHygiene(t, model.mainView())
 
 		runSpoolCommand(t, model, "incl "+pattern)
-		_ = model.mainView()
+		assertFrameHygiene(t, model.mainView())
 		runSpoolCommand(t, model, "f "+pattern)
-		_ = model.mainView()
+		assertFrameHygiene(t, model.mainView())
 		runSpoolCommand(t, model, "incl")
 
 		if runSpoolFollowCommand(t, model, "follow") {
-			_ = model.mainView()
+			assertFrameHygiene(t, model.mainView())
 			content = append(content, lines...)
 			spoolFollowTick(t, model)
-			_ = model.mainView()
+			assertFrameHygiene(t, model.mainView())
 			executeCommand(t, model, model.handleAction(actionUp))
-			_ = model.mainView()
+			assertFrameHygiene(t, model.mainView())
 		}
 	})
 }

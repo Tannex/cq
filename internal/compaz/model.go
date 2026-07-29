@@ -1528,8 +1528,7 @@ func (m *Model) acceptSpoolCommand() tea.Cmd {
 		return m.runSpoolCommand(ws, "f "+argument)
 	case "follow":
 		if ws.spoolFollow {
-			m.stopSpoolFollowNavigation(ws)
-			return nil
+			return m.stopSpoolFollowNavigation(ws)
 		}
 		return m.runSpoolCommand(ws, "follow")
 	default:

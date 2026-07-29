@@ -311,6 +311,38 @@ func TestSpoolFollowRefusesTruncatedCache(t *testing.T) {
 	}
 }
 
+// TestSpoolFollowCacheFullReanchorsViaHost pins the cap-hit exit: when an
+// append overflows the cache, follow stops and the pager re-anchors on the
+// newest cached line through the host (the truncated cache cannot serve the
+// window itself) instead of snapping back to the pre-follow window.
+func TestSpoolFollowCacheFullReanchorsViaHost(t *testing.T) {
+	content := []string{"one", "two"}
+	model := spoolFollowModel(t, &content)
+	if !runSpoolFollowCommand(t, model, "follow") {
+		t.Fatal("follow did not reach an idle tick")
+	}
+
+	// The next appended line overflows the byte cap.
+	model.spoolBulkBytes = spoolBulkMaxBytes
+	content = append(content, "over the cap")
+	if spoolFollowTick(t, model) {
+		t.Fatal("poll rescheduled after hitting the cache cap")
+	}
+	if model.spoolFollow || !model.spoolBulkTruncated {
+		t.Fatalf("follow=%v truncated=%v, want stopped over a truncated cache", model.spoolFollow, model.spoolBulkTruncated)
+	}
+	if !strings.Contains(model.status.Text, "cache full") {
+		t.Fatalf("status = %q, want a cache-full warning", model.status.Text)
+	}
+	// The re-anchor fetched from the host: the tail of the cache is selected
+	// even though the cache itself can no longer serve windows.
+	tail := int64(len(model.spoolBulk) - 1)
+	selected := model.spoolContentPage.selectedIndex()
+	if len(model.spoolContent) == 0 || model.spoolContent[selected].Number != tail {
+		t.Fatalf("selection = %v (index %d), want line %d", model.spoolContent, selected, tail)
+	}
+}
+
 func TestSpoolFollowStopsWhenJobIsPurged(t *testing.T) {
 	content := []string{"one"}
 	gone := false
