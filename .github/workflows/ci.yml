@@ -26,6 +26,9 @@ jobs:
       - name: Test
         run: go test ./...
 
+      - name: Check copybook concurrency
+        run: go test -race ./internal/dsncopy ./internal/copybook
+
       - name: Vet
         run: go vet ./...
 
