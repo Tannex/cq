@@ -146,9 +146,11 @@ Resolved recursively through an ordered `dsnSearchPath` in `cq/config.json`
 ```
 
 The same search runs for `--copybook-dsn` itself if z/OSMF 404s it. Lookups
-are parallel (8 in flight) and cached per run; the first library in the list
-that has the member wins. `REPLACING`/`OF`/`IN` clauses are rejected
-explicitly.
+are cached per run and search libraries in order, stopping at the first match.
+Each resolver fetches one copybook at a time, including recursive prefetches,
+to limit TSO address-space usage and finish response cleanup before the next
+read. z/OSMF manages the lifetime of its REST Files TSO address spaces.
+`REPLACING`/`OF`/`IN` clauses are rejected explicitly.
 
 ### More examples
 
