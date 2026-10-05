@@ -1174,6 +1174,19 @@ func (m *Model) switchProfile(delta int) tea.Cmd {
 
 func (m *Model) clearOverlay() {
 	ws := m.ws()
+	ws.clearOverlay()
+	ws.status = status{Level: statusReady, Text: "copybook overlay cleared"}
+}
+
+// Runtime overlays belong to the selected data set or member. Command-line
+// copybooks are session-wide and remain active across selections.
+func (m *Model) resetSelectionOverlay(ws *workspace) {
+	if m.initialCopybookSource().empty() {
+		ws.clearOverlay()
+	}
+}
+
+func (ws *workspace) clearOverlay() {
 	ws.cancelOverlay()
 	ws.pendingMapping = nil
 	ws.overlayGeneration++
@@ -1189,7 +1202,6 @@ func (m *Model) clearOverlay() {
 		ws.records[i].Decoded = nil
 		ws.records[i].Err = nil
 	}
-	ws.status = status{Level: statusReady, Text: "copybook overlay cleared"}
 }
 
 // openMappingView opens the combined mapping screen: every persisted mapping
@@ -1654,6 +1666,7 @@ func (m *Model) openSelection() tea.Cmd {
 		case "PS", "SEQ", "PS-L", "PSL":
 			ws.cancelBrowse()
 			ws.cancelDecode()
+			m.resetSelectionOverlay(ws)
 			ws.dataSet = selected
 			ws.resetMemberState()
 			ws.screen = ScreenRecords
@@ -1662,6 +1675,7 @@ func (m *Model) openSelection() tea.Cmd {
 		case "PO", "PO-E", "POE", "PDS", "PDSE":
 			ws.cancelBrowse()
 			ws.cancelDecode()
+			m.resetSelectionOverlay(ws)
 			ws.dataSet = selected
 			ws.resetMemberState()
 			ws.screen = ScreenMembers
@@ -1683,6 +1697,7 @@ func (m *Model) openSelection() tea.Cmd {
 		selected := ws.members[index]
 		ws.cancelBrowse()
 		ws.cancelDecode()
+		m.resetSelectionOverlay(ws)
 		ws.member = &selected
 		ws.screen = ScreenRecords
 		ws.resetRecordState()

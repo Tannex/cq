@@ -2,6 +2,7 @@ package compaz
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -127,6 +128,89 @@ func TestRecordsScreenAutoAppliesMatchedMapping(t *testing.T) {
 	}
 }
 
+func TestOpeningDataSetReplacesPreviousMapping(t *testing.T) {
+	for _, mapped := range []bool{false, true} {
+		t.Run(fmt.Sprintf("nextMapped=%t", mapped), func(t *testing.T) {
+			store := &fakeMappingStore{mappings: []dsnmap.Mapping{
+				{Pattern: "A.CUSTOMER.*", Local: "cust.cpy", Format: "free"},
+			}}
+			if mapped {
+				store.mappings = append(store.mappings, dsnmap.Mapping{Pattern: "A.OTHER.DATA", Local: "other.cpy", Format: "free"})
+			}
+			model := mappedModel(t, Options{Prefix: "A*", Codepage: "latin1"}, store)
+			model.datasets = append(model.datasets, zosmf.DataSet{Name: "A.OTHER.DATA", Organization: "PS"})
+			model.datasetPage.apply([]string{"A.CUSTOMER.DATA", "A.OTHER.DATA"}, true, model.datasetPage.initialPlan(""))
+			executeCommand(t, model, model.openSelection())
+			if model.overlay == nil {
+				t.Fatal("first data set has no overlay")
+			}
+			executeCommand(t, model, model.navigateBack())
+			model.datasetPage.move(1)
+			executeCommand(t, model, model.openSelection())
+			if mapped {
+				if model.overlay == nil || model.overlaySource.Local != "other.cpy" || model.overlayMappedPattern != "A.OTHER.DATA" || model.records[0].Decoded == nil {
+					t.Fatalf("next mapping not applied: source=%#v pattern=%q", model.overlaySource, model.overlayMappedPattern)
+				}
+			} else if model.overlay != nil || !model.overlaySource.empty() || model.overlayMappedPattern != "" || model.recordMode != ModeRaw || model.records[0].Decoded != nil {
+				t.Fatalf("previous copybook leaked: source=%#v pattern=%q mode=%d", model.overlaySource, model.overlayMappedPattern, model.recordMode)
+			}
+		})
+	}
+}
+
+func TestOpeningMemberClearsPreviousCopybook(t *testing.T) {
+	store := &fakeMappingStore{mappings: []dsnmap.Mapping{
+		{Pattern: "A.PDS(FIRST)", Local: "first.cpy", Format: "free"},
+	}}
+	model := mappedModel(t, Options{Prefix: "A*", Codepage: "latin1"}, store)
+	model.datasets[0] = zosmf.DataSet{Name: "A.PDS", Organization: "PO"}
+	model.browser.(*fakeBrowser).listMembers = func(context.Context, zosmf.ListMembersRequest) (zosmf.MemberPage, error) {
+		return zosmf.MemberPage{Items: []zosmf.Member{{Name: "FIRST"}, {Name: "SECOND"}}}, nil
+	}
+	executeCommand(t, model, model.openSelection())
+	executeCommand(t, model, model.openSelection())
+	if model.overlay == nil {
+		t.Fatal("first member has no overlay")
+	}
+	executeCommand(t, model, model.navigateBack())
+	model.memberPage.move(1)
+	executeCommand(t, model, model.openSelection())
+	if model.overlay != nil || !model.overlaySource.empty() || model.overlayMappedPattern != "" || model.recordMode != ModeRaw || model.records[0].Decoded != nil {
+		t.Fatalf("previous member copybook leaked: source=%#v pattern=%q mode=%d", model.overlaySource, model.overlayMappedPattern, model.recordMode)
+	}
+}
+
+func TestOpeningDataSetRejectsPreviousOverlayResult(t *testing.T) {
+	for _, organization := range []string{"PS", "PO"} {
+		t.Run(organization, func(t *testing.T) {
+			model := mappedModel(t, Options{Prefix: "A*", Codepage: "latin1"}, nil)
+			model.datasets[0].Organization = organization
+			// Capture a successful runtime copybook load before navigating, but
+			// deliver it only after the next selection has opened.
+			command := model.startOverlay(model.ws(), CopybookSource{Local: "previous.cpy", Format: "free"})
+			var result overlayResultMsg
+			walkMessages(command, func(msg tea.Msg) (tea.Cmd, bool) {
+				if loaded, ok := msg.(overlayResultMsg); ok {
+					result = loaded
+					return nil, true
+				}
+				return nil, false
+			})
+			if result.Overlay == nil {
+				t.Fatal("copybook load did not produce an overlay")
+			}
+			model.overlayError = "previous error"
+			model.pendingMapping = &pendingMappingSave{mapping: dsnmap.Mapping{Pattern: "A.PREVIOUS", Local: "previous.cpy"}}
+			open := model.openSelection()
+			executeCommand(t, model, applyMessage(t, model, result))
+			executeCommand(t, model, open)
+			if model.overlay != nil || model.overlayPending || model.overlayError != "" || model.pendingMapping != nil {
+				t.Fatalf("stale overlay load retained: overlay=%v pending=%t error=%q", model.overlay, model.overlayPending, model.overlayError)
+			}
+		})
+	}
+}
+
 func TestAutoApplyFailureDegradesToRawWithStatusMessage(t *testing.T) {
 	store := &fakeMappingStore{mappings: []dsnmap.Mapping{
 		{Pattern: "A.CUSTOMER.*", Local: "broken.cpy", Format: "auto"},
@@ -160,6 +244,12 @@ func TestExplicitCopybookFlagsOverridePersistedMappings(t *testing.T) {
 	}
 	if model.overlayMappedPattern != "" || len(store.touched) != 0 {
 		t.Fatalf("mapping applied despite explicit flags: pattern=%q touched=%#v", model.overlayMappedPattern, store.touched)
+	}
+	executeCommand(t, model, model.navigateBack())
+	model.datasets[0] = zosmf.DataSet{Name: "A.OTHER.DATA", Organization: "PS"}
+	executeCommand(t, model, model.openSelection())
+	if model.overlay == nil || model.overlaySource.Local != "flag.cpy" || model.records[0].Decoded == nil || len(store.touched) != 0 {
+		t.Fatal("explicit copybook did not survive opening another data set")
 	}
 }
 
