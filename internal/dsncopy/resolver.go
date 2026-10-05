@@ -11,9 +11,6 @@ import (
 	"github.com/Tannex/cq/internal/zosmf"
 )
 
-// maxConcurrentFetches bounds the remote data set reads a resolver has in flight.
-const maxConcurrentFetches = 8
-
 // Fetcher retrieves a text data set or member.
 type Fetcher interface {
 	FetchText(context.Context, string) ([]byte, error)
@@ -28,7 +25,7 @@ type Resolver struct {
 	searchPaths []string
 	fetcher     Fetcher
 	diagnostic  Diagnostic
-	slots       chan struct{}
+	fetchSlot   chan struct{}
 
 	mu    sync.Mutex
 	cache map[string]copyResult
@@ -39,13 +36,14 @@ type copyResult struct {
 	err  error
 }
 
-// New creates a resolver. At most eight library fetches run concurrently.
+// New creates a resolver. Remote reads are serialized, including concurrent
+// COPY prefetches, to limit pressure on z/OSMF's TSO address spaces.
 func New(searchPaths []string, fetcher Fetcher, diagnostic Diagnostic) *Resolver {
 	return &Resolver{
 		searchPaths: append([]string(nil), searchPaths...),
 		fetcher:     fetcher,
 		diagnostic:  diagnostic,
-		slots:       make(chan struct{}, maxConcurrentFetches),
+		fetchSlot:   make(chan struct{}, 1),
 		cache:       make(map[string]copyResult),
 	}
 }
@@ -55,7 +53,7 @@ func New(searchPaths []string, fetcher Fetcher, diagnostic Diagnostic) *Resolver
 // that member is re-resolved through the same search chain nested COPY
 // members use, so a copybook moves libraries without breaking saved mappings.
 func (r *Resolver) FetchPrimary(ctx context.Context, dsn string) (string, error) {
-	text, err := r.fetcher.FetchText(ctx, dsn)
+	text, err := r.fetchText(ctx, dsn)
 	if err == nil {
 		return string(text), nil
 	}
@@ -97,9 +95,8 @@ func (r *Resolver) Resolve(member string) (string, error) {
 	return r.ResolveContext(context.Background(), member)
 }
 
-// ResolveContext is safe for concurrent use and cancels outstanding library
-// probes when the caller is canceled. Caller cancellation is not cached, so a
-// later resolution can retry normally.
+// ResolveContext is safe for concurrent use. Caller cancellation interrupts
+// queued and active reads and is not cached, so a later resolution can retry.
 func (r *Resolver) ResolveContext(ctx context.Context, member string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -124,55 +121,51 @@ func (r *Resolver) ResolveContext(ctx context.Context, member string) (string, e
 	return res.text, res.err
 }
 
-// probeSearchPaths queries every library concurrently and keeps the result
-// from the earliest library in search order that has the member. It returns as
-// soon as that winner is decided and cancels probes still in flight.
-func (r *Resolver) probeSearchPaths(parent context.Context, member string) copyResult {
-	ctx, cancel := context.WithCancel(parent)
-	defer cancel()
-	type probe struct {
-		i   int
-		res copyResult
-	}
-	resCh := make(chan probe, len(r.searchPaths))
-	for i, library := range r.searchPaths {
-		go func() {
-			select {
-			case r.slots <- struct{}{}:
-				defer func() { <-r.slots }()
-			case <-ctx.Done():
-				resCh <- probe{i: i, res: copyResult{err: ctx.Err()}}
-				return
-			}
-			src, err := r.fetcher.FetchText(ctx, fmt.Sprintf("%s(%s)", library, member))
-			resCh <- probe{i: i, res: copyResult{text: string(src), err: err}}
-		}()
-	}
-
-	results := make([]*copyResult, len(r.searchPaths))
-	next := 0 // earliest library whose outcome is still unknown
-	for range r.searchPaths {
-		select {
-		case <-parent.Done():
-			return copyResult{err: parent.Err()}
-		case p := <-resCh:
-			results[p.i] = &p.res
-			for next < len(results) && results[next] != nil {
-				if results[next].err == nil {
-					r.logf("COPY %s: using %s(%s)", member, r.searchPaths[next], member)
-					return copyResult{text: results[next].text}
-				}
-				next++
-			}
+// probeSearchPaths reads libraries in precedence order and stops at the first
+// match. Let each FetchText finish (including response-body cleanup) before
+// starting another read; canceling speculative HTTP requests does not wait for
+// the corresponding server-side TSO work to finish.
+func (r *Resolver) probeSearchPaths(ctx context.Context, member string) copyResult {
+	failures := make([]string, 0, len(r.searchPaths))
+	for _, library := range r.searchPaths {
+		dsn := fmt.Sprintf("%s(%s)", library, member)
+		src, err := r.fetchText(ctx, dsn)
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return copyResult{err: err}
 		}
+		if err == nil {
+			r.logf("COPY %s: using %s", member, dsn)
+			return copyResult{text: string(src)}
+		}
+		failures = append(failures, err.Error())
 	}
 
-	failures := make([]string, 0, len(results))
-	for _, res := range results {
-		failures = append(failures, res.err.Error())
-	}
 	r.logf("COPY %s: not found in any of %d libraries", member, len(r.searchPaths))
 	return copyResult{err: fmt.Errorf("COPY %s was not resolved through dsnSearchPath:\n  %s", member, strings.Join(failures, "\n  "))}
+}
+
+// fetchText shares one cancellable slot between primary and nested copybooks.
+// Keep the slot until FetchText returns, even when the caller is canceled, so
+// subsequent reads cannot overtake the fetcher's cleanup.
+func (r *Resolver) fetchText(ctx context.Context, dsn string) ([]byte, error) {
+	if ctx == nil {
+		return nil, &zosmf.RequestError{Field: "context", Message: "must not be nil"}
+	}
+	select {
+	case r.fetchSlot <- struct{}{}:
+		defer func() { <-r.fetchSlot }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	// A slot and cancellation can become ready together.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	src, err := r.fetcher.FetchText(ctx, dsn)
+	if contextErr := ctx.Err(); contextErr != nil {
+		return nil, contextErr
+	}
+	return src, err
 }
 
 func (r *Resolver) logf(format string, args ...any) {
