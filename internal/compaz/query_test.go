@@ -79,7 +79,7 @@ func queryModelWithCopybook(t *testing.T, copybook string, pages map[int64]zosmf
 		}
 		return io.NopCloser(&buffer), nil
 	}
-	model, err := NewModel(Options{Prefix: "A*", Codepage: "latin1", Copybook: "cust.cpy"}, Dependencies{
+	model, err := NewModel(Options{Prefix: "A*", Codepage: "latin1"}, Dependencies{
 		LoadSession: func(context.Context, string) (Session, error) {
 			return Session{Browser: browser, User: "A", Encoding: "latin1"}, nil
 		},
@@ -93,6 +93,7 @@ func queryModelWithCopybook(t *testing.T, copybook string, pages map[int64]zosmf
 	applyMessage(t, model, tea.WindowSizeMsg{Width: 90, Height: 13})
 	executeCommand(t, model, model.Init())
 	executeCommand(t, model, model.openSelection())
+	executeCommand(t, model, model.startOverlay(model.ws(), CopybookSource{Local: "cust.cpy", Format: "free"}))
 	if model.screen != ScreenRecords {
 		t.Fatalf("screen = %d, want records", model.screen)
 	}
@@ -317,6 +318,7 @@ func TestQueryKeyRouting(t *testing.T) {
 		t.Fatal("popup opened outside the records screen")
 	}
 	executeCommand(t, model, model.openSelection())
+	executeCommand(t, model, model.startOverlay(model.ws(), CopybookSource{Local: "cust.cpy", Format: "free"}))
 
 	openQuery(t, model)
 	// Typing lands in the input, including keys bound elsewhere.

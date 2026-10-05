@@ -157,8 +157,10 @@ func TestInvalidOverlayResultRetainsPreviousValidOverlay(t *testing.T) {
 			status:            status{Level: statusReady},
 		},
 	}
+	model.screen = ScreenRecords
+	model.overlayTarget = model.recordIdentity()
 	previous := model.overlay
-	model.handleOverlayResult(model.ws(), overlayResultMsg{Generation: 4, Source: CopybookSource{Local: "bad.cpy"}, Err: errors.New("parse failed")})
+	model.handleOverlayResult(model.ws(), overlayResultMsg{Target: model.recordIdentity(), Generation: 4, Source: CopybookSource{Local: "bad.cpy"}, Err: errors.New("parse failed")})
 	if model.overlay != previous || model.status.Level != statusError || !strings.Contains(model.status.Text, "previous overlay retained") {
 		t.Fatalf("replacement failure overlay=%p previous=%p status=%#v", model.overlay, previous, model.status)
 	}
@@ -172,7 +174,9 @@ func TestOverlayFailureRemainsVisibleAcrossConcurrentBrowseCompletion(t *testing
 			status:            status{Level: statusLoading},
 		},
 	}
-	model.handleOverlayResult(model.ws(), overlayResultMsg{Generation: 2, Err: errors.New("parse failed")})
+	model.screen = ScreenRecords
+	model.overlayTarget = model.recordIdentity()
+	model.handleOverlayResult(model.ws(), overlayResultMsg{Target: model.recordIdentity(), Generation: 2, Err: errors.New("parse failed")})
 	if strings.Contains(model.overlayError, "previous overlay retained") {
 		t.Fatalf("first overlay failure incorrectly claimed a previous overlay: %q", model.overlayError)
 	}

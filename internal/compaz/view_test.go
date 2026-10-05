@@ -41,6 +41,7 @@ func recordViewModel(t *testing.T) *Model {
 			status:       status{Level: statusReady, Text: "records ready"},
 		},
 	}
+	model.overlayTarget = model.recordIdentity()
 	model.records = []recordRow{
 		{Record: zosmf.Record{Number: 1, Data: []byte{'A', 0, '\n', 'B'}}},
 		{Record: zosmf.Record{Number: 2, Data: []byte("SECOND")}},

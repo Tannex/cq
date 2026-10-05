@@ -1037,7 +1037,7 @@ func TestOverlayCompletionPreservesPendingBrowseStatus(t *testing.T) {
 	model.status = status{Level: statusLoading, Text: "reading records from HQ.DATA()"}
 	built := &overlay{Source: CopybookSource{Local: "layout.cpy"}, Record: &layout.Record{Field: &layout.Field{Name: "ROW"}}}
 
-	if command := model.handleOverlayResult(model.ws(), overlayResultMsg{Generation: 3, Overlay: built}); command != nil {
+	if command := model.handleOverlayResult(model.ws(), overlayResultMsg{Target: model.recordIdentity(), Generation: 3, Overlay: built}); command != nil {
 		t.Fatal("overlay completion started decode while browse was pending")
 	}
 	if model.status.Level != statusLoading || model.status.Text != "reading records from HQ.DATA()" {

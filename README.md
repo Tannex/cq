@@ -16,7 +16,7 @@ $ cq -c CUSTOMER.cpy -d customer.bin           # decode records to a JSON array
 $ cq --copybook-dsn "HQ.COPYLIB(CUSTOMER)" --data-dsn "HQ.CUSTOMER.DATA"
 $ cq -q 'select(.BALANCE < 0)' -c CUSTOMER.cpy -d customer.bin
 $ cq -where DTAR107-SALE -c DTAR107.cbl -d sales.bin
-$ compaz --prefix 'PROD.CUSTOMER.*' -c CUSTOMER.cpy
+$ compaz
 ```
 
 ## Install
@@ -99,19 +99,20 @@ Shares `cq`'s Zowe session, TLS settings, and `cq/config.json` — no separate
 config. Run `cq config` to edit it.
 
 ```console
-$ compaz                                        # raw browser, default prefix
-$ compaz --prefix 'PROD.CUSTOMER.*' -c CUSTOMER.cpy --format fixed
-$ compaz --copybook-dsn 'HQ.COPYLIB(CUSTOMER)' --record CUSTOMER-RECORD
-$ compaz --read-only                             # disable the editor entirely
+$ compaz
+$ compaz --demo                              # offline sample datasets and jobs
 ```
 
-A copybook is optional and can be loaded/changed at runtime (`c`). Every
-z/OSMF list/read request is capped at `2×` the visible rows; cached rows
+Launch compaz without configuration flags. It uses your Zowe profiles for
+credentials and encoding; choose profiles and data set prefixes in the browser.
+Press `c` in a records view to load a copybook or manage data set/member mappings.
+Copybooks belong to the current data set/member; an unmapped target opens raw.
+
+Every z/OSMF list/read request is capped at `2×` the visible rows; cached rows
 persist per screen so paging back never refetches. `e` opens a sequential
-data set or PDS member for editing; nothing writes to the host until
-`Ctrl-S`, which conditionally saves and fails cleanly on a stale copy
-(`Ctrl-R` reloads). `--read-only` removes the editor and its write path
-entirely — browsing itself never writes.
+data set or PDS member for editing; `Ctrl-S` conditionally saves and fails
+cleanly on a stale copy (`Ctrl-R` reloads). Browsing itself never writes.
+`--help` and `--version` are informational commands.
 
 `J` from the data set screen opens the jobs view: list, drill into a job's
 spool files, and read spool/JCL content — read-only, same session. z/OSMF's

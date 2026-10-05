@@ -122,6 +122,8 @@ type workspace struct {
 	syntaxKind    sourceKind
 	syntaxSampled int
 
+	// overlayTarget is the data set/member identity owning all copybook state.
+	overlayTarget string
 	overlay       *overlay
 	overlaySource CopybookSource
 	overlayError  string
@@ -323,6 +325,17 @@ func (ws *workspace) matchName() string {
 		return fmt.Sprintf("%s(%s)", ws.dataSet.Name, ws.member.Name)
 	}
 	return ws.dataSet.Name
+}
+
+// bindOverlayTarget invalidates copybook and decode work whenever ownership
+// changes. An unchanged identity preserves loaded, cleared, or failed state.
+func (ws *workspace) bindOverlayTarget(target string) bool {
+	if ws.overlayTarget == target {
+		return false
+	}
+	ws.clearOverlay()
+	ws.overlayTarget = target
+	return true
 }
 
 func (ws *workspace) resetRecordState() {

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -45,11 +44,8 @@ func main() {
 	}
 }
 
-// loadSession resolves the Zowe session. codepageOverride carries the
-// -codepage flag: it must reach the zosmf client too, not just the TUI's
-// charmap, so server-side spool conversion (fileEncoding) follows the same
-// flag-then-profile precedence as every client-side decode.
-func loadSession(ctx context.Context, profile, codepageOverride string) (compaz.Session, error) {
+// loadSession resolves credentials and encoding from the selected Zowe profile.
+func loadSession(ctx context.Context, profile string) (compaz.Session, error) {
 	if err := ctx.Err(); err != nil {
 		return compaz.Session{}, err
 	}
@@ -80,9 +76,6 @@ func loadSession(ctx context.Context, profile, codepageOverride string) (compaz.
 			return compaz.Session{}, result.err
 		}
 		session := result.session
-		if override := strings.TrimSpace(codepageOverride); override != "" {
-			session.Encoding = override
-		}
 		return compaz.Session{
 			Browser: zosmf.New(session, nil), User: session.User, Encoding: session.Encoding,
 		}, nil
@@ -99,23 +92,14 @@ func listProfiles(ctx context.Context) ([]string, error) {
 func run(args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("compaz", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	var options compaz.Options
 	var showVersion bool
 	var demoMode bool
-	fs.StringVar(&options.Prefix, "prefix", "", "initial data set prefix or pattern")
-	fs.StringVar(&options.Copybook, "c", "", "local copybook file")
-	fs.StringVar(&options.Copybook, "copybook", "", "local copybook file")
-	fs.StringVar(&options.CopybookDSN, "copybook-dsn", "", "copybook data set or member to fetch from z/OSMF")
-	fs.StringVar(&options.Format, "format", "auto", "copybook source format: auto, fixed, or free")
-	fs.StringVar(&options.Record, "record", "", "01-level record when the copybook has several")
-	fs.StringVar(&options.Codepage, "codepage", "", "EBCDIC codepage (default: Zowe profile encoding, then cp037)")
-	fs.BoolVar(&options.ReadOnly, "read-only", false, "disable edit mode; the console cannot write to the host")
-	fs.BoolVar(&showVersion, "version", false, "print version and exit")
 	fs.BoolVar(&demoMode, "demo", false, "run with offline fake data")
+	fs.BoolVar(&showVersion, "version", false, "print version and exit")
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), "Compa/z — z/OSMF data set browser (formerly cqt)")
 		fmt.Fprintln(fs.Output(), "")
-		fmt.Fprintln(fs.Output(), "usage: compaz [flags]")
+		fmt.Fprintln(fs.Output(), "usage: compaz [--demo]")
 		fmt.Fprintln(fs.Output(), "")
 		fmt.Fprintln(fs.Output(), "flags:")
 		fs.PrintDefaults()
@@ -130,9 +114,6 @@ func run(args []string, stdout, stderr io.Writer) error {
 		_, err := fmt.Fprintf(stdout, "compaz %s\n", buildinfo.Reported())
 		return err
 	}
-	if demoMode && strings.TrimSpace(options.Prefix) == "" {
-		options.Prefix = "DEMO.*"
-	}
 
 	config, err := appconfig.DefaultLoader(nil).Load()
 	if err != nil {
@@ -141,14 +122,16 @@ func run(args []string, stdout, stderr io.Writer) error {
 	deps := compaz.Dependencies{
 		DSNSearchPath: config.DSNSearchPath,
 		LoadSession: func(ctx context.Context, profile string) (compaz.Session, error) {
-			return loadSession(ctx, profile, options.Codepage)
+			return loadSession(ctx, profile)
 		},
-		ListProfiles:  listProfiles,
-		Mappings:      dsnmap.DefaultStore(nil),
-		Favorites:     favorites.DefaultStore(nil),
-		Events:        events.DefaultStore(nil),
+		ListProfiles: listProfiles,
+		Mappings:     dsnmap.DefaultStore(nil),
+		Favorites:    favorites.DefaultStore(nil),
+		Events:       events.DefaultStore(nil),
 	}
+	var options compaz.Options
 	if demoMode {
+		options.Prefix = "DEMO.*"
 		deps.LoadSession = loadDemoSession
 		deps.ListProfiles = listDemoProfiles
 	}

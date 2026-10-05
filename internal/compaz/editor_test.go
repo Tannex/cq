@@ -350,7 +350,7 @@ func TestReadOnlyOptionDisablesEdit(t *testing.T) {
 	if model.editor != nil || len(browser.reads) != 0 {
 		t.Fatal("read-only mode still opened the editor")
 	}
-	if model.status.Level != statusWarn || !strings.Contains(model.status.Text, "--read-only") {
+	if model.status.Level != statusWarn || !strings.Contains(model.status.Text, "edit mode is disabled") {
 		t.Fatalf("status = %#v", model.status)
 	}
 }

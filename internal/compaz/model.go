@@ -49,14 +49,10 @@ func recallPollDelay(attempt int) time.Duration {
 	}
 }
 
-// Options are the approved compaz command-line settings.
+// Options configure embedded use and tests. The compaz executable uses defaults.
 type Options struct {
-	Prefix      string
-	Copybook    string
-	CopybookDSN string
-	Format      string
-	Record      string
-	Codepage    string
+	Prefix   string
+	Codepage string
 	// ReadOnly disables edit mode entirely, restoring the strictly read-only
 	// console guarantee for operators who want it.
 	ReadOnly bool
@@ -239,6 +235,7 @@ type recallCheckMsg struct {
 }
 
 type overlayResultMsg struct {
+	Target     string
 	Profile    string
 	Generation uint64
 	Source     CopybookSource
@@ -328,19 +325,6 @@ type Model struct {
 // NewModel validates static options and constructs a model whose work begins in
 // Init. No network, filesystem, copybook, or decoding operation runs here.
 func NewModel(options Options, deps Dependencies) (*Model, error) {
-	if strings.TrimSpace(options.Copybook) != "" && strings.TrimSpace(options.CopybookDSN) != "" {
-		return nil, errors.New("provide at most one copybook source: --copybook or --copybook-dsn")
-	}
-	if strings.TrimSpace(options.Format) == "" {
-		options.Format = "auto"
-	}
-	if strings.TrimSpace(options.Copybook) != "" || strings.TrimSpace(options.CopybookDSN) != "" {
-		if _, _, err := (CopybookSource{Local: options.Copybook, DSN: options.CopybookDSN, Format: options.Format, Record: options.Record}).validate(); err != nil {
-			return nil, err
-		}
-	} else if err := validateCopybookFormat(options.Format); err != nil {
-		return nil, err
-	}
 	if deps.Timeout <= 0 {
 		deps.Timeout = defaultRequestTimeout
 	}
@@ -450,15 +434,6 @@ func newHelpModel() help.Model {
 	model.Styles.FullDesc = model.Styles.ShortDesc
 	model.Styles.FullSeparator = model.Styles.ShortSeparator
 	return model
-}
-
-func validateCopybookFormat(format string) error {
-	switch strings.ToLower(strings.TrimSpace(format)) {
-	case "auto", "fixed", "free":
-		return nil
-	default:
-		return fmt.Errorf("copybook format %q is invalid; use auto, fixed, or free", format)
-	}
 }
 
 func newStatusSpinner() spinner.Model {
@@ -605,7 +580,9 @@ func (m *Model) targetWorkspace(profile string) *workspace {
 }
 
 // Update implements tea.Model.
-func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
+func (m *Model) Update(message tea.Msg) (model tea.Model, command tea.Cmd) {
+	// All navigation paths reconcile record ownership after the state change.
+	defer func() { command = tea.Batch(command, m.resolveRecordOverlay(m.ws())) }()
 	switch msg := message.(type) {
 	case tea.WindowSizeMsg:
 		return m, m.handleResize(msg.Width, msg.Height)
@@ -766,9 +743,6 @@ func (m *Model) handleSessionResult(ws *workspace, msg sessionResultMsg) tea.Cmd
 	m.prefixInput.SetValue(ws.prefix)
 
 	var commands []tea.Cmd
-	if source := m.initialCopybookSource(); !source.empty() {
-		commands = append(commands, m.startOverlay(ws, source))
-	}
 	if ws.prefix == "" {
 		ws.status = status{Level: statusReady, Text: "enter a data set prefix"}
 		commands = append(commands, m.prefixInput.Focus())
@@ -777,12 +751,6 @@ func (m *Model) handleSessionResult(ws *workspace, msg sessionResultMsg) tea.Cmd
 		commands = append(commands, m.startDataSets(ws, ws.datasetPage.initialPlan("")))
 	}
 	return tea.Batch(commands...)
-}
-
-func (m *Model) initialCopybookSource() CopybookSource {
-	return CopybookSource{
-		Local: m.options.Copybook, DSN: m.options.CopybookDSN, Format: m.options.Format, Record: m.options.Record,
-	}
 }
 
 func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
@@ -1174,6 +1142,11 @@ func (m *Model) switchProfile(delta int) tea.Cmd {
 
 func (m *Model) clearOverlay() {
 	ws := m.ws()
+	ws.clearOverlay()
+	ws.status = status{Level: statusReady, Text: "copybook overlay cleared"}
+}
+
+func (ws *workspace) clearOverlay() {
 	ws.cancelOverlay()
 	ws.pendingMapping = nil
 	ws.overlayGeneration++
@@ -1189,7 +1162,6 @@ func (m *Model) clearOverlay() {
 		ws.records[i].Decoded = nil
 		ws.records[i].Err = nil
 	}
-	ws.status = status{Level: statusReady, Text: "copybook overlay cleared"}
 }
 
 // openMappingView opens the combined mapping screen: every persisted mapping
@@ -1345,15 +1317,18 @@ func (m *Model) flushMappingOps() {
 	}
 }
 
-// autoApplyMapping starts the overlay for a persisted mapping when a records
-// screen is entered with no overlay active. Explicit --copybook/--copybook-dsn
-// flags override persisted mappings, and a failed load degrades to the raw
-// view through the normal overlay error path.
-func (m *Model) autoApplyMapping(ws *workspace) tea.Cmd {
-	if m.deps.Mappings == nil || ws.overlay != nil || ws.overlayPending || !ws.overlaySource.empty() {
+// resolveRecordOverlay owns the copybook lifecycle for a record target.
+// A new target always resolves its own mapping, including an explicit raw state
+// when none matches. Refreshing/paging the same target preserves user choices.
+func (m *Model) resolveRecordOverlay(ws *workspace) tea.Cmd {
+	target := ws.recordIdentity()
+	if ws.screen != ScreenRecords || ws.dataSet.Name == "" {
+		target = ""
+	}
+	if !ws.bindOverlayTarget(target) {
 		return nil
 	}
-	if !m.initialCopybookSource().empty() {
+	if target == "" || m.deps.Mappings == nil {
 		return nil
 	}
 	mapping, ok := m.deps.Mappings.Match(ws.matchName())
@@ -1658,7 +1633,7 @@ func (m *Model) openSelection() tea.Cmd {
 			ws.resetMemberState()
 			ws.screen = ScreenRecords
 			m.recordOpen(selected.Name)
-			return tea.Batch(m.startRecords(ws, ws.recordPage.initialPlan(0)), m.autoApplyMapping(ws))
+			return m.startRecords(ws, ws.recordPage.initialPlan(0))
 		case "PO", "PO-E", "POE", "PDS", "PDSE":
 			ws.cancelBrowse()
 			ws.cancelDecode()
@@ -1687,7 +1662,7 @@ func (m *Model) openSelection() tea.Cmd {
 		ws.screen = ScreenRecords
 		ws.resetRecordState()
 		m.recordOpen(fmt.Sprintf("%s(%s)", ws.dataSet.Name, selected.Name))
-		return tea.Batch(m.startRecords(ws, ws.recordPage.initialPlan(0)), m.autoApplyMapping(ws))
+		return m.startRecords(ws, ws.recordPage.initialPlan(0))
 	case ScreenJobs:
 		index := ws.jobPage.selectedIndex()
 		if index < 0 || index >= len(ws.jobs) {
@@ -2153,6 +2128,7 @@ func (m *Model) startRecords(ws *workspace, plan pagePlan[int64]) tea.Cmd {
 	if !ws.canFetch(m.budget) || ws.dataSet.Name == "" {
 		return nil
 	}
+	overlayCmd := m.resolveRecordOverlay(ws)
 	member := ""
 	if ws.member != nil {
 		member = ws.member.Name
@@ -2161,10 +2137,10 @@ func (m *Model) startRecords(ws *workspace, plan pagePlan[int64]) tea.Cmd {
 		fmt.Sprintf("reading records from %s", ws.recordIdentity()))
 	browser := ws.browser
 	request := zosmf.ReadRecordsRequest{DataSet: ws.dataSet.Name, Member: member, Start: plan.Anchor, MaxItems: m.budget}
-	return m.loadingCommand(func() tea.Msg {
+	return tea.Batch(overlayCmd, m.loadingCommand(func() tea.Msg {
 		page, err := browser.ReadRecords(ctx, request)
 		return recordsResultMsg{Meta: meta, Page: page, Err: err}
-	})
+	}))
 }
 
 // openJobs switches to the jobs screen (reachable only from ScreenDataSets,
@@ -2549,6 +2525,8 @@ func cloneInt(value *int) *int {
 }
 
 func (m *Model) startOverlay(ws *workspace, source CopybookSource) tea.Cmd {
+	target := ws.recordIdentity()
+	ws.bindOverlayTarget(target)
 	ws.cancelOverlay()
 	// A new overlay request supersedes any not-yet-persisted mapping; the
 	// form handler re-stashes its own pending save after this call.
@@ -2566,12 +2544,12 @@ func (m *Model) startOverlay(ws *workspace, source CopybookSource) tea.Cmd {
 	ws.status = status{Level: statusLoading, Text: "loading copybook overlay " + source.label()}
 	return m.loadingCommand(func() tea.Msg {
 		built, err := buildOverlay(ctx, source, codepage, browser, loadFile, searchPaths)
-		return overlayResultMsg{Profile: ws.profile, Generation: generation, Source: source, Overlay: built, Err: err}
+		return overlayResultMsg{Target: target, Profile: ws.profile, Generation: generation, Source: source, Overlay: built, Err: err}
 	})
 }
 
 func (m *Model) handleOverlayResult(ws *workspace, msg overlayResultMsg) tea.Cmd {
-	if msg.Generation != ws.overlayGeneration || !ws.overlayPending {
+	if msg.Generation != ws.overlayGeneration || !ws.overlayPending || msg.Target != ws.overlayTarget || msg.Target != ws.recordIdentity() || ws.screen != ScreenRecords {
 		return nil
 	}
 	ws.cancelOverlay()

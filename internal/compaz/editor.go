@@ -175,7 +175,7 @@ func parseRecordLength(value string) int {
 func (m *Model) beginEdit() tea.Cmd {
 	ws := m.ws()
 	if m.options.ReadOnly {
-		ws.status = status{Level: statusWarn, Text: "edit mode is disabled by --read-only"}
+		ws.status = status{Level: statusWarn, Text: "edit mode is disabled"}
 		return nil
 	}
 	if !ws.sessionReady {

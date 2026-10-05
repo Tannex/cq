@@ -2,6 +2,7 @@ package compaz
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -127,6 +128,157 @@ func TestRecordsScreenAutoAppliesMatchedMapping(t *testing.T) {
 	}
 }
 
+func TestOpeningDataSetReplacesPreviousMapping(t *testing.T) {
+	for _, mapped := range []bool{false, true} {
+		t.Run(fmt.Sprintf("nextMapped=%t", mapped), func(t *testing.T) {
+			store := &fakeMappingStore{mappings: []dsnmap.Mapping{
+				{Pattern: "A.CUSTOMER.*", Local: "cust.cpy", Format: "free"},
+			}}
+			if mapped {
+				store.mappings = append(store.mappings, dsnmap.Mapping{Pattern: "A.OTHER.DATA", Local: "other.cpy", Format: "free"})
+			}
+			model := mappedModel(t, Options{Prefix: "A*", Codepage: "latin1"}, store)
+			model.datasets = append(model.datasets, zosmf.DataSet{Name: "A.OTHER.DATA", Organization: "PS"})
+			model.datasetPage.apply([]string{"A.CUSTOMER.DATA", "A.OTHER.DATA"}, true, model.datasetPage.initialPlan(""))
+			executeCommand(t, model, model.openSelection())
+			if model.overlay == nil {
+				t.Fatal("first data set has no overlay")
+			}
+			executeCommand(t, model, model.navigateBack())
+			model.datasetPage.move(1)
+			executeCommand(t, model, model.openSelection())
+			if mapped {
+				if model.overlay == nil || model.overlaySource.Local != "other.cpy" || model.overlayMappedPattern != "A.OTHER.DATA" || model.records[0].Decoded == nil {
+					t.Fatalf("next mapping not applied: source=%#v pattern=%q", model.overlaySource, model.overlayMappedPattern)
+				}
+			} else if model.overlay != nil || !model.overlaySource.empty() || model.overlayMappedPattern != "" || model.recordMode != ModeRaw || model.records[0].Decoded != nil {
+				t.Fatalf("previous copybook leaked: source=%#v pattern=%q mode=%d", model.overlaySource, model.overlayMappedPattern, model.recordMode)
+			}
+		})
+	}
+}
+
+func TestOpeningMemberClearsPreviousCopybook(t *testing.T) {
+	store := &fakeMappingStore{mappings: []dsnmap.Mapping{
+		{Pattern: "A.PDS(FIRST)", Local: "first.cpy", Format: "free"},
+	}}
+	model := mappedModel(t, Options{Prefix: "A*", Codepage: "latin1"}, store)
+	model.datasets[0] = zosmf.DataSet{Name: "A.PDS", Organization: "PO"}
+	model.browser.(*fakeBrowser).listMembers = func(context.Context, zosmf.ListMembersRequest) (zosmf.MemberPage, error) {
+		return zosmf.MemberPage{Items: []zosmf.Member{{Name: "FIRST"}, {Name: "SECOND"}}}, nil
+	}
+	executeCommand(t, model, model.openSelection())
+	executeCommand(t, model, model.openSelection())
+	if model.overlay == nil {
+		t.Fatal("first member has no overlay")
+	}
+	executeCommand(t, model, model.navigateBack())
+	model.memberPage.move(1)
+	executeCommand(t, model, model.openSelection())
+	if model.overlay != nil || !model.overlaySource.empty() || model.overlayMappedPattern != "" || model.recordMode != ModeRaw || model.records[0].Decoded != nil {
+		t.Fatalf("previous member copybook leaked: source=%#v pattern=%q mode=%d", model.overlaySource, model.overlayMappedPattern, model.recordMode)
+	}
+}
+
+func TestRecordIdentityChangeResolvesOverlayWithoutNavigationReset(t *testing.T) {
+	store := &fakeMappingStore{mappings: []dsnmap.Mapping{
+		{Pattern: "A.CUSTOMER.*", Local: "cust.cpy", Format: "free"},
+	}}
+	model := mappedModel(t, Options{Prefix: "A*", Codepage: "latin1"}, store)
+	executeCommand(t, model, model.openSelection())
+	if model.overlay == nil || model.records[0].Decoded == nil {
+		t.Fatal("mapped records were not decoded")
+	}
+	// Change only the target identity, bypassing all navigation handlers.
+	model.dataSet = zosmf.DataSet{Name: "A.UNMAPPED", Organization: "PS"}
+	executeCommand(t, model, applyMessage(t, model, tea.WindowSizeMsg{Width: 90, Height: 12}))
+	if model.overlayTarget != model.recordIdentity() || model.overlay != nil || model.recordMode != ModeRaw || model.records[0].Decoded != nil {
+		t.Fatal("overlay ownership did not follow the record identity")
+	}
+	model.dataSet.Name = "A.CUSTOMER.DATA"
+	executeCommand(t, model, applyMessage(t, model, tea.WindowSizeMsg{Width: 90, Height: 12}))
+	if model.overlay == nil || model.overlayTarget != model.recordIdentity() {
+		t.Fatal("returning to a mapped identity did not resolve its copybook")
+	}
+}
+
+func TestSameRecordTargetPreservesRuntimeCopybookChoice(t *testing.T) {
+	store := &fakeMappingStore{mappings: []dsnmap.Mapping{
+		{Pattern: "A.CUSTOMER.*", Local: "cust.cpy", Format: "free"},
+	}}
+	model := mappedModel(t, Options{Prefix: "A*", Codepage: "latin1"}, store)
+	executeCommand(t, model, model.openSelection())
+	model.clearOverlay()
+	executeCommand(t, model, model.startRecords(model.ws(), model.recordPage.initialPlan(0)))
+	if model.overlay != nil || len(store.touched) != 1 {
+		t.Fatal("refresh reapplied a copybook that the user cleared")
+	}
+	executeCommand(t, model, model.startOverlay(model.ws(), CopybookSource{Local: "manual.cpy", Format: "free"}))
+	previous := model.overlay
+	executeCommand(t, model, model.startRecords(model.ws(), model.recordPage.initialPlan(0)))
+	if model.overlay != previous || model.overlaySource.Local != "manual.cpy" || len(store.touched) != 1 {
+		t.Fatal("refresh replaced the user's copybook for the same target")
+	}
+}
+
+func TestOverlayResultCannotCrossRecordIdentities(t *testing.T) {
+	model := mappedModel(t, Options{Prefix: "A*", Codepage: "latin1"}, nil)
+	executeCommand(t, model, model.openSelection())
+	command := model.startOverlay(model.ws(), CopybookSource{Local: "old.cpy", Format: "free"})
+	var result overlayResultMsg
+	walkMessages(command, func(msg tea.Msg) (tea.Cmd, bool) {
+		if loaded, ok := msg.(overlayResultMsg); ok {
+			result = loaded
+			return nil, true
+		}
+		return nil, false
+	})
+	if result.Overlay == nil {
+		t.Fatal("copybook load did not produce a result")
+	}
+	// Keep the request generation intact: identity itself must reject it.
+	model.dataSet.Name = "A.OTHER.DATA"
+	model.handleOverlayResult(model.ws(), result)
+	if model.overlay != nil {
+		t.Fatal("accepted a copybook result belonging to another record target")
+	}
+	executeCommand(t, model, applyMessage(t, model, tea.WindowSizeMsg{Width: 90, Height: 12}))
+	if model.overlayPending || model.overlayTarget != model.recordIdentity() {
+		t.Fatal("identity change left the old request pending")
+	}
+}
+
+func TestOpeningDataSetRejectsPreviousOverlayResult(t *testing.T) {
+	for _, organization := range []string{"PS", "PO"} {
+		t.Run(organization, func(t *testing.T) {
+			model := mappedModel(t, Options{Prefix: "A*", Codepage: "latin1"}, nil)
+			model.datasets[0].Organization = organization
+			// Capture a successful runtime copybook load before navigating, but
+			// deliver it only after the next selection has opened.
+			command := model.startOverlay(model.ws(), CopybookSource{Local: "previous.cpy", Format: "free"})
+			var result overlayResultMsg
+			walkMessages(command, func(msg tea.Msg) (tea.Cmd, bool) {
+				if loaded, ok := msg.(overlayResultMsg); ok {
+					result = loaded
+					return nil, true
+				}
+				return nil, false
+			})
+			if result.Overlay == nil {
+				t.Fatal("copybook load did not produce an overlay")
+			}
+			model.overlayError = "previous error"
+			model.pendingMapping = &pendingMappingSave{mapping: dsnmap.Mapping{Pattern: "A.PREVIOUS", Local: "previous.cpy"}}
+			open := model.openSelection()
+			executeCommand(t, model, applyMessage(t, model, result))
+			executeCommand(t, model, open)
+			if model.overlay != nil || model.overlayPending || model.overlayError != "" || model.pendingMapping != nil {
+				t.Fatalf("stale overlay load retained: overlay=%v pending=%t error=%q", model.overlay, model.overlayPending, model.overlayError)
+			}
+		})
+	}
+}
+
 func TestAutoApplyFailureDegradesToRawWithStatusMessage(t *testing.T) {
 	store := &fakeMappingStore{mappings: []dsnmap.Mapping{
 		{Pattern: "A.CUSTOMER.*", Local: "broken.cpy", Format: "auto"},
@@ -148,21 +300,6 @@ func TestAutoApplyFailureDegradesToRawWithStatusMessage(t *testing.T) {
 	}
 }
 
-func TestExplicitCopybookFlagsOverridePersistedMappings(t *testing.T) {
-	store := &fakeMappingStore{mappings: []dsnmap.Mapping{
-		{Pattern: "*", Local: "mapped.cpy", Format: "free"},
-	}}
-	model := mappedModel(t, Options{Prefix: "A*", Codepage: "latin1", Copybook: "flag.cpy", Format: "free"}, store)
-
-	executeCommand(t, model, model.openSelection())
-	if model.overlaySource.Local != "flag.cpy" {
-		t.Fatalf("overlay source = %#v, want the --copybook flag source", model.overlaySource)
-	}
-	if model.overlayMappedPattern != "" || len(store.touched) != 0 {
-		t.Fatalf("mapping applied despite explicit flags: pattern=%q touched=%#v", model.overlayMappedPattern, store.touched)
-	}
-}
-
 func TestAutoApplyPrefersMemberMappingOverDataSetMapping(t *testing.T) {
 	store := &fakeMappingStore{mappings: []dsnmap.Mapping{
 		{Pattern: "A.PDS(REPORT)", Local: "report.cpy", Format: "free"},
@@ -179,7 +316,7 @@ func TestAutoApplyPrefersMemberMappingOverDataSetMapping(t *testing.T) {
 	model.overlay = nil
 	model.overlaySource = CopybookSource{}
 
-	if command := model.autoApplyMapping(model.ws()); command == nil {
+	if command := model.resolveRecordOverlay(model.ws()); command == nil {
 		t.Fatal("member mapping produced no overlay command")
 	}
 	if model.overlayMappedPattern != "A.PDS(REPORT)" {
@@ -190,7 +327,7 @@ func TestAutoApplyPrefersMemberMappingOverDataSetMapping(t *testing.T) {
 	model.overlayMappedPattern = ""
 	model.cancelOverlay()
 	model.member = &zosmf.Member{Name: "OTHER"}
-	if command := model.autoApplyMapping(model.ws()); command == nil {
+	if command := model.resolveRecordOverlay(model.ws()); command == nil {
 		t.Fatal("data set fallback produced no overlay command")
 	}
 	if model.overlayMappedPattern != "A.PDS" {
