@@ -31,7 +31,7 @@ func TestUsageEventsRecordOpensAndQueries(t *testing.T) {
 			return zosmf.RecordPage{Records: []zosmf.Record{{Number: 1, Data: []byte("ABC")}}}, nil
 		},
 	}
-	model, err := NewModel(Options{Prefix: "A*", Codepage: "latin1", Copybook: "cust.cpy"}, Dependencies{
+	model, err := NewModel(Options{Prefix: "A*", Codepage: "latin1"}, Dependencies{
 		LoadSession: func(context.Context, string) (Session, error) {
 			return Session{Browser: browser, User: "A", Encoding: "latin1"}, nil
 		},
@@ -47,6 +47,7 @@ func TestUsageEventsRecordOpensAndQueries(t *testing.T) {
 	executeCommand(t, model, model.Init())
 
 	executeCommand(t, model, model.openSelection())
+	executeCommand(t, model, model.startOverlay(model.ws(), CopybookSource{Local: "cust.cpy", Format: "free"}))
 	if len(recorder.opens) != 1 || recorder.opens[0] != "A.CUSTOMER.DATA" {
 		t.Fatalf("opens = %#v", recorder.opens)
 	}

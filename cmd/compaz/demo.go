@@ -20,7 +20,7 @@ import (
 )
 
 // demoBrowser is a deterministic, in-memory zosmf.Browser implementation used
-// by the hidden --demo flag. It requires no z/OSMF connection and produces
+// by the --demo flag. It requires no z/OSMF connection and produces
 // plausible data sets, PDS members, records, and jobs for visual inspection.
 // user backs the jobs view's default owner filter, mirroring how a real
 // session's owner defaults to the signed-in Zowe user.

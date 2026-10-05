@@ -60,7 +60,7 @@ func bulkQueryModel(t *testing.T, browser *fakeStreamBrowser) *Model {
 	browser.listDataSets = func(context.Context, zosmf.ListDataSetsRequest) (zosmf.DataSetPage, error) {
 		return zosmf.DataSetPage{Items: []zosmf.DataSet{{Name: "A.CUSTOMER.DATA", Organization: "PS"}}}, nil
 	}
-	model, err := NewModel(Options{Prefix: "A*", Codepage: "latin1", Copybook: "cust.cpy"}, Dependencies{
+	model, err := NewModel(Options{Prefix: "A*", Codepage: "latin1"}, Dependencies{
 		LoadSession: func(context.Context, string) (Session, error) {
 			return Session{Browser: browser, User: "A", Encoding: "latin1"}, nil
 		},
@@ -74,6 +74,7 @@ func bulkQueryModel(t *testing.T, browser *fakeStreamBrowser) *Model {
 	applyMessage(t, model, tea.WindowSizeMsg{Width: 90, Height: 13})
 	executeCommand(t, model, model.Init())
 	executeCommand(t, model, model.openSelection())
+	executeCommand(t, model, model.startOverlay(model.ws(), CopybookSource{Local: "cust.cpy", Format: "free"}))
 	if model.screen != ScreenRecords || model.overlay == nil {
 		t.Fatalf("records screen not ready: screen=%d overlayErr=%q", model.screen, model.overlayError)
 	}

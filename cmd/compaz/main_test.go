@@ -34,7 +34,7 @@ func TestLoadSessionReturnsWhenContextIsCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
 	go func() {
-		_, err := loadSession(ctx, "", "")
+		_, err := loadSession(ctx, "")
 		result <- err
 	}()
 	<-started
@@ -60,7 +60,7 @@ func TestLoadSessionMapsLoadedSession(t *testing.T) {
 	}
 	t.Cleanup(func() { loadDefaultSession = originalLoader })
 
-	session, err := loadSession(context.Background(), "", "")
+	session, err := loadSession(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,16 +68,6 @@ func TestLoadSessionMapsLoadedSession(t *testing.T) {
 		t.Fatalf("session = %#v", session)
 	}
 
-	// The -codepage flag overrides the profile encoding at the session
-	// boundary, so the zosmf client's server-side conversion follows the
-	// same precedence as client-side decoding.
-	session, err = loadSession(context.Background(), "", "cp037")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if session.Encoding != "cp037" {
-		t.Fatalf("override session encoding = %q, want cp037", session.Encoding)
-	}
 }
 
 func TestRunPrintsCompazVersionWithoutStartingProgram(t *testing.T) {
@@ -101,46 +91,29 @@ func TestRunPrintsCompazVersionWithoutStartingProgram(t *testing.T) {
 	}
 }
 
-func TestRunSupportsApprovedFlagsAndAliases(t *testing.T) {
+func TestRunStartsBrowserWithoutLaunchFlags(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	originalRunner := runProgram
-	called := 0
-	runProgram = func(*compaz.Model) error {
-		called++
-		return nil
-	}
+	called := false
+	runProgram = func(*compaz.Model) error { called = true; return nil }
 	t.Cleanup(func() { runProgram = originalRunner })
-
-	for _, arguments := range [][]string{
-		{"--prefix", "IBMUSER.*", "-c", "customer.cpy", "--format", "free", "--record", "CUSTOMER", "--codepage", "cp037"},
-		{"--prefix", "IBMUSER.*", "--copybook", "customer.cpy"},
-		{"--prefix", "IBMUSER.*", "--copybook-dsn", "HLQ.COPYLIB(CUSTOMER)"},
-	} {
-		var stdout, stderr bytes.Buffer
-		if err := run(arguments, &stdout, &stderr); err != nil {
-			t.Fatalf("run(%v): %v stderr=%q", arguments, err, stderr.String())
-		}
+	var stdout, stderr bytes.Buffer
+	if err := run(nil, &stdout, &stderr); err != nil {
+		t.Fatal(err)
 	}
-	if called != 3 {
-		t.Fatalf("program calls = %d", called)
+	if !called {
+		t.Fatal("browser did not start")
 	}
 }
 
-func TestRunRejectsInvalidFlagCombinationsAndPositionals(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	tests := []struct {
-		args []string
-		want string
-	}{
-		{args: []string{"--copybook", "a.cpy", "--copybook-dsn", "HLQ.CPY(A)"}, want: "at most one copybook source"},
-		{args: []string{"--format", "variable"}, want: "auto, fixed, or free"},
-		{args: []string{"unexpected"}, want: "unexpected positional arguments"},
-	}
-	for _, test := range tests {
+func TestRunRejectsRemovedLaunchFlags(t *testing.T) {
+	originalRunner := runProgram
+	runProgram = func(*compaz.Model) error { t.Fatal("browser started with an invalid argument"); return nil }
+	t.Cleanup(func() { runProgram = originalRunner })
+	for _, arg := range []string{"--prefix", "-c", "--copybook", "--copybook-dsn", "--format", "--record", "--codepage", "--read-only", "unexpected"} {
 		var stdout, stderr bytes.Buffer
-		err := run(test.args, &stdout, &stderr)
-		if err == nil || !strings.Contains(err.Error(), test.want) {
-			t.Fatalf("run(%v) error = %v, want %q", test.args, err, test.want)
+		if err := run([]string{arg}, &stdout, &stderr); err == nil {
+			t.Fatalf("accepted %q", arg)
 		}
 	}
 }
@@ -149,18 +122,14 @@ func TestRunDemoModeWiresModelWithoutError(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	originalRunner := runProgram
 	var model *compaz.Model
-	runProgram = func(m *compaz.Model) error {
-		model = m
-		return nil
-	}
+	runProgram = func(m *compaz.Model) error { model = m; return nil }
 	t.Cleanup(func() { runProgram = originalRunner })
-
 	var stdout, stderr bytes.Buffer
 	if err := run([]string{"--demo"}, &stdout, &stderr); err != nil {
-		t.Fatalf("run(--demo) error = %v", err)
+		t.Fatal(err)
 	}
 	if model == nil {
-		t.Fatal("run(--demo) did not create a model")
+		t.Fatal("demo did not create a model")
 	}
 }
 
@@ -340,17 +309,5 @@ func TestDemoBrowserEditRoundTripWithConflict(t *testing.T) {
 	final, _ := browser.ReadText(context.Background(), target)
 	if string(final.Text) != "EDITED\n" {
 		t.Fatalf("conflict overwrote content: %q", final.Text)
-	}
-}
-
-func TestRunSupportsReadOnlyFlag(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	originalRunner := runProgram
-	runProgram = func(*compaz.Model) error { return nil }
-	t.Cleanup(func() { runProgram = originalRunner })
-
-	var stdout, stderr bytes.Buffer
-	if err := run([]string{"--demo", "--read-only"}, &stdout, &stderr); err != nil {
-		t.Fatalf("run(--read-only): %v stderr=%q", err, stderr.String())
 	}
 }
