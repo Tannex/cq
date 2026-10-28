@@ -385,10 +385,10 @@ func (m *Model) handleQueryKey(msg tea.KeyPressMsg, selected action) tea.Cmd {
 		}
 		return nil
 	case actionPageUp:
-		popup.scrollBy(-max(1, m.visible))
+		popup.scrollBy(-m.queryPageRows())
 		return nil
 	case actionPageDown:
-		popup.scrollBy(max(1, m.visible))
+		popup.scrollBy(m.queryPageRows())
 		return nil
 	default:
 		updated, cmd := popup.input.Update(msg)
@@ -779,21 +779,39 @@ func (m *Model) queryPanel() string {
 	return strings.Join(lines, "\n")
 }
 
+// queryPopupBounds shares the popup height and position between rendering and
+// keyboard paging, including the centered layout used by short terminals.
+func queryPopupBounds(height int) (top, popupHeight int) {
+	// Leave the table header above and status/help lines below the popup.
+	top = 4
+	popupHeight = height - top - 2
+	if popupHeight < 8 {
+		popupHeight = min(max(12, int(float64(height)*0.8)), height-2)
+		top = (height - popupHeight) / 2
+	}
+	return top, popupHeight
+}
+
+func queryResultRows(popupHeight, footerRows int) int {
+	// Two borders plus the title, input, separator, and variable-height footer.
+	return max(1, popupHeight-5-footerRows)
+}
+
+// queryPageRows uses the rendered results viewport rather than the underlying
+// table height, so Page Up/Down cannot skip results hidden by popup chrome.
+func (m *Model) queryPageRows() int {
+	_, popupHeight := queryPopupBounds(m.height)
+	footer := m.queryFooterLines(lipgloss.NewStyle(), lipgloss.NewStyle(), queryPopupInnerWidth(m.width))
+	return queryResultRows(popupHeight, len(footer))
+}
+
 // overlayQuery composites the query popup over the live view with the same
 // Canvas/Layer mechanism and styling as the help popup. Unlike help it
 // anchors below the table header row, so the column names the expression
 // refers to stay readable while typing.
 func (m *Model) overlayQuery(background string) string {
 	popupWidth := queryPopupWidth(m.width)
-	// Rows above the popup: title, search, rule, and the table header line;
-	// the status and help lines stay visible below.
-	top := 4
-	popupHeight := m.height - top - 2
-	if popupHeight < 8 {
-		// Terminal too short to spare the chrome: fall back to centering.
-		popupHeight = min(max(12, int(float64(m.height)*0.8)), m.height-2)
-		top = (m.height - popupHeight) / 2
-	}
+	top, popupHeight := queryPopupBounds(m.height)
 	if popupWidth < 24 || popupHeight < 8 {
 		return background
 	}
@@ -814,7 +832,7 @@ func (m *Model) overlayQuery(background string) string {
 		fill.Render(truncateStyled(m.query.input.View(), innerWidth)),
 		fill.Render(muted.Render(strings.Repeat("─", max(0, innerWidth)))),
 	}
-	for _, line := range m.queryResultLines(body, muted, innerWidth, max(1, contentHeight-1-len(footer))) {
+	for _, line := range m.queryResultLines(body, muted, innerWidth, queryResultRows(popupHeight, len(footer))) {
 		innerLines = append(innerLines, fill.Render(line))
 	}
 	for len(innerLines) < contentHeight+2-len(footer) {
