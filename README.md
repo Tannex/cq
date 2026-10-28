@@ -108,6 +108,12 @@ credentials and encoding; choose profiles and data set prefixes in the browser.
 Press `c` in a records view to load a copybook or manage data set/member mappings.
 Copybooks belong to the current data set/member; an unmapped target opens raw.
 
+In the jq popup, Up/Down recalls submitted queries and restores your unfinished
+draft after the newest entry. Recalled queries remain editable; Enter runs them.
+History survives reopening and restarts through the existing local event log.
+Up/Down navigates completions when that menu is open; Page Up/Page Down scrolls
+results.
+
 Every z/OSMF list/read request is capped at `2×` the visible rows; cached rows
 persist per screen so paging back never refetches. `e` opens a sequential
 data set or PDS member for editing; `Ctrl-S` conditionally saves and fails

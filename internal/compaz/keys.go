@@ -479,7 +479,9 @@ func (k KeyMap) shortHelp(ctx keyContext) []key.Binding {
 		run.SetHelp("enter", "run query")
 		cancel := k.Cancel
 		cancel.SetHelp("esc", "cancel/close")
-		return []key.Binding{run, k.QueryComplete, k.QueryCopy, k.PageUp, k.PageDown, cancel}
+		history := k.Up
+		history.SetHelp("↑/↓", "history")
+		return []key.Binding{run, history, k.QueryComplete, k.QueryCopy, k.PageUp, k.PageDown, cancel}
 	}
 	if ctx.DialogOpen {
 		if ctx.DialogFormFocused {

@@ -14,6 +14,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/Tannex/cq/internal/events"
 	"github.com/Tannex/cq/internal/query"
 	"github.com/Tannex/cq/internal/zosmf"
 )
@@ -26,6 +27,10 @@ const queryResultCap = 1_000_000
 // once into the workspace's bulk cache (reused across runs while the same
 // records are browsed) and the expression is evaluated in a single pass.
 type queryPopup struct {
+	historyIndex       int
+	historyDraft       string
+	historyDraftCursor int
+
 	input     textinput.Model
 	compiled  *query.Query
 	resultCap int
@@ -315,7 +320,9 @@ const queryNeedsOverlay = "queries run over decoded records — load a copybook 
 // run over each record's decoded value, so raw browsing gets an explanation
 // instead of an input that cannot work.
 func (m *Model) openQueryPopup() tea.Cmd {
+	m.loadQueryHistory()
 	popup := newQueryPopup(m.width)
+	popup.historyIndex = len(m.queryHistory)
 	if overlay := m.ws().overlay; overlay == nil {
 		popup.err = queryNeedsOverlay
 	} else {
@@ -367,14 +374,14 @@ func (m *Model) handleQueryKey(msg tea.KeyPressMsg, selected action) tea.Cmd {
 		if popup.comp != nil {
 			popup.moveCompletion(-1)
 		} else {
-			popup.scrollBy(-1)
+			m.moveQueryHistory(-1)
 		}
 		return nil
 	case actionDown:
 		if popup.comp != nil {
 			popup.moveCompletion(1)
 		} else {
-			popup.scrollBy(1)
+			m.moveQueryHistory(1)
 		}
 		return nil
 	case actionPageUp:
@@ -498,8 +505,58 @@ func (m *Model) runQuery() tea.Cmd {
 // recordQuery tracks an executed expression — as typed, before quote
 // normalization — with its compile outcome for the local usage log.
 func (m *Model) recordQuery(expr string, ok bool) {
+	m.loadQueryHistory()
+	m.queryHistory = append(m.queryHistory, expr)
+	if len(m.queryHistory) > queryHistoryLimit {
+		m.queryHistory = m.queryHistory[len(m.queryHistory)-queryHistoryLimit:]
+	}
+	if m.query != nil {
+		m.query.historyIndex = len(m.queryHistory)
+		m.query.historyDraft = ""
+	}
 	if m.deps.Events != nil {
 		m.deps.Events.RecordQuery(expr, ok)
+	}
+}
+
+const queryHistoryLimit = 1000
+
+// Seed once from the existing event log, then keep session history even if
+// persistence is unavailable. Record-only integrations need no read support.
+func (m *Model) loadQueryHistory() {
+	if m.queryHistoryLoaded {
+		return
+	}
+	m.queryHistoryLoaded = true
+	if source, ok := m.deps.Events.(interface{ Events() []events.Event }); ok {
+		for _, event := range source.Events() {
+			if event.Kind == events.KindQuery && strings.TrimSpace(event.Query) != "" {
+				m.queryHistory = append(m.queryHistory, event.Query)
+			}
+		}
+	}
+	if len(m.queryHistory) > queryHistoryLimit {
+		m.queryHistory = m.queryHistory[len(m.queryHistory)-queryHistoryLimit:]
+	}
+}
+
+func (m *Model) moveQueryHistory(delta int) {
+	popup := m.query
+	next := max(0, min(popup.historyIndex+delta, len(m.queryHistory)))
+	if next == popup.historyIndex {
+		return
+	}
+	if popup.historyIndex == len(m.queryHistory) {
+		popup.historyDraft = popup.input.Value()
+		popup.historyDraftCursor = popup.input.Position()
+	}
+	popup.historyIndex = next
+	if next == len(m.queryHistory) {
+		popup.input.SetValue(popup.historyDraft)
+		popup.input.SetCursor(popup.historyDraftCursor)
+	} else {
+		popup.input.SetValue(m.queryHistory[next])
+		popup.input.CursorEnd()
 	}
 }
 
