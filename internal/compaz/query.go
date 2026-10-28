@@ -14,6 +14,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/Tannex/cq/internal/events"
 	"github.com/Tannex/cq/internal/query"
 	"github.com/Tannex/cq/internal/zosmf"
 )
@@ -26,6 +27,10 @@ const queryResultCap = 1_000_000
 // once into the workspace's bulk cache (reused across runs while the same
 // records are browsed) and the expression is evaluated in a single pass.
 type queryPopup struct {
+	historyIndex       int
+	historyDraft       string
+	historyDraftCursor int
+
 	input     textinput.Model
 	compiled  *query.Query
 	resultCap int
@@ -315,7 +320,9 @@ const queryNeedsOverlay = "queries run over decoded records — load a copybook 
 // run over each record's decoded value, so raw browsing gets an explanation
 // instead of an input that cannot work.
 func (m *Model) openQueryPopup() tea.Cmd {
+	m.loadQueryHistory()
 	popup := newQueryPopup(m.width)
+	popup.historyIndex = len(m.queryHistory)
 	if overlay := m.ws().overlay; overlay == nil {
 		popup.err = queryNeedsOverlay
 	} else {
@@ -367,21 +374,21 @@ func (m *Model) handleQueryKey(msg tea.KeyPressMsg, selected action) tea.Cmd {
 		if popup.comp != nil {
 			popup.moveCompletion(-1)
 		} else {
-			popup.scrollBy(-1)
+			m.moveQueryHistory(-1)
 		}
 		return nil
 	case actionDown:
 		if popup.comp != nil {
 			popup.moveCompletion(1)
 		} else {
-			popup.scrollBy(1)
+			m.moveQueryHistory(1)
 		}
 		return nil
 	case actionPageUp:
-		popup.scrollBy(-max(1, m.visible))
+		popup.scrollBy(-m.queryPageRows())
 		return nil
 	case actionPageDown:
-		popup.scrollBy(max(1, m.visible))
+		popup.scrollBy(m.queryPageRows())
 		return nil
 	default:
 		updated, cmd := popup.input.Update(msg)
@@ -498,8 +505,58 @@ func (m *Model) runQuery() tea.Cmd {
 // recordQuery tracks an executed expression — as typed, before quote
 // normalization — with its compile outcome for the local usage log.
 func (m *Model) recordQuery(expr string, ok bool) {
+	m.loadQueryHistory()
+	m.queryHistory = append(m.queryHistory, expr)
+	if len(m.queryHistory) > queryHistoryLimit {
+		m.queryHistory = m.queryHistory[len(m.queryHistory)-queryHistoryLimit:]
+	}
+	if m.query != nil {
+		m.query.historyIndex = len(m.queryHistory)
+		m.query.historyDraft = ""
+	}
 	if m.deps.Events != nil {
 		m.deps.Events.RecordQuery(expr, ok)
+	}
+}
+
+const queryHistoryLimit = 1000
+
+// Seed once from the existing event log, then keep session history even if
+// persistence is unavailable. Record-only integrations need no read support.
+func (m *Model) loadQueryHistory() {
+	if m.queryHistoryLoaded {
+		return
+	}
+	m.queryHistoryLoaded = true
+	if source, ok := m.deps.Events.(interface{ Events() []events.Event }); ok {
+		for _, event := range source.Events() {
+			if event.Kind == events.KindQuery && strings.TrimSpace(event.Query) != "" {
+				m.queryHistory = append(m.queryHistory, event.Query)
+			}
+		}
+	}
+	if len(m.queryHistory) > queryHistoryLimit {
+		m.queryHistory = m.queryHistory[len(m.queryHistory)-queryHistoryLimit:]
+	}
+}
+
+func (m *Model) moveQueryHistory(delta int) {
+	popup := m.query
+	next := max(0, min(popup.historyIndex+delta, len(m.queryHistory)))
+	if next == popup.historyIndex {
+		return
+	}
+	if popup.historyIndex == len(m.queryHistory) {
+		popup.historyDraft = popup.input.Value()
+		popup.historyDraftCursor = popup.input.Position()
+	}
+	popup.historyIndex = next
+	if next == len(m.queryHistory) {
+		popup.input.SetValue(popup.historyDraft)
+		popup.input.SetCursor(popup.historyDraftCursor)
+	} else {
+		popup.input.SetValue(m.queryHistory[next])
+		popup.input.CursorEnd()
 	}
 }
 
@@ -722,21 +779,39 @@ func (m *Model) queryPanel() string {
 	return strings.Join(lines, "\n")
 }
 
+// queryPopupBounds shares the popup height and position between rendering and
+// keyboard paging, including the centered layout used by short terminals.
+func queryPopupBounds(height int) (top, popupHeight int) {
+	// Leave the table header above and status/help lines below the popup.
+	top = 4
+	popupHeight = height - top - 2
+	if popupHeight < 8 {
+		popupHeight = min(max(12, int(float64(height)*0.8)), height-2)
+		top = (height - popupHeight) / 2
+	}
+	return top, popupHeight
+}
+
+func queryResultRows(popupHeight, footerRows int) int {
+	// Two borders plus the title, input, separator, and variable-height footer.
+	return max(1, popupHeight-5-footerRows)
+}
+
+// queryPageRows uses the rendered results viewport rather than the underlying
+// table height, so Page Up/Down cannot skip results hidden by popup chrome.
+func (m *Model) queryPageRows() int {
+	_, popupHeight := queryPopupBounds(m.height)
+	footer := m.queryFooterLines(lipgloss.NewStyle(), lipgloss.NewStyle(), queryPopupInnerWidth(m.width))
+	return queryResultRows(popupHeight, len(footer))
+}
+
 // overlayQuery composites the query popup over the live view with the same
 // Canvas/Layer mechanism and styling as the help popup. Unlike help it
 // anchors below the table header row, so the column names the expression
 // refers to stay readable while typing.
 func (m *Model) overlayQuery(background string) string {
 	popupWidth := queryPopupWidth(m.width)
-	// Rows above the popup: title, search, rule, and the table header line;
-	// the status and help lines stay visible below.
-	top := 4
-	popupHeight := m.height - top - 2
-	if popupHeight < 8 {
-		// Terminal too short to spare the chrome: fall back to centering.
-		popupHeight = min(max(12, int(float64(m.height)*0.8)), m.height-2)
-		top = (m.height - popupHeight) / 2
-	}
+	top, popupHeight := queryPopupBounds(m.height)
 	if popupWidth < 24 || popupHeight < 8 {
 		return background
 	}
@@ -757,7 +832,7 @@ func (m *Model) overlayQuery(background string) string {
 		fill.Render(truncateStyled(m.query.input.View(), innerWidth)),
 		fill.Render(muted.Render(strings.Repeat("─", max(0, innerWidth)))),
 	}
-	for _, line := range m.queryResultLines(body, muted, innerWidth, max(1, contentHeight-1-len(footer))) {
+	for _, line := range m.queryResultLines(body, muted, innerWidth, queryResultRows(popupHeight, len(footer))) {
 		innerLines = append(innerLines, fill.Render(line))
 	}
 	for len(innerLines) < contentHeight+2-len(footer) {

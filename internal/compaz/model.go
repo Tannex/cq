@@ -304,6 +304,9 @@ type Model struct {
 	editor         *editorState
 	query          *queryPopup
 
+	queryHistory       []string
+	queryHistoryLoaded bool
+
 	editGeneration uint64
 	editCancel     context.CancelFunc
 	editPending    bool
