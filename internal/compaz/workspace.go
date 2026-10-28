@@ -22,6 +22,7 @@ type workspace struct {
 	codepageName string
 	charmap      *decode.Charmap
 
+	prefixScope   string
 	prefix        string
 	memberPattern string
 
