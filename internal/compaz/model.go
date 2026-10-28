@@ -64,6 +64,9 @@ type Session struct {
 	Browser  zosmf.Browser
 	User     string
 	Encoding string
+	// PrefixScope identifies the resolved connection for saved dataset prefixes.
+	// An empty value falls back to the workspace profile for embedded callers.
+	PrefixScope string
 }
 
 // MappingStore persists DSN → copybook mappings across sessions. A nil store
@@ -123,6 +126,13 @@ type EventRecorder interface {
 	RecordQuery(expr string, ok bool)
 }
 
+// PrefixStore remembers the last applied dataset prefix for each connection.
+// Reads and writes are best effort; nil disables prefix persistence.
+type PrefixStore interface {
+	Prefix(scope string) string
+	SetPrefix(scope, prefix string)
+}
+
 // Dependencies provide test seams without weakening the production command's
 // read-only boundaries.
 type Dependencies struct {
@@ -132,6 +142,7 @@ type Dependencies struct {
 	Mappings      MappingStore
 	Favorites     FavoriteStore
 	Events        EventRecorder
+	Prefixes      PrefixStore
 	DSNSearchPath []string
 	Timeout       time.Duration
 	// FollowInterval paces the spool follow mode's idle polls.
@@ -733,7 +744,14 @@ func (m *Model) handleSessionResult(ws *workspace, msg sessionResultMsg) tea.Cmd
 	ws.jobOwner = ws.user
 	ws.jobPrefix = "*"
 
+	ws.prefixScope = msg.Session.PrefixScope
+	if ws.prefixScope == "" {
+		ws.prefixScope = ws.profile
+	}
 	ws.prefix = strings.ToUpper(strings.TrimSpace(m.options.Prefix))
+	if ws.prefix == "" && m.deps.Prefixes != nil {
+		ws.prefix = m.deps.Prefixes.Prefix(ws.prefixScope)
+	}
 	if ws.prefix == "" && ws.user != "" {
 		ws.prefix = ws.user + ".*"
 	}
@@ -1421,6 +1439,9 @@ func (m *Model) applyPrefix(ws *workspace, prefix string) tea.Cmd {
 	ws.cancelBrowse()
 	ws.cancelDecode()
 	ws.prefix = prefix
+	if m.deps.Prefixes != nil && ws.sessionReady {
+		m.deps.Prefixes.SetPrefix(ws.prefixScope, prefix)
+	}
 	m.prefixInput.SetValue(prefix)
 	ws.datasets = nil
 	ws.datasetTotal = nil

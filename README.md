@@ -105,6 +105,11 @@ $ compaz --demo                              # offline sample datasets and jobs
 
 Launch compaz without configuration flags. It uses your Zowe profiles for
 credentials and encoding; choose profiles and data set prefixes in the browser.
+The last applied data set prefix is restored on the next launch for the same
+profile, connection, and user. Prefixes applied from favorites are remembered
+too. Missing or unreadable saved state falls back to the usual user-based
+default; demo mode does not read or write these preferences.
+
 Press `c` in a records view to load a copybook or manage data set/member mappings.
 Copybooks belong to the current data set/member; an unmapped target opens raw.
 

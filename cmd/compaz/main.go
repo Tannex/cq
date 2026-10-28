@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/Tannex/cq/internal/appconfig"
+	"github.com/Tannex/cq/internal/browserstate"
 	"github.com/Tannex/cq/internal/buildinfo"
 	"github.com/Tannex/cq/internal/compaz"
 	"github.com/Tannex/cq/internal/dsnmap"
@@ -25,6 +27,7 @@ var (
 	loadDefaultSession = zowe.LoadDefault
 	loadNamedSession   = zowe.LoadNamedDefault
 	listZoweProfiles   = zowe.ListDefault
+	newPrefixStore     = browserstate.DefaultStore
 )
 
 type sessionLoadResult struct {
@@ -78,8 +81,17 @@ func loadSession(ctx context.Context, profile string) (compaz.Session, error) {
 		session := result.session
 		return compaz.Session{
 			Browser: zosmf.New(session, nil), User: session.User, Encoding: session.Encoding,
+			PrefixScope: prefixScope(session),
 		}, nil
 	}
+}
+
+// prefixScope includes the resolved endpoint and user so identically named
+// profiles in different projects cannot share a remembered prefix. Credentials
+// are deliberately excluded; password/token rotation keeps the same scope.
+func prefixScope(session zowe.Session) string {
+	key, _ := json.Marshal([]any{session.Profile, session.Protocol, session.Host, session.Port, session.BasePath, session.User})
+	return string(key)
 }
 
 func listProfiles(ctx context.Context) ([]string, error) {
@@ -128,9 +140,11 @@ func run(args []string, stdout, stderr io.Writer) error {
 		Mappings:     dsnmap.DefaultStore(nil),
 		Favorites:    favorites.DefaultStore(nil),
 		Events:       events.DefaultStore(nil),
+		Prefixes:     newPrefixStore(nil),
 	}
 	var options compaz.Options
 	if demoMode {
+		deps.Prefixes = nil
 		options.Prefix = "DEMO.*"
 		deps.LoadSession = loadDemoSession
 		deps.ListProfiles = listDemoProfiles
