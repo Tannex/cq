@@ -315,6 +315,8 @@ type Model struct {
 	editor         *editorState
 	query          *queryPopup
 
+	// Run IDs outlive the popup so late completions cannot match a reopened query.
+	queryGeneration    uint64
 	queryHistory       []string
 	queryHistoryLoaded bool
 
