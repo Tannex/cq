@@ -119,6 +119,13 @@ History survives reopening and restarts through the existing local event log.
 Up/Down navigates completions when that menu is open; Page Up/Page Down scrolls
 results.
 
+The popup evaluates each query against one array of decoded records from the
+whole data set/member. `length`, `unique`, sorting, and grouping therefore operate
+across all successfully decoded records. Raw records are cached in a temporary
+file for repeated queries; each run decodes that file into memory. Decoded
+objects, aggregate operations, and retained result text can use substantially
+more RAM than the raw data, so memory use still grows with the input and output.
+
 Every z/OSMF list/read request is capped at `2×` the visible rows; cached rows
 persist per screen so paging back never refetches. `e` opens a sequential
 data set or PDS member for editing; `Ctrl-S` conditionally saves and fails
@@ -199,6 +206,26 @@ issue.
 `testdata/copybooks/cb2xml/` are unmodified fixtures from
 [cb2xml](https://github.com/bmTas/cb2xml) (LGPL-2.1), used to cross-check
 field offsets. See `SOURCES.md` there for origins and license text.
+
+## Query benchmarks
+
+Compa/z benchmarks generate 10,000 and 100,000 mixed COBOL records (192 bytes
+each), including nested groups, OCCURS, packed decimals, and 20-digit integers.
+They measure cached-file decoding, jq evaluation, and result serialization;
+host downloads and UI rendering are excluded. Fixtures and expected aggregate
+results are defined in `internal/compaz/query_benchmark_test.go`.
+
+```sh
+go test ./internal/compaz -run '^$' -bench 'Benchmark(DecodeQueryValue|QueryArrayFile)' -benchmem -benchtime=200ms -count=3
+
+# Peak process RAM on Linux, excluding compilation:
+go test -c -o /tmp/cq-query.test ./internal/compaz
+/usr/bin/time -v /tmp/cq-query.test -test.run='^$' -test.bench='^BenchmarkQueryArrayFile$/^100000$/^count$' -test.benchtime=1x
+```
+
+`B/op` reports cumulative allocations per query, not peak RAM. Maximum resident
+set size includes fixture setup and the Go runtime; compare isolated runs with
+the same Go version, hardware, and fixture.
 
 ## Releasing
 

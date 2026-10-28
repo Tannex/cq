@@ -16,6 +16,7 @@ import (
 
 	"github.com/Tannex/cq/internal/events"
 	"github.com/Tannex/cq/internal/query"
+	"github.com/Tannex/cq/internal/record"
 	"github.com/Tannex/cq/internal/zosmf"
 )
 
@@ -479,7 +480,8 @@ func (m *Model) runQuery() tea.Cmd {
 	m.recordQuery(typed, true)
 	popup.stopSearch()
 	popup.comp = nil
-	popup.generation++
+	m.queryGeneration++
+	popup.generation = m.queryGeneration
 	popup.compiled = compiled
 	popup.lines = nil
 	popup.matches, popup.errored, popup.searched = 0, 0, 0
@@ -568,19 +570,30 @@ func decodeQueryValue(ov *overlay, data []byte, msg *queryEvalMsg) (any, bool) {
 		msg.Errors++
 		return nil, false
 	}
-	encoded, err := decoded.JSON()
-	if err != nil {
-		msg.Errors++
-		msg.LastError = err.Error()
-		return nil, false
+	return decodedQueryValue(decoded.Value), true
+}
+
+// decodedQueryValue converts the decoder's ordered values to gojq's native
+// containers without serializing and reparsing every record. Scalars are already
+// valid UTF-8 strings or validated json.Number values; retaining them preserves
+// exact numeric tokens. Like JSON decoding, the last duplicate field wins.
+func decodedQueryValue(value record.Value) any {
+	switch value := value.(type) {
+	case record.Object:
+		object := make(map[string]any, len(value))
+		for _, member := range value {
+			object[member.Name] = decodedQueryValue(member.Value)
+		}
+		return object
+	case record.Array:
+		array := make([]any, len(value))
+		for i, item := range value {
+			array[i] = decodedQueryValue(item)
+		}
+		return array
+	default:
+		return value
 	}
-	value, err := query.FromJSON(encoded)
-	if err != nil {
-		msg.Errors++
-		msg.LastError = err.Error()
-		return nil, false
-	}
-	return value, true
 }
 
 // runQueryArray runs the expression once over the collected values, mapping
