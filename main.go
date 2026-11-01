@@ -33,8 +33,8 @@ import (
 )
 
 // debugLog carries --verbose diagnostics to stderr. It stays discarded until
-// run enables it; a log.Logger serializes writes from the concurrent library
-// probes in the DSN copy resolver.
+// run enables it; a log.Logger serializes writes from concurrent COPY
+// prefetches in the DSN copy resolver.
 var debugLog = log.New(io.Discard, "cq: ", 0)
 
 // loadDefaultZoweSession remains injectable at the executable boundary so

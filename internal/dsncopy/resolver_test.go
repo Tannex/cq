@@ -3,13 +3,206 @@ package dsncopy
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
+	"time"
 
+	"github.com/Tannex/cq/internal/copybook"
 	"github.com/Tannex/cq/internal/zosmf"
 )
+
+type fetchFunc func(context.Context, string) ([]byte, error)
+
+func (f fetchFunc) FetchText(ctx context.Context, dsn string) ([]byte, error) {
+	return f(ctx, dsn)
+}
+
+func TestResolveStopsFetchingAfterFirstMatch(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		fetcher := &mapFetcher{texts: map[string]string{
+			"FIRST.CPY(ADDR)": "05 ADDRESS PIC X(10).",
+			"LATER.CPY(ADDR)": "05 ADDRESS PIC X(99).",
+		}}
+		resolver := New([]string{"MISSING.CPY", "FIRST.CPY", "LATER.CPY"}, fetcher, nil)
+		for range 2 {
+			got, err := resolver.Resolve(" addr ")
+			if err != nil || got != "05 ADDRESS PIC X(10)." {
+				t.Fatalf("Resolve() = %q, %v", got, err)
+			}
+		}
+		synctest.Wait()
+		want := []string{"MISSING.CPY(ADDR)", "FIRST.CPY(ADDR)"}
+		if !slices.Equal(fetcher.requests, want) {
+			t.Fatalf("requests = %v, want %v with no speculative reads or cache refetches", fetcher.requests, want)
+		}
+	})
+}
+
+func TestRecursiveCopiesUseOneActiveFetch(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var active, peak atomic.Int32
+		var mu sync.Mutex
+		var requests []string
+		texts := map[string]string{
+			"LIB.CPY(ROOT)":   "01 REC. COPY FIRST. COPY SECOND.",
+			"LIB.CPY(FIRST)":  "05 NAME PIC X(3). COPY NESTED.",
+			"LIB.CPY(SECOND)": "05 FLAG PIC X.",
+			"LIB.CPY(NESTED)": "05 EXTRA PIC X.",
+		}
+		fetcher := fetchFunc(func(ctx context.Context, dsn string) ([]byte, error) {
+			n := active.Add(1)
+			defer active.Add(-1)
+			for old := peak.Load(); n > old; old = peak.Load() {
+				if peak.CompareAndSwap(old, n) {
+					break
+				}
+			}
+			mu.Lock()
+			requests = append(requests, dsn)
+			mu.Unlock()
+			// Fake time lets every concurrent prefetch start before any finishes.
+			time.Sleep(time.Millisecond)
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			if text, ok := texts[dsn]; ok {
+				return []byte(text), nil
+			}
+			return nil, &zosmf.HTTPError{StatusCode: 404, Resource: dsn}
+		})
+		resolver := New([]string{"MISSING.CPY", "LIB.CPY", "UNUSED.CPY"}, fetcher, nil)
+		// Exercise primary fallback as well as concurrent sibling prefetches
+		// and a nested COPY through the same resolver.
+		src, err := resolver.FetchPrimary(context.Background(), "OLD.CPY(ROOT)")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := copybook.ParseWithCopies(src, copybook.FormatFree, resolver.Resolve); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		if got := peak.Load(); got != 1 {
+			t.Errorf("peak active fetches = %d, want 1 across recursive prefetches", got)
+		}
+		if got := active.Load(); got != 0 {
+			t.Errorf("active fetches after parsing = %d, want 0", got)
+		}
+		slices.Sort(requests)
+		want := []string{
+			"LIB.CPY(FIRST)", "LIB.CPY(NESTED)", "LIB.CPY(ROOT)", "LIB.CPY(SECOND)",
+			"MISSING.CPY(FIRST)", "MISSING.CPY(NESTED)", "MISSING.CPY(ROOT)", "MISSING.CPY(SECOND)",
+			"OLD.CPY(ROOT)",
+		}
+		if !slices.Equal(requests, want) {
+			t.Errorf("requests = %v, want %v", requests, want)
+		}
+	})
+}
+
+func TestCanceledFetchWaitsForCleanup(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		cleanup := make(chan struct{})
+		var calls atomic.Int32
+		fetcher := fetchFunc(func(ctx context.Context, _ string) ([]byte, error) {
+			if calls.Add(1) == 1 {
+				<-ctx.Done()
+				<-cleanup // simulate deferred response-body cleanup
+				return nil, ctx.Err()
+			}
+			return []byte("05 FIELD PIC X."), nil
+		})
+		resolver := New([]string{"LIB.CPY"}, fetcher, nil)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		result := make(chan error, 1)
+		go func() {
+			_, err := resolver.ResolveContext(ctx, "FIRST")
+			result <- err
+		}()
+		synctest.Wait()
+		cancel()
+		synctest.Wait()
+		if len(result) != 0 {
+			t.Error("ResolveContext returned before fetch cleanup finished")
+		}
+		primaryResult := make(chan error, 1)
+		go func() {
+			_, err := resolver.FetchPrimary(context.Background(), "HQ.CPY(ROOT)")
+			primaryResult <- err
+		}()
+		synctest.Wait()
+		if got := calls.Load(); got != 1 {
+			t.Errorf("fetches before cleanup = %d, want 1", got)
+		}
+		close(cleanup)
+		if err := <-result; !errors.Is(err, context.Canceled) {
+			t.Errorf("ResolveContext() error = %v, want cancellation", err)
+		}
+		if err := <-primaryResult; err != nil {
+			t.Errorf("FetchPrimary() error = %v", err)
+		}
+	})
+}
+
+func TestQueuedFetchCancellationDoesNotFetchOrCache(t *testing.T) {
+	for _, primary := range []bool{false, true} {
+		t.Run(fmt.Sprintf("primary=%t", primary), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				release := make(chan struct{})
+				var calls atomic.Int32
+				fetcher := fetchFunc(func(context.Context, string) ([]byte, error) {
+					if calls.Add(1) == 1 {
+						<-release
+					}
+					return []byte("05 FIELD PIC X."), nil
+				})
+				resolver := New([]string{"LIB.CPY"}, fetcher, nil)
+				first := make(chan error, 1)
+				go func() {
+					_, err := resolver.FetchPrimary(context.Background(), "HQ.CPY(ROOT)")
+					first <- err
+				}()
+				synctest.Wait()
+				fetch := func(ctx context.Context) (string, error) {
+					if primary {
+						return resolver.FetchPrimary(ctx, "LIB.CPY(NEXT)")
+					}
+					return resolver.ResolveContext(ctx, "NEXT")
+				}
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				result := make(chan error, 1)
+				go func() {
+					_, err := fetch(ctx)
+					result <- err
+				}()
+				synctest.Wait()
+				cancel()
+				if err := <-result; !errors.Is(err, context.Canceled) {
+					t.Errorf("queued fetch error = %v, want cancellation", err)
+				}
+				if got := calls.Load(); got != 1 {
+					t.Errorf("fetches with canceled waiter = %d, want 1", got)
+				}
+				close(release)
+				if err := <-first; err != nil {
+					t.Fatal(err)
+				}
+				if got, err := fetch(context.Background()); err != nil || got != "05 FIELD PIC X." {
+					t.Fatalf("retry = %q, %v", got, err)
+				}
+				if got := calls.Load(); got != 2 {
+					t.Errorf("fetches after retry = %d, want 2", got)
+				}
+			})
+		})
+	}
+}
 
 type cancelThenSucceedFetcher struct {
 	calls   atomic.Int32
