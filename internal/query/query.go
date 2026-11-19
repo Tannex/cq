@@ -1,5 +1,5 @@
-// Package query wraps gojq: it compiles a jq expression once and runs it
-// over decoded record values.
+// Package query wraps the project's gojq fork: it compiles a jq expression
+// once and runs it over decoded record values.
 package query
 
 import (
@@ -9,12 +9,13 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/itchyny/gojq"
+	"github.com/Tannex/cq/internal/gojq"
 )
 
-// Query is a compiled jq expression.
+// Query is a compiled jq expression. It is safe for concurrent runs.
 type Query struct {
-	code *gojq.Code
+	code    *gojq.Code
+	rowWise bool
 }
 
 // Compile parses and compiles a jq expression.
@@ -27,8 +28,29 @@ func Compile(expr string) (*Query, error) {
 	if err != nil {
 		return nil, fmt.Errorf("query: %w", err)
 	}
-	return &Query{code: code}, nil
+	return &Query{code: code, rowWise: rowWise(q)}, nil
 }
+
+// rowWise recognizes `.[]` and `.[] | f`: expressions that apply f to each
+// element of the input array on its own. Nothing in f can observe the array
+// or another element (there is no enclosing binding, label, or definition to
+// reach through), so the outputs for an array are the outputs for its parts,
+// concatenated in order.
+func rowWise(q *gojq.Query) bool {
+	const iterate = ".[]"
+	if q.Meta != nil || len(q.Imports) > 0 || len(q.FuncDefs) > 0 {
+		return false
+	}
+	if q.Term != nil {
+		return q.String() == iterate
+	}
+	return q.Op == gojq.OpPipe && len(q.Patterns) == 0 && q.Left != nil && q.Left.String() == iterate
+}
+
+// RowWise reports whether the expression evaluates each element of its
+// input array independently, which lets a caller split the array, run the
+// parts concurrently, and concatenate their outputs in order.
+func (q *Query) RowWise() bool { return q.rowWise }
 
 // Halt is returned by Run when the expression called halt or halt_error;
 // processing of further input should stop.

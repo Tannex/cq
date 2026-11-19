@@ -109,8 +109,11 @@ type workspace struct {
 	// search) keyed by bulkRecordsIdentity, so closing and reopening the
 	// query console does not re-download. Dropped when the identity changes,
 	// on refresh, after a successful edit save, and at quit.
+	// bulkRecordsFile is the same download as queries use it: mapped and
+	// indexed once, then shared by every query until it is dropped.
 	bulkRecordsPath     string
 	bulkRecordsIdentity string
+	bulkRecordsFile     *bulkFile
 
 	records []recordRow
 	// rawLongest caches the widest rendered raw line across the cached
@@ -208,9 +211,15 @@ func (ws *workspace) setBulkRecords(path string) {
 	ws.dropBulkRecords()
 	ws.bulkRecordsPath = path
 	ws.bulkRecordsIdentity = ws.recordIdentity()
+	ws.bulkRecordsFile = newBulkFile(path)
 }
 
 func (ws *workspace) dropBulkRecords() {
+	if ws.bulkRecordsFile != nil {
+		// Queries still running keep their own hold on the mapping.
+		ws.bulkRecordsFile.drop()
+		ws.bulkRecordsFile = nil
+	}
 	if ws.bulkRecordsPath != "" {
 		_ = os.Remove(ws.bulkRecordsPath)
 		ws.bulkRecordsPath = ""
