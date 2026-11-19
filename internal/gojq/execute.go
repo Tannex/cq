@@ -22,17 +22,23 @@ func (env *env) Next() (any, bool) {
 	var err error
 	pc, callpc, index := env.pc, len(env.codes)-1, -1
 	backtrack, hasCtx := env.backtrack, env.ctx != context.Background()
+	ticks := uint8(255)
 	defer func() { env.pc, env.backtrack = pc, true }()
 loop:
 	for ; pc < len(env.codes); pc++ {
 		env.debugState(pc, backtrack)
 		code := env.codes[pc]
+		// cq: the context is polled on entry and then every 256 instructions
+		// rather than on each one; the poll was a measurable share of a
+		// per-record filter and cancellation stays prompt at this rate.
 		if hasCtx {
-			select {
-			case <-env.ctx.Done():
-				pc, env.forks = len(env.codes), nil
-				return env.ctx.Err(), true
-			default:
+			if ticks++; ticks == 0 {
+				select {
+				case <-env.ctx.Done():
+					pc, env.forks = len(env.codes), nil
+					return env.ctx.Err(), true
+				default:
+				}
 			}
 		}
 		switch code.op {
@@ -151,7 +157,8 @@ loop:
 			}
 			p, v := code.v, env.pop()
 			if code.op == opindexarray && v != nil {
-				if _, ok := v.([]any); !ok {
+				if _, ok := v.(LazyArray); ok { // lazy
+				} else if _, ok := v.([]any); !ok {
 					err = &expectedArrayError{v}
 					break loop
 				}
@@ -266,7 +273,46 @@ loop:
 			}
 			backtrack = false
 			var xs []pathValue
-			switch v := env.pop().(type) {
+			top := env.pop()
+			// lazy: a lazy array is iterated in place unless paths are being
+			// tracked, which needs every element paired with its index.
+			switch v := top.(type) {
+			case LazyArray:
+				if !env.paths.empty() && env.expdepth == 0 {
+					if !env.pathIntact(v) {
+						err = &invalidPathIterError{v}
+						break loop
+					}
+					if v.Len() == 0 {
+						break loop
+					}
+					xs = make([]pathValue, v.Len())
+					for i := range xs {
+						xs[i] = pathValue{path: i, value: v.At(i)}
+					}
+					top = xs
+				} else {
+					top = &lazyArrayIter{array: v}
+				}
+			case LazyObject:
+				if !env.paths.empty() && env.expdepth == 0 && !env.pathIntact(v) {
+					err = &invalidPathIterError{v}
+					break loop
+				}
+				m := v.Map()
+				if len(m) == 0 {
+					break loop
+				}
+				xs = make([]pathValue, 0, len(m))
+				for k, v := range m {
+					xs = append(xs, pathValue{path: k, value: v})
+				}
+				sort.Slice(xs, func(i, j int) bool {
+					return xs[i].path.(string) < xs[j].path.(string)
+				})
+				top = xs
+			}
+			switch v := top.(type) {
 			case []pathValue:
 				xs = v
 			case []any:

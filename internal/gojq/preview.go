@@ -17,9 +17,9 @@ func Preview(v any) string {
 		switch v.(type) {
 		case string:
 			trailing = ` ..."`
-		case []any:
+		case []any, LazyArray: // lazy
 			trailing = " ...]"
-		case map[string]any:
+		case map[string]any, LazyObject: // lazy
 			trailing = " ...}"
 		default:
 			trailing = " ..."

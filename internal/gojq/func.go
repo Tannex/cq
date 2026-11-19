@@ -1,6 +1,7 @@
 package gojq
 
 import (
+	"cmp"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"net/url"
 	"reflect"
 	"regexp"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -208,6 +210,11 @@ func init() {
 		"halt":           argFunc0(funcHalt),
 		"halt_error":     {argcount0 | argcount1, false, funcHaltError},
 	}
+	// lazy: natives that are not lazy-aware get their operands materialized.
+	for name, fn := range internalFuncs {
+		fn.callback = withLazyPolicy(lazyPolicies[name], fn.callback)
+		internalFuncs[name] = fn
+	}
 }
 
 func argFunc0(f func(any) any) function {
@@ -335,6 +342,10 @@ func funcLength(v any) any {
 		return len(v)
 	case map[string]any:
 		return len(v)
+	case LazyArray: // lazy
+		return v.Len()
+	case LazyObject: // lazy
+		return len(v.Map())
 	default:
 		return &func0TypeError{"length", v}
 	}
@@ -421,6 +432,7 @@ func funcAdd(v any) any {
 func add(xs iter.Seq[any]) any {
 	var v any
 	for x := range xs {
+		x = unlazy(x) // lazy
 		switch x := x.(type) {
 		case nil:
 			continue
@@ -949,7 +961,7 @@ func formatJoin(typ string, v any, sep string, escape func(string) string) any {
 	ss := make([]string, len(vs))
 	for i, v := range vs {
 		switch v := v.(type) {
-		case []any, map[string]any:
+		case []any, map[string]any, LazyArray, LazyObject: // lazy
 			return &formatRowError{typ, v}
 		case string:
 			ss[i] = escape(v)
@@ -988,6 +1000,7 @@ func funcToBase64d(v any) any {
 }
 
 func funcIndex2(_, v, x any) any {
+	x = unlazy(x) // lazy
 	switch x := x.(type) {
 	case string:
 		switch v := v.(type) {
@@ -995,6 +1008,8 @@ func funcIndex2(_, v, x any) any {
 			return nil
 		case map[string]any:
 			return v[x]
+		case LazyObject: // lazy
+			return v.Get(x)
 		default:
 			return &expectedObjectError{v}
 		}
@@ -1005,13 +1020,21 @@ func funcIndex2(_, v, x any) any {
 			return nil
 		case []any:
 			return index(v, i)
+		case LazyArray: // lazy
+			if i < 0 {
+				i += v.Len()
+			}
+			if 0 <= i && i < v.Len() {
+				return v.At(i)
+			}
+			return nil
 		case string:
 			return indexString(v, i)
 		default:
 			return &expectedArrayError{v}
 		}
 	case []any:
-		switch v := v.(type) {
+		switch v := unlazyArray(v).(type) { // lazy
 		case nil:
 			return nil
 		case []any:
@@ -1034,7 +1057,7 @@ func funcIndex2(_, v, x any) any {
 		return funcSlice(nil, v, end, start)
 	default:
 		switch v.(type) {
-		case []any:
+		case []any, LazyArray: // lazy
 			return &arrayIndexNotNumberError{x}
 		case string:
 			return &stringIndexNotNumberError{x}
@@ -1070,7 +1093,22 @@ func funcSlice(_, v, e, s any) (r any) {
 	case nil:
 		return nil
 	case []any:
-		return slice(v, e, s)
+		start, end, err := sliceBounds(len(v), e, s)
+		if err != nil {
+			return err
+		}
+		return v[start:end]
+	case LazyArray: // lazy
+		start, end, err := sliceBounds(v.Len(), e, s)
+		if err != nil {
+			return err
+		}
+		if start == 0 && end == v.Len() {
+			// The whole array is the array itself. Path tracking relies on
+			// it: upstream recognizes a full slice by its shared storage.
+			return v
+		}
+		return v.Slice(start, end)
 	case string:
 		return sliceString(v, e, s)
 	default:
@@ -1078,25 +1116,25 @@ func funcSlice(_, v, e, s any) (r any) {
 	}
 }
 
-func slice(vs []any, e, s any) any {
-	var start, end int
+// sliceBounds resolves the bounds of .[s:e] on an array of length l.
+func sliceBounds(l int, e, s any) (start, end int, err error) {
 	if s != nil {
 		if i, ok := toInt(s); ok {
-			start = clampIndex(i, 0, len(vs))
+			start = clampIndex(i, 0, l)
 		} else {
-			return &arrayIndexNotNumberError{s}
+			return 0, 0, &arrayIndexNotNumberError{s}
 		}
 	}
 	if e != nil {
 		if i, ok := toIntCeil(e); ok {
-			end = clampIndex(i, start, len(vs))
+			end = clampIndex(i, start, l)
 		} else {
-			return &arrayIndexNotNumberError{e}
+			return 0, 0, &arrayIndexNotNumberError{e}
 		}
 	} else {
-		end = len(vs)
+		end = l
 	}
-	return vs[start:end]
+	return start, end, nil
 }
 
 func sliceString(v string, e, s any) any {
@@ -1176,6 +1214,7 @@ func funcFlatten(v any, args []any) any {
 
 func flatten(xs, vs []any, depth float64) []any {
 	for _, v := range vs {
+		v = unlazyArray(v) // lazy
 		if vs, ok := v.([]any); ok && depth != 0 {
 			xs = flatten(xs, vs, depth-1)
 		} else {
@@ -1268,33 +1307,158 @@ func minMaxBy(vs, xs []any, isMin bool) any {
 	return vs[j]
 }
 
-type sortItem struct {
-	value, key any
-}
+// cq: sorting is rewritten for large inputs. Upstream allocates one item per
+// element and compares keys through the generic Compare, which re-parses
+// number tokens on every comparison. Here the keys are prepared once
+// (sortKeys), the order is computed as a permutation by a stable merge sort
+// that uses every core (stableOrder), and the common key shapes are compared
+// directly (compareSortKeys). The results are the same as upstream's.
 
-func sortItems(name string, v, x any) ([]*sortItem, error) {
+// sortOrder returns the keys prepared for comparing and the permutation
+// that sorts v by them, keeping elements with equal keys in input order.
+func sortOrder(name string, v, x any) (vs, keys []any, order []int32, err error) {
 	vs, ok := v.([]any)
 	if !ok {
 		if strings.HasSuffix(name, "_by") {
-			return nil, &func1TypeError{name, v, x}
+			return nil, nil, nil, &func1TypeError{name, v, x}
 		}
-		return nil, &func0TypeError{name, v}
+		return nil, nil, nil, &func0TypeError{name, v}
 	}
 	xs, ok := x.([]any)
 	if !ok {
-		return nil, &func1TypeError{name, v, x}
+		return nil, nil, nil, &func1TypeError{name, v, x}
 	}
 	if len(vs) != len(xs) {
-		return nil, &func1WrapError{name, v, x, &lengthMismatchError{}}
+		return nil, nil, nil, &func1WrapError{name, v, x, &lengthMismatchError{}}
 	}
-	items := make([]*sortItem, len(vs))
-	for i, v := range vs {
-		items[i] = &sortItem{v, xs[i]}
-	}
-	sort.SliceStable(items, func(i, j int) bool {
-		return Compare(items[i].key, items[j].key) < 0
+	keys = sortKeys(xs)
+	order = stableOrder(len(keys), func(i, j int32) int {
+		return compareSortKeys(keys[i], keys[j])
 	})
-	return items, nil
+	return vs, keys, order, nil
+}
+
+// sortKeys returns keys in the form compareSortKeys wants: number tokens
+// parsed, which Compare would otherwise redo for every comparison. The input
+// is not modified; it is returned as is when nothing needs converting.
+func sortKeys(xs []any) []any {
+	keys := xs
+	for i, x := range xs {
+		if k, changed := sortKey(x); changed {
+			if &keys[0] == &xs[0] {
+				keys = slices.Clone(xs)
+			}
+			keys[i] = k
+		}
+	}
+	return keys
+}
+
+func sortKey(x any) (any, bool) {
+	switch x := x.(type) {
+	case json.Number:
+		return parseNumber(x), true
+	case []any:
+		xs := x
+		for i, e := range x {
+			if k, changed := sortKey(e); changed {
+				if &xs[0] == &x[0] {
+					xs = slices.Clone(x)
+				}
+				xs[i] = k
+			}
+		}
+		return xs, len(x) > 0 && &xs[0] != &x[0]
+	default:
+		return x, false
+	}
+}
+
+// compareSortKeys is Compare with shortcuts for the usual keys: `_by(f)`
+// functions wrap each key in a one-element array, and most keys are strings
+// or small integers.
+func compareSortKeys(l, r any) int {
+	if ls, ok := l.([]any); ok && len(ls) == 1 {
+		if rs, ok := r.([]any); ok && len(rs) == 1 {
+			l, r = ls[0], rs[0]
+		}
+	}
+	switch l := l.(type) {
+	case string:
+		if r, ok := r.(string); ok {
+			return cmp.Compare(l, r)
+		}
+	case int:
+		if r, ok := r.(int); ok {
+			return cmp.Compare(l, r)
+		}
+	}
+	return Compare(l, r)
+}
+
+// stableOrder returns the permutation of 0..n-1 that sorts by compare and
+// keeps equal elements in their original order. Large inputs are split and
+// sorted concurrently, so compare must be safe for concurrent use.
+func stableOrder(n int, compare func(i, j int32) int) []int32 {
+	order := make([]int32, n)
+	for i := range order {
+		order[i] = int32(i)
+	}
+	if n < 2 {
+		return order
+	}
+	depth := 0
+	for workers := runtime.GOMAXPROCS(0); workers > 1<<depth; depth++ {
+	}
+	mergeSortOrder(order, make([]int32, n), compare, depth)
+	return order
+}
+
+// mergeSortParallelMin is the smallest run worth its own goroutine.
+const mergeSortParallelMin = 1 << 12
+
+func mergeSortOrder(order, buffer []int32, compare func(i, j int32) int, depth int) {
+	n := len(order)
+	if n <= 12 {
+		for i := 1; i < n; i++ {
+			for j := i; j > 0 && compare(order[j-1], order[j]) > 0; j-- {
+				order[j-1], order[j] = order[j], order[j-1]
+			}
+		}
+		return
+	}
+	mid := n / 2
+	if depth > 0 && n >= mergeSortParallelMin {
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			mergeSortOrder(order[:mid], buffer[:mid], compare, depth-1)
+		}()
+		mergeSortOrder(order[mid:], buffer[mid:], compare, depth-1)
+		wg.Wait()
+	} else {
+		mergeSortOrder(order[:mid], buffer[:mid], compare, 0)
+		mergeSortOrder(order[mid:], buffer[mid:], compare, 0)
+	}
+	if compare(order[mid-1], order[mid]) <= 0 {
+		return // already in order, the usual case for presorted data
+	}
+	left := buffer[:mid]
+	copy(left, order[:mid])
+	i, j, k := 0, mid, 0
+	for i < len(left) && j < n {
+		// Taking the left element on a tie is what makes the sort stable.
+		if compare(left[i], order[j]) <= 0 {
+			order[k] = left[i]
+			i++
+		} else {
+			order[k] = order[j]
+			j++
+		}
+		k++
+	}
+	copy(order[k:], left[i:])
 }
 
 func funcSort(v any) any {
@@ -1306,29 +1470,29 @@ func funcSortBy(v, x any) any {
 }
 
 func sortBy(name string, v, x any) any {
-	items, err := sortItems(name, v, x)
+	vs, _, order, err := sortOrder(name, v, x)
 	if err != nil {
 		return err
 	}
-	rs := make([]any, len(items))
-	for i, x := range items {
-		rs[i] = x.value
+	rs := make([]any, len(order))
+	for i, j := range order {
+		rs[i] = vs[j]
 	}
 	return rs
 }
 
 func funcGroupBy(v, x any) any {
-	items, err := sortItems("group_by", v, x)
+	vs, keys, order, err := sortOrder("group_by", v, x)
 	if err != nil {
 		return err
 	}
 	rs := []any{}
 	var last any
-	for i, r := range items {
-		if i == 0 || Compare(last, r.key) != 0 {
-			rs, last = append(rs, []any{r.value}), r.key
+	for i, j := range order {
+		if i == 0 || compareSortKeys(last, keys[j]) != 0 {
+			rs, last = append(rs, []any{vs[j]}), keys[j]
 		} else {
-			rs[len(rs)-1] = append(rs[len(rs)-1].([]any), r.value)
+			rs[len(rs)-1] = append(rs[len(rs)-1].([]any), vs[j])
 		}
 	}
 	return rs
@@ -1343,15 +1507,15 @@ func funcUniqueBy(v, x any) any {
 }
 
 func uniqueBy(name string, v, x any) any {
-	items, err := sortItems(name, v, x)
+	vs, keys, order, err := sortOrder(name, v, x)
 	if err != nil {
 		return err
 	}
 	rs := []any{}
 	var last any
-	for i, r := range items {
-		if i == 0 || Compare(last, r.key) != 0 {
-			rs, last = append(rs, r.value), r.key
+	for i, j := range order {
+		if i == 0 || compareSortKeys(last, keys[j]) != 0 {
+			rs, last = append(rs, vs[j]), keys[j]
 		}
 	}
 	return rs
@@ -1562,6 +1726,7 @@ func update(v any, path []any, n any, a allocator) (any, error) {
 	if len(path) == 0 {
 		return n, nil
 	}
+	v = unlazy(v) // lazy
 	switch p := path[0].(type) {
 	case string:
 		switch v := v.(type) {
@@ -1713,7 +1878,7 @@ func updateArraySlice(v []any, m map[string]any, path []any, n any, a allocator)
 	if err != nil {
 		return nil, err
 	}
-	switch u := u.(type) {
+	switch u := unlazyArray(u).(type) { // lazy
 	case []any:
 		var w []any
 		if len(u) == end-start && a.allocated(v) {
@@ -1780,7 +1945,7 @@ func funcGetpath(v, p any) any {
 	u := v
 	for _, x := range path {
 		switch v.(type) {
-		case nil, []any, map[string]any:
+		case nil, []any, map[string]any, LazyArray, LazyObject: // lazy
 			v = funcIndex2(nil, v, x)
 			if err, ok := v.(error); ok {
 				return &func1WrapError{"getpath", u, p, err}
@@ -1801,6 +1966,13 @@ func funcTranspose(v any) any {
 		return []any{}
 	}
 	var l int
+	// lazy: rows are converted in a copy, the input stays untouched.
+	if slices.ContainsFunc(vss, func(vs any) bool { _, ok := vs.(LazyArray); return ok }) {
+		vss = slices.Clone(vss)
+		for i, vs := range vss {
+			vss[i] = unlazyArray(vs)
+		}
+	}
 	for _, vs := range vss {
 		vs, ok := vs.([]any)
 		if !ok {

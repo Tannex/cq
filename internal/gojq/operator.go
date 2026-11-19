@@ -204,6 +204,7 @@ func binopTypeSwitch[T any](
 	if n, ok := r.(json.Number); ok {
 		r = parseNumber(n)
 	}
+	l, r = unlazy(l), unlazy(r) // lazy
 	switch l := l.(type) {
 	case int:
 		switch r := r.(type) {
@@ -420,8 +421,9 @@ func deepMergeObjects(l, r map[string]any) any {
 	maps.Copy(m, l)
 	for k, v := range r {
 		if mk, ok := m[k]; ok {
-			if mk, ok := mk.(map[string]any); ok {
-				if w, ok := v.(map[string]any); ok {
+			// lazy: both sides may hold lazy objects below the top level.
+			if mk, ok := unlazy(mk).(map[string]any); ok {
+				if w, ok := unlazy(v).(map[string]any); ok {
 					v = deepMergeObjects(mk, w)
 				}
 			}

@@ -21,9 +21,9 @@ func TypeOf(v any) string {
 		return "number"
 	case string:
 		return "string"
-	case []any:
+	case []any, LazyArray: // lazy
 		return "array"
-	case map[string]any:
+	case map[string]any, LazyObject: // lazy
 		return "object"
 	default:
 		panic(fmt.Sprintf("invalid type: %[1]T (%[1]v)", v))

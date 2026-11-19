@@ -11,6 +11,16 @@ import (
 // The result will be 0 if l == r, -1 if l < r, and +1 if l > r.
 // This comparison is used by built-in operators and functions.
 func Compare(l, r any) int {
+	// lazy: let a lazy value compare itself before it is materialized.
+	if lc, ok := l.(LazyComparer); ok {
+		if result, ok := lc.CompareLazy(r); ok {
+			return result
+		}
+	} else if rc, ok := r.(LazyComparer); ok {
+		if result, ok := rc.CompareLazy(l); ok {
+			return -result
+		}
+	}
 	return binopTypeSwitch(l, r,
 		cmp.Compare,
 		func(l, r float64) int {

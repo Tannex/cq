@@ -1,0 +1,4022 @@
+[
+ {
+  "name": "empty input",
+  "query": ".",
+  "input": "",
+  "null_input": false
+ },
+ {
+  "name": "missing query",
+  "query": "",
+  "input": "",
+  "null_input": false
+ },
+ {
+  "name": "query with comment",
+  "query": ". # comment",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "missing query with comment",
+  "query": "# comment",
+  "input": "",
+  "null_input": false
+ },
+ {
+  "name": "query with comment with newline",
+  "query": "# comment\n1,\n# comment \\\n  comment \\ 0 \\\n  comment\n2,\n# comment \\\n  comment \\\\\n3, #      \\\n  comment \\\\\\\n  comment \\\\\n4 #\n",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "query with comment with newline in dos format",
+  "query": "1, # \r\n2, # \\\r\ncomment\\\\\r\n3",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "query with comment with newline in mac format",
+  "query": "1, # \r2, # \\\rcomment\\\\\r3",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "number input",
+  "query": ".",
+  "input": "128 3.14 10.0 6.02e23 5e1000",
+  "null_input": false
+ },
+ {
+  "name": "number query",
+  "query": "0, 128, 01000, 3.14, 1.2e3, 1E+3, 1E-9",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "number literal error",
+  "query": "0..[empty]",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "string input",
+  "query": ".",
+  "input": "\"Hello, world! \\r\\n\\t\\f\\b\\\"\\\\\\/\\uff06\"",
+  "null_input": false
+ },
+ {
+  "name": "string query",
+  "query": "\" Hello, world! \\r\\n\\t\\f\\b\\\"\\\\\\/\\uff10 \"",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "string query including newlines",
+  "query": "\"a\n\\(\"\nb\nc\n\")\nd\n\"",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "string query including control characters",
+  "query": "\"\u0001\u0007\u000f\\n\", \"\\n\"",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "string query including surrogate pairs",
+  "query": "\"\\ud83d\\ude04\" | length, utf8bytelength, explode[]",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "string query error",
+  "query": ". + \"foo",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "string query error",
+  "query": "\"foo\\,bar\"",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "string query error",
+  "query": "\"\\u\"",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "string query error",
+  "query": "\"\n\\u\n\"",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "string query error",
+  "query": "\"\\u",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "string query error",
+  "query": "\"\\",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "string query error",
+  "query": "\"\\\"",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "string query error",
+  "query": "\"\\u````\"",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "string query error",
+  "query": "\"\\uAA\\uAA\"",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "string query error",
+  "query": "\"\\uAA@AA\"",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "string query error",
+  "query": "\"\\uAAGA\"",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "string query error",
+  "query": "\"\\ufffg\"",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "string query error",
+  "query": "\"0\\u00:00\"",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "string query error",
+  "query": "\"0\\u0000\\u000/0\"",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "string query error",
+  "query": "\"\\(1) \\x \"",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "string query error",
+  "query": "\"\\a\"",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "string query error",
+  "query": "\"\\u\\(",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "object indexing",
+  "query": ".foo",
+  "input": "{\"foo\": 128}",
+  "null_input": false
+ },
+ {
+  "name": "object indexing with large number value",
+  "query": ".foo",
+  "input": "{\"foo\": 4722366482869645213696}",
+  "null_input": false
+ },
+ {
+  "name": "object indexing with floating-point number with trailing zeros",
+  "query": ".foo",
+  "input": "{\"foo\": 100.000}",
+  "null_input": false
+ },
+ {
+  "name": "object indexing by keywords",
+  "query": ".and,.or,.try",
+  "input": "{\"and\":1,\"or\":2,\"try\":3}",
+  "null_input": false
+ },
+ {
+  "name": "object indexing by brackets",
+  "query": ".[\"foo\"]",
+  "input": "{\"foo\": 128}",
+  "null_input": false
+ },
+ {
+  "name": "object indexing by string",
+  "query": ".\"foo\", .\"2\\(.foo[])3\"",
+  "input": "{\"foo\":[1,2],\"213\":3,\"223\":6}",
+  "null_input": false
+ },
+ {
+  "name": "object indexing by query",
+  "query": ".c[.a + .b]",
+  "input": "{ \"a\": \"b\", \"b\": \"c\", \"c\": {\"bc\": 128} }",
+  "null_input": false
+ },
+ {
+  "name": "object nested indexing by query",
+  "query": ".d[.a][.b][.c]",
+  "input": "{ \"a\": \"b\", \"b\": \"c\", \"c\": \"d\", \"d\": { \"b\": { \"c\": { \"d\": 128 } } } }",
+  "null_input": false
+ },
+ {
+  "name": "object indexing by iterator after iterator",
+  "query": ".c[][.a[] + .b[]]",
+  "input": "{ \"a\": [\"a\", \"b\"], \"b\": [\"c\", \"d\"], \"c\": [{\"ac\": 1, \"bc\": 2, \"ad\": 3, \"bd\": 4}, {\"ac\": 5, \"bc\": 6, \"ad\": 7, \"bd\": 8}] }",
+  "null_input": false
+ },
+ {
+  "name": "object indexing by string iterator after iterator",
+  "query": ".c[].\"\\(.a[])\"",
+  "input": "{ \"a\": [0,1], \"b\": [0,2], \"c\": [{\"0\":1,\"1\":2},{\"0\":3,\"1\":4}] }",
+  "null_input": false
+ },
+ {
+  "name": "object indexing in object value",
+  "query": "{ message: .[].message }",
+  "input": "[ {\"message\": \"Hello, world\" } ]",
+  "null_input": false
+ },
+ {
+  "name": "object indexing error",
+  "query": ".[.a + .b]",
+  "input": "{\"a\": 10, \"b\": 20}",
+  "null_input": false
+ },
+ {
+  "name": "object indexing value error",
+  "query": ".[\"foo\"]",
+  "input": "[]",
+  "null_input": false
+ },
+ {
+  "name": "object indexing key error",
+  "query": ".[null]",
+  "input": "{}",
+  "null_input": false
+ },
+ {
+  "name": "object indexing syntax error",
+  "query": ". a",
+  "input": "{}",
+  "null_input": false
+ },
+ {
+  "name": "expected object but got number error",
+  "query": ".foo.bar",
+  "input": "{\"foo\": 128}",
+  "null_input": false
+ },
+ {
+  "name": "expected object but got string error",
+  "query": "\"a\"+\"☆\"*100 | .foo",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "expected object error with pipe operator",
+  "query": ".foo|.bar",
+  "input": "{\"foo\": 128}",
+  "null_input": false
+ },
+ {
+  "name": "expected object error after iterator",
+  "query": ".[]|.foo|.bar",
+  "input": "[128]",
+  "null_input": false
+ },
+ {
+  "name": "object indexing against null",
+  "query": ".foo.bar.baz",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "object optional indexing",
+  "query": ".foo?.bar?.baz?",
+  "input": "{\"foo\": 128}",
+  "null_input": false
+ },
+ {
+  "name": "object optional indexing error",
+  "query": ".foo.bar.baz?",
+  "input": "{\"foo\": 128}",
+  "null_input": false
+ },
+ {
+  "name": "object optional indexing after iterator error",
+  "query": ".[].foo?",
+  "input": "128",
+  "null_input": false
+ },
+ {
+  "name": "object optional indexing with optional operator",
+  "query": ".foo??, .",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "error after optional operator",
+  "query": "1? | .foo",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "error after optional operator with fork",
+  "query": "(1,2)? | .foo",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "array indexing",
+  "query": ".[-4,-3,-2,-1,0,1,2,3,nan]",
+  "input": "[0, 1, 2]",
+  "null_input": false
+ },
+ {
+  "name": "array slicing",
+  "query": "[.[-4,-3,-2,-1,0,1,2,3:]], [.[:-4,-3,-2,-1,0,1,2,3]], [.[-1,0,1,2,3:-1,0,1,2,3]]",
+  "input": "[0, 1, 2]",
+  "null_input": false
+ },
+ {
+  "name": "array indexing and slicing by floating-point number",
+  "query": "[.[-2.8,-1.2,0.3,1.7,2.2]], [.[0.3,1.7:]], [.[:0.3,1.7]], [.[0.3,1.7,2.2:0.3,1.7,2.2]]",
+  "input": "[0, 1, 2]",
+  "null_input": false
+ },
+ {
+  "name": "array indexing and slicing by large number",
+  "query": ".[1e300,-1e300], .[-1e300,1e300:], .[:-1e300,1e300], .[-1e300:1e300], .[1e300:-1e300]",
+  "input": "[0, 1, 2]",
+  "null_input": false
+ },
+ {
+  "name": "array indexing and slicing by large integer",
+  "query": ". as $x | 4722366482869645213696 as $y | $x[$y,-$y], $x[-$y,$y:], $x[:-$y,$y], $x[-$y:$y], $x[$y-$y], $x[$y/$y]",
+  "input": "[0, 1, 2]",
+  "null_input": false
+ },
+ {
+  "name": "array indexing and slicing by infinite",
+  "query": ".[infinite,-infinite], .[-infinite,infinite:], .[:-infinite,infinite], .[-infinite:infinite], .[infinite:-infinite]",
+  "input": "[0, 1, 2]",
+  "null_input": false
+ },
+ {
+  "name": "array and string slicing by object",
+  "query": "[.[{\"start\": (null,range(-3;4)), \"end\": (null,range(-3;4))}]]",
+  "input": "[0, 1, 2] \"abcde\"",
+  "null_input": false
+ },
+ {
+  "name": "array slicing by object against null",
+  "query": ".[{\"start\": 1, \"end\": 2}]",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "array slicing by object error",
+  "query": ".[{\"start\": 1}]",
+  "input": "[]",
+  "null_input": false
+ },
+ {
+  "name": "array nested indexing by iterator",
+  "query": "[.[.[]],.[.[]:],.[:.[]],.[.[]:.[]],.[-.[]],.[--.[]]]",
+  "input": "[0, 1, 2]",
+  "null_input": false
+ },
+ {
+  "name": "array indexing by iterator",
+  "query": ".c[][.a[] + .b[]]",
+  "input": "{ \"a\": [0,1], \"b\": [0,2], \"c\": [[1,2,3,4],[5,6,7,8]] }",
+  "null_input": false
+ },
+ {
+  "name": "array slicing by iterator",
+  "query": ".c[][.a[] : .b[]]",
+  "input": "{ \"a\": [0,1], \"b\": [0,2], \"c\": [[1,2,3,4],[5,6,7,8]] }",
+  "null_input": false
+ },
+ {
+  "name": "expected array but got object error",
+  "query": ".[0:1]",
+  "input": "{\"foo\": 128}",
+  "null_input": false
+ },
+ {
+  "name": "array indexing against null",
+  "query": ".[0]",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "array slicing against null",
+  "query": ".[0:1]",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "array indexing by array",
+  "query": ".[[1],[5,7,9],[],5,[3]]",
+  "input": "[1,3,5,7,9,8,6,5,4,3,2,1]",
+  "null_input": false
+ },
+ {
+  "name": "array indexing not number error",
+  "query": ".[true]",
+  "input": "[]",
+  "null_input": false
+ },
+ {
+  "name": "array slicing start error",
+  "query": ".[[]:0]",
+  "input": "[]",
+  "null_input": false
+ },
+ {
+  "name": "array slicing end error",
+  "query": ".[0:{}]",
+  "input": "[]",
+  "null_input": false
+ },
+ {
+  "name": "string indexing",
+  "query": ".[-5,-1,0,3,4,6]",
+  "input": "\"１２３４５\"",
+  "null_input": false
+ },
+ {
+  "name": "string slicing",
+  "query": ".[3:], .[:3], .[2:4], .[-4:-2], .[1.5:3.5]",
+  "input": "\"１２３４５\"",
+  "null_input": false
+ },
+ {
+  "name": "string indexing not number error",
+  "query": ".[null]",
+  "input": "\"\"",
+  "null_input": false
+ },
+ {
+  "name": "string slicing start error",
+  "query": ".[[]:]",
+  "input": "\"\"",
+  "null_input": false
+ },
+ {
+  "name": "string slicing end error",
+  "query": ".[:{}]",
+  "input": "\"\"",
+  "null_input": false
+ },
+ {
+  "name": "array construction",
+  "query": ".,[3,[[2]]],[1],[[.],3]|[.,.]",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "array iterator",
+  "query": ".foo | .[] | .",
+  "input": "{\"foo\": [1,2,{\"bar\":[]},[3,4,5]]}",
+  "null_input": false
+ },
+ {
+  "name": "iterator with optional operator",
+  "query": ".[]?",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "iterator with optional operator after indexing error",
+  "query": ".x[]?",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "nested iterator",
+  "query": ".[][]",
+  "input": "[[10]]",
+  "null_input": false
+ },
+ {
+  "name": "nested iterator error",
+  "query": ".[][]",
+  "input": "[10]",
+  "null_input": false
+ },
+ {
+  "name": "nested iterator with optional operator",
+  "query": ".[][]?",
+  "input": "[10]",
+  "null_input": false
+ },
+ {
+  "name": "object iterator",
+  "query": ".[]",
+  "input": "{\"foo\": 128}",
+  "null_input": false
+ },
+ {
+  "name": "object optional indexing after iterator",
+  "query": "[.[].name?]",
+  "input": "[ 1, { \"name\": 2 }, 3, { \"name\": 4 } ]",
+  "null_input": false
+ },
+ {
+  "name": "pipe",
+  "query": ".foo | .bar",
+  "input": "{\"foo\": {\"bar\": {\"baz\": 128}}}",
+  "null_input": false
+ },
+ {
+  "name": "null value",
+  "query": ".[] | null",
+  "input": "[\"a\", 1, [], {}]",
+  "null_input": false
+ },
+ {
+  "name": "boolean values",
+  "query": ".[] | true, false",
+  "input": "[\"a\", 1]",
+  "null_input": false
+ },
+ {
+  "name": "empty function",
+  "query": ".[] | empty, empty, . + [empty,.][], [empty,.][] / 1, empty < ., . and empty, empty or .",
+  "input": "[0, 1]",
+  "null_input": false
+ },
+ {
+  "name": "empty function in array construction",
+  "query": "[empty], [0, empty, 1]",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "empty function in function declaration",
+  "query": "def f: 1,empty,empty,2; f,f",
+  "input": "[0, 1]",
+  "null_input": false
+ },
+ {
+  "name": "unary operators",
+  "query": "map(-.[]), map(+.[])",
+  "input": "[[1,2,3,4722366482869645213696]]",
+  "null_input": false
+ },
+ {
+  "name": "unary operator against string",
+  "query": "(-.)",
+  "input": "\"abcdeabcdeabcdeabcdeabcdeabcdeabcdeabcdeabcdeabcde\"",
+  "null_input": false
+ },
+ {
+  "name": "unary operator with variable binding",
+  "query": "[-1 as $x | 1, $x]",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "unary operator with type function",
+  "query": "., -. | type",
+  "input": "-100",
+  "null_input": false
+ },
+ {
+  "name": "arithmetic operator with variable binding",
+  "query": "1 + 2 as $x | -$x",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "alternative operator with variable binding",
+  "query": "true // 1 as $x | [$x]",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "object construction",
+  "query": "{ foo: .foo.bar, \"bar\": .foo, \"\": false }",
+  "input": "{\"foo\":{\"bar\":[\"a\",\"b\"]}}",
+  "null_input": false
+ },
+ {
+  "name": "object construction shortcuts",
+  "query": "{foo,\"bar\",qux,quxx:.foo}",
+  "input": "{\"foo\": 1, \"bar\": 2, \"baz\": 3}",
+  "null_input": false
+ },
+ {
+  "name": "object construction with trailing comma",
+  "query": "{foo,bar,}",
+  "input": "{\"foo\": 1, \"bar\": 2, \"baz\": 3}",
+  "null_input": false
+ },
+ {
+  "name": "object construction by keywords",
+  "query": "{as, and, null, module}",
+  "input": "{\"and\": 1, \"as\": 2, \"module\": 3, \"null\": 4}",
+  "null_input": false
+ },
+ {
+  "name": "object construction with duplicate keys",
+  "query": "{foo: 1, foo: 2, bar: 3}, {foo, bar, foo: length}",
+  "input": "{\"foo\": 1, \"bar\": 2, \"baz\": 3}",
+  "null_input": false
+ },
+ {
+  "name": "object construction with pipe in value",
+  "query": "{\"bar\": {\"baz\":.} | select(.baz)}",
+  "input": "{\"foo\":100}",
+  "null_input": false
+ },
+ {
+  "name": "object construction with unary operator",
+  "query": "{x:-1}, {x:-.}, {x:-.|abs}",
+  "input": "1",
+  "null_input": false
+ },
+ {
+  "name": "object construction with binary operators",
+  "query": "{x: 1 + 2, y: false or true, z: null // 3}",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "object construction with condition",
+  "query": "{x: if true then -. end}",
+  "input": "1",
+  "null_input": false
+ },
+ {
+  "name": "empty object",
+  "query": "{}",
+  "input": "{\"foo\":{\"bar\":[\"a\",\"b\"]}}",
+  "null_input": false
+ },
+ {
+  "name": "unary operators in object values",
+  "query": "{ x: -128, y: +128 }",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "iterator in object values",
+  "query": "{ foo: .foo[], bar: .bar[] }",
+  "input": "{\"foo\":[1,2],\"bar\":[\"a\",\"b\"]}",
+  "null_input": false
+ },
+ {
+  "name": "iterator in object key",
+  "query": "{ (.[]): .. }",
+  "input": "[\"a\", \"b\"]",
+  "null_input": false
+ },
+ {
+  "name": "binary operators in object key and value",
+  "query": "{ (.[] + .[]): (.[] + .[]) }",
+  "input": "[\"foo\", \"bar\"]",
+  "null_input": false
+ },
+ {
+  "name": "error in object key",
+  "query": "{ (.[]): .. }",
+  "input": "[\"a\", 1]",
+  "null_input": false
+ },
+ {
+  "name": "error in object value",
+  "query": ".[] | { (.k): .a.b }",
+  "input": "[{\"a\":{\"b\":10},\"k\":\"a\"}, {\"a\":10,\"k\":\"b\"}]",
+  "null_input": false
+ },
+ {
+  "name": "variable in object keys",
+  "query": ". as [$x, $y, $z] | {$x: 1, $y: 2, $z: 3}",
+  "input": "[\"a\",\"b\",\"c\"]\n",
+  "null_input": false
+ },
+ {
+  "name": "pipe in object key",
+  "query": "{ (.foo|.bar): .foo.bar }",
+  "input": "{\"foo\":{\"bar\":\"baz\"}}",
+  "null_input": false
+ },
+ {
+  "name": "number in object key",
+  "query": "{ (.foo): .foo }",
+  "input": "{\"foo\":10}",
+  "null_input": false
+ },
+ {
+  "name": "null in object key",
+  "query": "{ (.foo): .foo }",
+  "input": "{}",
+  "null_input": false
+ },
+ {
+  "name": "keyword in object keys",
+  "query": "{if:0,and:1,or:2,then:3,else:4,elif:5,end:6,as:7,def:8,reduce:9,foreach:10,try:11,catch:12,label:13,import:14,include:15,module:16}",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "array",
+  "query": "[.foo, ., false]",
+  "input": "{\"foo\": {\"bar\": 128}}",
+  "null_input": false
+ },
+ {
+  "name": "empty array",
+  "query": "[]",
+  "input": "{\"foo\": {\"bar\": 128}}",
+  "null_input": false
+ },
+ {
+  "name": "pipe in array",
+  "query": "[.foo|.bar]",
+  "input": "{\"foo\": {\"bar\": 128}}",
+  "null_input": false
+ },
+ {
+  "name": "iterator in array",
+  "query": "[.foo|.bar[][]]",
+  "input": "{\"foo\": {\"bar\": [[1],[2],[3]]}}",
+  "null_input": false
+ },
+ {
+  "name": "error after iterator",
+  "query": "[ .[] | .foo ]",
+  "input": "[ [1, 2, 3], 4, 5]",
+  "null_input": false
+ },
+ {
+  "name": "function after iterator error",
+  "query": ".[] | .foo | null",
+  "input": "[1, 2, 3]",
+  "null_input": false
+ },
+ {
+  "name": "multiple iterators in array",
+  "query": "[.[],..,.[]]",
+  "input": "[1, 2, 3]",
+  "null_input": false
+ },
+ {
+  "name": "recurse",
+  "query": "..",
+  "input": "{\"foo\":{\"bar\":[\"a\",\"b\"]}}",
+  "null_input": false
+ },
+ {
+  "name": "recurse after iterator",
+  "query": ".[] | ..",
+  "input": "{\"foo\":[{\"bar\":128}]}",
+  "null_input": false
+ },
+ {
+  "name": "recurse and pipe",
+  "query": ".. | .foo?",
+  "input": "{\"foo\":{\"bar\":[\"a\",\"b\"]}}",
+  "null_input": false
+ },
+ {
+  "name": "recurse in object value",
+  "query": "{ foo: .. }",
+  "input": "{\"foo\":[1,2,3]}",
+  "null_input": false
+ },
+ {
+  "name": "abs function",
+  "query": "abs",
+  "input": "0\n42\n-42\n0.0\n3.14\n-3.14\n4722366482869645213696\n-4722366482869645213696\n",
+  "null_input": false
+ },
+ {
+  "name": "abs function with minimum integer",
+  "query": "(-9223372036854775807 - 1) | abs",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "length function",
+  "query": "length",
+  "input": "42\n-42\n{\"a\":1,\"b\":2}\n[3,4,5]\n\"Hello, world\"\n\"１２３４５\"\nnull\n-4722366482869645213696\n",
+  "null_input": false
+ },
+ {
+  "name": "length function with minimum integer",
+  "query": "(-9223372036854775807 - 1) | length",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "length function error",
+  "query": "length",
+  "input": "false",
+  "null_input": false
+ },
+ {
+  "name": "keys function",
+  "query": "keys",
+  "input": "{\"a\":1,\"b\":2}\n[3,4,5]\n",
+  "null_input": false
+ },
+ {
+  "name": "utf8bytelength function",
+  "query": "utf8bytelength",
+  "input": "\"\" \"☆１２３４５☆\"",
+  "null_input": false
+ },
+ {
+  "name": "has function on objects",
+  "query": "has(.c[])",
+  "input": "{\"a\":{\"b\":1},\"c\":[\"a\",\"b\"]}\n{\"c\":[\"b\",\"c\"]}\n",
+  "null_input": false
+ },
+ {
+  "name": "has function on arrays",
+  "query": "has(2, nan, infinite, -infinite)",
+  "input": "[1, 2, 3]\n[1, 3]\n",
+  "null_input": false
+ },
+ {
+  "name": "has function against null",
+  "query": "has(2, nan, infinite, -infinite)",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "has/0 is not defined",
+  "query": "has",
+  "input": "[0]",
+  "null_input": false
+ },
+ {
+  "name": "has/2 is not defined",
+  "query": "has(1; 2)",
+  "input": "[0]",
+  "null_input": false
+ },
+ {
+  "name": "has function type error",
+  "query": "has(0)",
+  "input": "{}",
+  "null_input": false
+ },
+ {
+  "name": "in function for object",
+  "query": "in({\"foo\": 42})",
+  "input": "\"foo\" \"bar\"",
+  "null_input": false
+ },
+ {
+  "name": "in function for array",
+  "query": "in([3, 4])",
+  "input": "-1 0 1 2",
+  "null_input": false
+ },
+ {
+  "name": "in function for null",
+  "query": "in(null)",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "in function type error",
+  "query": "in([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0])",
+  "input": "\"x\"",
+  "null_input": false
+ },
+ {
+  "name": "map function",
+  "query": "map(..)",
+  "input": "[{\"a\":{\"b\":1}}, [2,3,4]]",
+  "null_input": false
+ },
+ {
+  "name": "to_entries function",
+  "query": "to_entries",
+  "input": "[10, 20]\n{\"a\": 10, \"b\": []}\n",
+  "null_input": false
+ },
+ {
+  "name": "from_entries function",
+  "query": "from_entries",
+  "input": "[]\n[\n  {\"key\":\"a\",\"Key\":\"b\",\"value\":1},\n  {\"Key\":\"b\",\"Value\":2},\n  {\"key\":null,\"name\":\"c\",\"Name\":\"d\",\"value\":3},\n  {\"name\":false,\"Name\":\"d\",\"value\":null,\"Value\":4},\n  {\"key\":\"e\"}\n]\n",
+  "null_input": false
+ },
+ {
+  "name": "from_entries function missing key",
+  "query": "from_entries",
+  "input": "[{\"value\":1}]",
+  "null_input": false
+ },
+ {
+  "name": "from_entries function key type error",
+  "query": "from_entries",
+  "input": "[{\"key\":{},\"value\":1}]",
+  "null_input": false
+ },
+ {
+  "name": "with_entries function",
+  "query": "with_entries(.key |= \"x\" + . | .value += 1)",
+  "input": "{\"a\": 1, \"b\": 2}",
+  "null_input": false
+ },
+ {
+  "name": "add/0 function",
+  "query": "add",
+  "input": "[]\n[1,2,3]\n[\"a\",\"b\",\"c\"]\n[[3],[4,5],[6]]\n[{\"a\":1}, {\"b\":2}, {\"a\":3}]\n{}\n{\"a\":1,\"b\":9}\n{\"a\":\"a\",\"b\":\"b\",\"c\":\"c\"}\n{\"a\":[1],\"b\":[2],\"c\":[3],\"d\":[4]}\n",
+  "null_input": false
+ },
+ {
+  "name": "add/0 function with a variable",
+  "query": ". as $x | [$x, {y:1}] | add, $x",
+  "input": "{\"x\":0}",
+  "null_input": false
+ },
+ {
+  "name": "add/0 function with slicing",
+  "query": "[.[:2], [0], .[1:]] | add",
+  "input": "[1,2,3]",
+  "null_input": false
+ },
+ {
+  "name": "add/0 function error",
+  "query": "add",
+  "input": "[{}, [], {}]",
+  "null_input": false
+ },
+ {
+  "name": "add/0 function error",
+  "query": "add",
+  "input": "[\"x\", null, \"y\", {}, \"z\"]",
+  "null_input": false
+ },
+ {
+  "name": "add/1 function",
+  "query": "add(.), add(empty), add(1,2,3), add(range(10))",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "add/1 function with iterator",
+  "query": "add(.[])",
+  "input": "[1,2,3]\n[\"a\",\"b\",\"c\"]\n",
+  "null_input": false
+ },
+ {
+  "name": "add/1 function with update operator",
+  "query": ".y = add(.x[])",
+  "input": "{\"x\":[1,2,3]}\n{\"x\":[\"a\",\"b\",\"c\"]}\n",
+  "null_input": false
+ },
+ {
+  "name": "flatten/0 function",
+  "query": "flatten",
+  "input": "[]\n[0, [[[[[1]]]]]]\n[0, [1, [2]], [1, [[3], 2]]]\n{\"x\": [1], \"y\": [[2]], \"z\": [[[3]]]}\n",
+  "null_input": false
+ },
+ {
+  "name": "flatten/0 function error",
+  "query": "flatten, flatten(\"\")",
+  "input": "0 [[]]",
+  "null_input": false
+ },
+ {
+  "name": "flatten/1 function",
+  "query": "flatten(0, 1.5, 2)",
+  "input": "[]\n[0, [[[[[1]]]]]]\n[0, [1, [2]], [1, [[3], 2]]]\n{\"x\": [1], \"y\": [[2]], \"z\": [[[3]]]}\n",
+  "null_input": false
+ },
+ {
+  "name": "flatten/1 function depth error",
+  "query": "flatten(-1)",
+  "input": "[]",
+  "null_input": false
+ },
+ {
+  "name": "flatten/1 function depth error with nan",
+  "query": "flatten(nan)",
+  "input": "[]",
+  "null_input": false
+ },
+ {
+  "name": "min, min_by, max, max_by functions",
+  "query": "[min, min_by(.[1]), min_by(.[2]), max, max_by(.[1]), max_by(.[2])]",
+  "input": "[]\n[[4,2,\"a\"],[3,1,\"a\"],[2,4,\"a\"],[1,3,\"a\"]]\n",
+  "null_input": false
+ },
+ {
+  "name": "sort, sort_by, group_by functions",
+  "query": "sort, sort_by(.a), sort_by(.b), sort_by(.b, .c), group_by(.b), group_by(.c, .a), group_by(.a + .b - .c == 2)",
+  "input": "[{\"a\": 1, \"b\": 4, \"c\": 5}, {\"a\": 4, \"b\": 1, \"c\": 2}, {\"a\": 1, \"b\": 4, \"c\": 3}, {\"a\": 3, \"b\": 2, \"c\": 1}]",
+  "null_input": false
+ },
+ {
+  "name": "unique, unique_by functions",
+  "query": "unique, unique_by(length)",
+  "input": "[7,3,5,1,4,2,5,3,6,1,7,4,3]\n[\"cat\", \"dog\", \"hello\", \"world\", \"banana\", \"apple\"]\n",
+  "null_input": false
+ },
+ {
+  "name": "min, max, sort, unique functions error",
+  "query": "try min catch ., try max catch ., try sort catch ., try unique catch .",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "arrays, objects, iterables, booleans, numbers, strings, nulls, values, scalars functions",
+  "query": "map(arrays), map(objects), map(iterables), map(booleans), map(numbers), map(strings), map(nulls), map(values), map(scalars)",
+  "input": "[null, true, false, 0, 1, \"\", \"foo\", [], [2, []], {}, { \"foo\": [] }, 4722366482869645213696]",
+  "null_input": false
+ },
+ {
+  "name": "recurse/0 function",
+  "query": "recurse",
+  "input": "{\"a\":{\"b\":[1]}}",
+  "null_input": false
+ },
+ {
+  "name": "recurse/1 function",
+  "query": "recurse(.a[])",
+  "input": "{\"a\":[{\"a\": []}, {\"a\":[{\"a\":[]}]}]}",
+  "null_input": false
+ },
+ {
+  "name": "recurse/2 function",
+  "query": "[recurse(. + .; . < 1000)]",
+  "input": "1",
+  "null_input": false
+ },
+ {
+  "name": "while function",
+  "query": "[while(.[0]<100; [.[1], .[0]+.[1]]) | .[0]]",
+  "input": "[0, 1]",
+  "null_input": false
+ },
+ {
+  "name": "until function",
+  "query": "[.,1] | until(.[0]==0; [.[0]-1, .[0]*.[1]]) | .[1]",
+  "input": "20",
+  "null_input": false
+ },
+ {
+  "name": "repeat function",
+  "query": "[limit(.; repeat(1,2,3))]",
+  "input": "10",
+  "null_input": false
+ },
+ {
+  "name": "range function",
+  "query": "[range(.)], [range(range(.))], [range(3.5)], [range(3; 5)], [range(1.5; 4)], [range(-5; -1.5)], [range(3.5; 5.5)], [range(-5.5; -3.5)], [range(0; 10; 3)], [range(0; 10; -1)], [range(5; -5; -3)], [range(0.25; 9.5; 2.25)], [range(-5; -9.5; -1)]",
+  "input": "5",
+  "null_input": false
+ },
+ {
+  "name": "range function overflow",
+  "query": "range(9223372036854775700; 9223372036854775805; 10)",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "range function with large numbers",
+  "query": "range(0; 20000000000000000000; 2000000000000000000)",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "range function with iterators in arguments",
+  "query": "[range(-.; .+1)] | [range(.[]; .[]; .[])] | recurse(.[26:];.[0])[:26] | map(.+3)",
+  "input": "3",
+  "null_input": false
+ },
+ {
+  "name": "range function error",
+  "query": "(null, \"\", [], {} | try range(.) catch .), try range(\"\"; 0) catch ., try range(0; 1; []) catch .",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "toboolean function",
+  "query": "toboolean",
+  "input": "\"true\"\n\"false\"\ntrue\nfalse\n",
+  "null_input": false
+ },
+ {
+  "name": "toboolean function error",
+  "query": "try toboolean catch .",
+  "input": "null\n\"\"\n\" true \"\n\"FALSE\"\n[]\n{}\n",
+  "null_input": false
+ },
+ {
+  "name": "tonumber function",
+  "query": "tonumber",
+  "input": "\"0\"\n\"12345\"\n\"-43210\"\n\"10000000000000000000\"\n\"-10000000000000000000\"\n\"+4.2\"\n\"05\"\n\"9.\"\n\"+.123\"\n\"-.1\"\n\"1e-2\"\n\"2.e-2\"\n\"1e300\"\n\"-1e300\"\n\"1e1000\"\n\"-1e1000\"\n3.14\n",
+  "null_input": false
+ },
+ {
+  "name": "tonumber function error",
+  "query": "try tonumber catch .",
+  "input": "\"\"\n\".\"\n\" \"\n\"1a\"\n\".e1\"\n\"-.e\"\n",
+  "null_input": false
+ },
+ {
+  "name": "tostring function",
+  "query": "tostring",
+  "input": "null\nfalse\ntrue\n3.14\n\"foo bar\"\n{\"foo\": \"-43210\"}\n[1,2,3]\n[\"<&><>\"]\n",
+  "null_input": false
+ },
+ {
+  "name": "type function",
+  "query": "type",
+  "input": "null\nfalse\ntrue\n0\n3.14\n4722366482869645213696\n\"foo\"\n[]\n{}\n",
+  "null_input": false
+ },
+ {
+  "name": "reverse function",
+  "query": "reverse",
+  "input": "[0, 1, 2, 3, 4]",
+  "null_input": false
+ },
+ {
+  "name": "contains function",
+  "query": ".[] as $x | (null,false,true,[],[3,4],[3,1],\"foo\",\"ll\",{},{\"a\":1},{\"a\":\"\"},{\"b\":[5]},{\"a\":3,\"b\":[5]}) as $y | $x | [$x,$y,contains($y)]?",
+  "input": "[null,false,true,[],[1,2,3],\"\",\"hello\",{\"a\":3,\"b\":[4,5,6]}]",
+  "null_input": false
+ },
+ {
+  "name": "contains function against unicode strings",
+  "query": ". as $x | (\"@\", \"\\u0000@\", \"\\u0000dc\", \"b\\u0000c\", \"b\\u0000cd\", \"b\\u0000cd\") as $y | $x | [$x,$y,contains($y)]",
+  "input": "\"ab\\u0000cd\"",
+  "null_input": false
+ },
+ {
+  "name": "contains function error",
+  "query": "nan | contains([nan])",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "indices, index, rindex functions against null",
+  "query": "indices(0), index(0), rindex(0)",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "indices, index, rindex functions against array",
+  "query": "[indices(0, 1, [1, 2, 1])], [index(0, 1, [1, 2])], [rindex(0, 1, [1, 2])]",
+  "input": "[]\n[0]\n[0, 1, 2, 1, 2, 1, 0, 1, 0]\n",
+  "null_input": false
+ },
+ {
+  "name": "indices, index, rindex functions against string",
+  "query": "[indices(\"\", \",\", \"x\")], [index(\"\", \",\", \"x\")], [rindex(\"\", \",\", \"x\")]",
+  "input": "\"a,bc,def,ghij,klmno\"",
+  "null_input": false
+ },
+ {
+  "name": "indices, index, rindex functions against multibyte string",
+  "query": "[indices(\"０\", \"１\", \"３４\")], [index(\"０\", \"１\", \"３４\")], [rindex(\"０\", \"１\", \"３４\")]",
+  "input": "\"０１２３４０\"",
+  "null_input": false
+ },
+ {
+  "name": "indices, index, rindex functions type error",
+  "query": "(try indices([]) catch .), (try index([]) catch .), (try rindex([]) catch .)",
+  "input": "{}",
+  "null_input": false
+ },
+ {
+  "name": "inside function",
+  "query": ".[] as $x | (false,\"abc\",[],[\"foobaz\",\"foobar\"],{},{\"a\":10,\"b\":20,\"c\":30}) as $y | $x | [$x,$y,inside($y)]?",
+  "input": "[\"a\",[\"bar\",\"baz\"],{\"a\":10,\"b\":20}]",
+  "null_input": false
+ },
+ {
+  "name": "startswith function",
+  "query": "startswith(\"foo\")",
+  "input": "\"\"\n\"fo\"\n\"foo\"\n\"fooo\"\n\"barfoo\"\n",
+  "null_input": false
+ },
+ {
+  "name": "startswith function error",
+  "query": "(\"x\" | try startswith({}) catch .), (10 | try startswith(\"x\") catch .)",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "endswith function",
+  "query": "endswith(\"foo\")",
+  "input": "\"\"\n\"fo\"\n\"foo\"\n\"fooo\"\n\"barfoo\"\n",
+  "null_input": false
+ },
+ {
+  "name": "endswith function error",
+  "query": "(\"x\" | try endswith({}) catch .), (10 | try endswith(\"x\") catch .)",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "combinations/0 function",
+  "query": "[combinations]",
+  "input": "[] [[0]] [[1, 2, 3], [4, 5, 6]]",
+  "null_input": false
+ },
+ {
+  "name": "combinations/1 function",
+  "query": "[combinations(3)]",
+  "input": "[] [0] [1, 2]",
+  "null_input": false
+ },
+ {
+  "name": "ltrimstr function",
+  "query": "ltrimstr(\"foo\")",
+  "input": "\"\"\n\"fo\"\n\"foo\"\n\"fooo\"\n\"barfoo\"\n",
+  "null_input": false
+ },
+ {
+  "name": "ltrimstr function error",
+  "query": "(\"x\" | try ltrimstr({}) catch .), (10 | try ltrimstr(\"x\") catch .)",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "rtrimstr function",
+  "query": "rtrimstr(\"foo\")",
+  "input": "\"\"\n\"fo\"\n\"foo\"\n\"fooo\"\n\"barfoo\"\n",
+  "null_input": false
+ },
+ {
+  "name": "rtrimstr function error",
+  "query": "(\"x\" | try rtrimstr({}) catch .), (10 | try rtrimstr(\"x\") catch .)",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "trimstr function",
+  "query": "trimstr(\"foo\")",
+  "input": "\"\"\n\"fo\"\n\"foo\"\n\"fofoo\"\n\"foobarfoo\"\n\"foofoofoo\"\n",
+  "null_input": false
+ },
+ {
+  "name": "trimstr function error",
+  "query": "(\"x\" | try trimstr({}) catch .), (10 | try trimstr(\"x\") catch .)",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "ltrim function",
+  "query": "ltrim",
+  "input": "\"\"\n\"  \\tfoo\\n  \"\n\"\\t\\u000b\\u000c\\u0085\\u00a0f\\ro\\no\\u2000\\u2001\\u200a\\u3000\"\n",
+  "null_input": false
+ },
+ {
+  "name": "ltrim function error",
+  "query": "try ltrim catch .",
+  "input": "0 [] {}",
+  "null_input": false
+ },
+ {
+  "name": "rtrim function",
+  "query": "rtrim",
+  "input": "\"\"\n\"  \\tfoo\\n  \"\n\"\\t\\u000b\\u000c\\u0085\\u00a0f\\ro\\no\\u2000\\u2001\\u200a\\u3000\"\n",
+  "null_input": false
+ },
+ {
+  "name": "rtrim function error",
+  "query": "try rtrim catch .",
+  "input": "0 [] {}",
+  "null_input": false
+ },
+ {
+  "name": "trim function",
+  "query": "trim",
+  "input": "\"\"\n\"  \\tfoo\\n  \"\n\"\\t\\u000b\\u000c\\u0085\\u00a0f\\ro\\no\\u2000\\u2001\\u200a\\u3000\"\n",
+  "null_input": false
+ },
+ {
+  "name": "trim function error",
+  "query": "try trim catch .",
+  "input": "0 [] {}",
+  "null_input": false
+ },
+ {
+  "name": "explode function",
+  "query": "explode",
+  "input": "\"\"\n\"foo bar\"\n\"１２３４５\"\n\"\\n\\t\"\n",
+  "null_input": false
+ },
+ {
+  "name": "implode function",
+  "query": "implode",
+  "input": "[]\n[102,111,111,32,98,97,114]\n[65297,65298,65299,65300,65301]\n[10,9]\n",
+  "null_input": false
+ },
+ {
+  "name": "implode function replacement character",
+  "query": "implode",
+  "input": "[-1,0,1114111,1114112]",
+  "null_input": false
+ },
+ {
+  "name": "implode function error",
+  "query": "try implode catch .",
+  "input": "[[]] [{}]",
+  "null_input": false
+ },
+ {
+  "name": "split/1 function",
+  "query": "split(\", \",\"\") | join(\"/\")",
+  "input": "\"a,b, c, d, e,f\"\n\", a,b, c, d, e,f, \"\n",
+  "null_input": false
+ },
+ {
+  "name": "join function",
+  "query": "join(\",\")",
+  "input": "[null, false, true, 0, 1, \"\", \"a\", \"b\", \"abc\"]",
+  "null_input": false
+ },
+ {
+  "name": "join function with iterator argument",
+  "query": ". / \"\" | join(.[])",
+  "input": "\"abcde\"",
+  "null_input": false
+ },
+ {
+  "name": "join object",
+  "query": "join(\",\")",
+  "input": "{\"a\": null, \"b\": false, \"c\": true, \"d\": 0, \"e\": 1, \"f\": \"\", \"g\": \"a\", \"h\": \"b\", \"i\": \"abc\"}",
+  "null_input": false
+ },
+ {
+  "name": "join function error item",
+  "query": "try join(\",\") catch .",
+  "input": "[\"1\",\"2\",[3,4,5]] [[]] [{}]",
+  "null_input": false
+ },
+ {
+  "name": "join function error input",
+  "query": ".[] | try join(\",\") catch .",
+  "input": "[null, false, true, 1, \"a\"]",
+  "null_input": false
+ },
+ {
+  "name": "join function null separator",
+  "query": "join(null)",
+  "input": "[] [\"a\"] [\"a\",\"b\",\"c\"] [\"a\",null,\"b\"] [null,null,null] [null]",
+  "null_input": false
+ },
+ {
+  "name": "join function null elements",
+  "query": "join(\",\")",
+  "input": "[null] [null,null,null] [\"a\",null,\"b\"]",
+  "null_input": false
+ },
+ {
+  "name": "join function non-string separator",
+  "query": ".[] | try join(1) catch .",
+  "input": "[[],[1],[1,2]]",
+  "null_input": false
+ },
+ {
+  "name": "ascii_downcase function",
+  "query": "ascii_downcase",
+  "input": "\"@ABC XYZ[] `abc xyz{} Αα\"",
+  "null_input": false
+ },
+ {
+  "name": "ascii_upcase function",
+  "query": "ascii_upcase",
+  "input": "\"@ABC XYZ[] `abc xyz{} Αα\"",
+  "null_input": false
+ },
+ {
+  "name": "walk function",
+  "query": "walk(if type == \"boolean\" then not else . + . end) | .[]",
+  "input": "[1, [\"a\", {\"b\": []}], {\"c\": [null, false, true]}]",
+  "null_input": false
+ },
+ {
+  "name": "walk function with multiple values",
+  "query": "walk(.,0)",
+  "input": "[1,2,3] {\"x\":1,\"y\":2,\"z\":3}",
+  "null_input": false
+ },
+ {
+  "name": "transpose function",
+  "query": "transpose",
+  "input": "[]\n[[1,2,3,[]],[4,\"foo\",{}],[5,6]]\n",
+  "null_input": false
+ },
+ {
+  "name": "function not defined",
+  "query": "abc",
+  "input": "{}",
+  "null_input": false
+ },
+ {
+  "name": "variable not defined",
+  "query": "$abc",
+  "input": "{}",
+  "null_input": false
+ },
+ {
+  "name": "argument count error",
+  "query": "map(.;.)",
+  "input": "{}",
+  "null_input": false
+ },
+ {
+  "name": "function declaration with an argument",
+  "query": "def f(g): g | g; f(..)",
+  "input": "[0, 1]",
+  "null_input": false
+ },
+ {
+  "name": "function nested declaration",
+  "query": "def f: def g: .; g; f",
+  "input": "[0, 1]",
+  "null_input": false
+ },
+ {
+  "name": "function declaration with call of another declared function",
+  "query": "def f: .,.; def g: [f,f]; f,g",
+  "input": "[0, 1]",
+  "null_input": false
+ },
+ {
+  "name": "function declaration with update operator",
+  "query": "def f: def f($x): .; f(.x) | .x; f += f",
+  "input": "{\"x\": 1}",
+  "null_input": false
+ },
+ {
+  "name": "function declaration and recursive call",
+  "query": "def f(g): if type == \"array\" then map(f(g * 2)) else g end; f(.)",
+  "input": "[[[1,2]]]",
+  "null_input": false
+ },
+ {
+  "name": "function declaration and recursive call",
+  "query": "def f(g): if . < 1000 then .,(g|f(g|g)) else g end; f(.*2)",
+  "input": "1",
+  "null_input": false
+ },
+ {
+  "name": "function declaration and recursive call",
+  "query": "def f: . as $x | $x, ($x + 1 | f); last(limit(100000; f))",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "function declaration and recursive call",
+  "query": "def f: . as $x | $x, (if $x < 3 then $x + 1 | f else empty end), $x; f",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "function declaration and recursive call",
+  "query": "def f: ., if . < 2 then . + (1,2) | f else empty end; f",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "function declaration and recursive call",
+  "query": "100000 as $x | def f: if . == $x then . else . + 1 | f end; f",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "function declaration and recursive call",
+  "query": "def f: if .a then .a | f end; {}, {a:{}} | f | .,0",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "function declaration with duplicate function names",
+  "query": "def f(g): def f: def g: 3; g * 2; g * f; def f: . * 5; f(f)",
+  "input": "1",
+  "null_input": false
+ },
+ {
+  "name": "function declaration with duplicate function names",
+  "query": "(def f(g): def g: 1; g; f(2)), (def g: 3; def f(g): g; f(4))",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "function declaration with duplicate argument names",
+  "query": "def f(g;g): g; f(1;2)",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "function declaration with duplicate variable names",
+  "query": "def f($g;$g): $g; f(1;2,3)",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "function declaration with builtin function name conflict",
+  "query": "def empty: . % 2; range(5) | select(empty > 0)",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "function declaration with builtin function name conflict",
+  "query": "def select(f): f; null, 0 | numbers, select(.)",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "function declaration with argument name conflict",
+  "query": "def update: .[1:]; [range(3)] | while(length>0; update)",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "function declaration with argument name conflict",
+  "query": "def f($keys): with_entries(.key *= $keys); {x: 1} | f(3)",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "function declaration with mixed argument types",
+  "query": "def f0( a; b; c):  a*100 +  b*10 +  c; def f1( a;$b; c):  a*100 + $b*10 +  c; def f2($a; b;$c): $a*100 +  b*10 + $c; def f3($a;$b;$c): $a*100 + $b*10 + $c; [f0(.[];.[];.[])], [f1(.[];.[];.[])], [f2(.[];.[];.[])], [f3(.[];.[];.[])]",
+  "input": "[1,2]",
+  "null_input": false
+ },
+ {
+  "name": "function declaration with function reference to value argument",
+  "query": "def f($x; $y): [$x, x, $y, y]; f(1,2; 3,4)",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "function declaration inside query",
+  "query": "[0, def f: 1, def g: 2; g, 3 as $x | def h: $x + 1; h * g; f, f + 1, 5]",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "argument count error for custom function",
+  "query": "def f(g): g | g; f",
+  "input": "{}",
+  "null_input": false
+ },
+ {
+  "name": "function declaration name error",
+  "query": "def $f: .; $f",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "function declaration without query",
+  "query": "def f: 0;",
+  "input": "",
+  "null_input": false
+ },
+ {
+  "name": "add, subtract, multiply, divide, modulo numbers",
+  "query": "[.[] + .[]], [.[] - .[]], [.[] * .[]], [.[] / .[]], [.[] % .[]]",
+  "input": "[-1, 5, 16]",
+  "null_input": false
+ },
+ {
+  "name": "add, subtract, multiply, divide, modulo large numbers",
+  "query": "[.[] + .[]], [.[] - .[]], [.[] * .[]], [.[] / .[]], [.[]  % .[]]",
+  "input": "[-1, 47, 9223372036854775807, 557702036893939360447070208]",
+  "null_input": false
+ },
+ {
+  "name": "add, subtract, multiply, divide, modulo operators precedence",
+  "query": "[.[] + .[] % .[] * .[] - .[] / .[] % .[] + .[]] | while(length>0; .[32:])[:32]",
+  "input": "[3, 7]",
+  "null_input": false
+ },
+ {
+  "name": "negate, multiply, divide, modulo minimum integer",
+  "query": "(-9223372036854775807-1) | -., .*-1, -1*., ./-1, .%-1",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "integer division precision",
+  "query": "72 / (1, -2, 3, -4, 6, -8) * 100000000000000000000",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "optional and division operator",
+  "query": "1?/1",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "optional and division operator parse error",
+  "query": ".?/",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "factorial calculation",
+  "query": "def fact($n): if $n < 1 then 1 else $n * fact($n - 1) end; (range(30;51) | \"\\(.)! = \\(fact(.))\"), fact(50) / fact(30), fact(50) % (fact(30) + 1), fact(100), fact(1000)*1.0, 1/fact(1000), -1/fact(1000), 1.0/fact(1000)",
+  "input": "",
+  "null_input": true
+ },
+ {
+  "name": "negative large numbers",
+  "query": "def f($n): if $n < 1 then 1 else (-$n) * (-f($n - 1)) end; -f(range(30;40))",
+  "input": "",
+  "null_input": true
+ },
+ {
+  "name": "large number literal",
+  "query": "100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000,\n-100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000,\n100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000.0,\n-100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000.0,\n10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000,\n-10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000,\n10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000.0,\n-10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000.0\n",
+  "input": "",
+  "null_input": true
+ },
+ {
+  "name": "zero division",
+  "query": ".[] as $x | .[] as $y | [$x, $y, try ($x / $y) catch .]",
+  "input": "[1, 0]",
+  "null_input": false
+ },
+ {
+  "name": "zero modulo",
+  "query": ".[] as $x | .[] as $y | [$x, $y, try ($x % $y) catch .]",
+  "input": "[1, 0]",
+  "null_input": false
+ },
+ {
+  "name": "modulo with near 0.0",
+  "query": "1 % 0.9",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "modulo with nan",
+  "query": "(1, nan) % (1, nan) | isnan",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "zero division and modulo for large number",
+  "query": "[try (.[] / .[]) catch .], [try (.[] % .[]) catch .]",
+  "input": "[1267650600228229401496703205376, 0]",
+  "null_input": false
+ },
+ {
+  "name": "add strings",
+  "query": ".[] + .[] + \"c\"",
+  "input": "[\"a\", \"b\"]",
+  "null_input": false
+ },
+ {
+  "name": "multiply constant",
+  "query": "3 * .[], 2.5 * .[], .054e2 * .[]",
+  "input": "[1, 2.5, \"abc\"]",
+  "null_input": false
+ },
+ {
+  "name": "multiply strings",
+  "query": "(-1.0, -0.5, 0.0, 0.5, 1.0, 1.5, 3.7, 10, nan) * \"abc\"",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "multiply strings error",
+  "query": "(infinite, 1e300, 720000000) as $n | try ($n * \"abc\") catch .",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "multiply empty string",
+  "query": "(-9223372036854775808, -1, 0, 0.001, 0.999, 1, 7, 9223372036854775807, 1e300) * \"\"",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "add objects",
+  "query": ".[0] + .[]",
+  "input": "[{\"a\": 1}, {\"b\": 2}, {\"a\": 3}]",
+  "null_input": false
+ },
+ {
+  "name": "multiply objects",
+  "query": ".[] * .[]",
+  "input": "[{\"foo\": 10, \"bar\": {\"qux\": 20}}, {\"foo\": 20, \"bar\": {\"baz\": \"quux\"}}]",
+  "null_input": false
+ },
+ {
+  "name": "divide strings",
+  "query": ".[] / .[]",
+  "input": "[\"abc\", \"a\", \"b\", \"\"]",
+  "null_input": false
+ },
+ {
+  "name": "add and subtract arrays",
+  "query": ".[] + .[] - .[]",
+  "input": "[[1, 2], [3, 4]]",
+  "null_input": false
+ },
+ {
+  "name": "arrays are immutable on addition",
+  "query": ". as $v | .[:0] + [6, 7, 8] | ., $v",
+  "input": "[1,2,3,4,5]\n",
+  "null_input": false
+ },
+ {
+  "name": "arrays are immutable on subtraction",
+  "query": ". as $v | . - [2, 3] | ., $v",
+  "input": "[1,2,3,4,5]\n",
+  "null_input": false
+ },
+ {
+  "name": "subtract arrays",
+  "query": "[1,2,3,4,1,4722366482869645213696] - [.,3,4722366482869645213696]",
+  "input": "1",
+  "null_input": false
+ },
+ {
+  "name": "subtract arrays with large numbers",
+  "query": ". as $x | [$x-$x] - [0]",
+  "input": "10000000000000",
+  "null_input": false
+ },
+ {
+  "name": "subtract arrays with nan",
+  "query": "[nan,{x:nan}] - [nan,{x:nan}]",
+  "input": "1",
+  "null_input": false
+ },
+ {
+  "name": "add object",
+  "query": ".[] + .[]",
+  "input": "[{\"a\":1},{\"b\":2}]",
+  "null_input": false
+ },
+ {
+  "name": "add null",
+  "query": ".[] + .[]",
+  "input": "[1, 2, null]",
+  "null_input": false
+ },
+ {
+  "name": "subtract null",
+  "query": ".[] - .[]",
+  "input": "[1, 2, null]",
+  "null_input": false
+ },
+ {
+  "name": "subtract object",
+  "query": ".[] - .[]",
+  "input": "[{\"a\":1},{\"b\":2}]",
+  "null_input": false
+ },
+ {
+  "name": "comparison operators",
+  "query": "[.[] > .[], .[] < .[], .[] >= .[], .[] <= .[], .[] == .[], .[] != .[]] | while(length>0; .[120:]) | .[:120] | map(if . then 1 else 0 end) | join(\"\")",
+  "input": "[null, false, true, 0, 1, \"\", \"a\", \"b\", \"abc\", [], [1], [2], [3, 4], [\"a\", \"b\"], [[]], [[], []], [{}], {}, {\"a\": \"\"}, {\"a\":[1]}, {\"b\":[1]}, {\"b\": []}, {\"b\": [[]]}, {\"a\": 0, \"b\": 1}]",
+  "null_input": false
+ },
+ {
+  "name": "comparison and arithmetic operators",
+  "query": "[.[] + .[] > .[] - .[], .[] * .[] < .[] / .[] + .[] / .[], .[] == .[] * .[]] | while(length>0; .[120:]) | .[:120] | map(if . then 1 else 0 end) | join(\"\")",
+  "input": "[1, 2, 3]",
+  "null_input": false
+ },
+ {
+  "name": "comparison operators with large numbers",
+  "query": "[.[] > .[], .[] < .[], .[] >= .[], .[] <= .[], .[] == .[], .[] != .[]] | while(length>0; .[120:]) | .[:120] | map(if . then 1 else 0 end) | join(\"\")",
+  "input": "[-9999999999999999999999999999999999, -4722366482869645213697, -2, 0, 47, 4722366482869645213696, 4722366482869645213697, 99999999999999999999999999999999999]",
+  "null_input": false
+ },
+ {
+  "name": "comparison operators associativity error",
+  "query": ". == . == .",
+  "input": "1",
+  "null_input": false
+ },
+ {
+  "name": "logical operators",
+  "query": "[.[] > .[] and .[] or .[] < .[]] | while(length>0; .[120:]) | .[:120] | map(if . then 1 else 0 end) | join(\"\")",
+  "input": "[null, false, true, 0, \"\", [], {}]",
+  "null_input": false
+ },
+ {
+  "name": "alternative operator",
+  "query": "[.a // .b, .b // null // .a, .c[] // .d[], .d[] // .c, .c // .a, .e.a // .c[]]",
+  "input": "{ \"a\": 5, \"b\": false, \"c\": [null,false], \"d\": [false,3], \"e\": null }",
+  "null_input": false
+ },
+ {
+  "name": "condition",
+  "query": "if . then . else [.] end",
+  "input": "null false true 0",
+  "null_input": false
+ },
+ {
+  "name": "condition with elif clause",
+  "query": "if . == null then . elif not then [.] elif . == true then [[.]] else [[[.]]] end",
+  "input": "null false true 0",
+  "null_input": false
+ },
+ {
+  "name": "condition without else clause",
+  "query": "map(if . > 2 then . / 2 end)",
+  "input": "[1, 2, 3, 4, 5]",
+  "null_input": false
+ },
+ {
+  "name": "condition precedence",
+  "query": ". + if 1 then 2 else 3 end + 4",
+  "input": "1",
+  "null_input": false
+ },
+ {
+  "name": "condition with unary operator",
+  "query": "[-if true then -. end]",
+  "input": "1",
+  "null_input": false
+ },
+ {
+  "name": "condition with optional operator",
+  "query": "if . then tonumber end ?",
+  "input": "1",
+  "null_input": false
+ },
+ {
+  "name": "condition with identity in then clause",
+  "query": "if 0 then . else 0|0 end",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "condition with identity in else clause",
+  "query": "if 0 then 0|0 else . end",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "condition with suffix",
+  "query": "if true then [.] end []",
+  "input": "1",
+  "null_input": false
+ },
+ {
+  "name": "not function",
+  "query": "not",
+  "input": "true\nfalse\n",
+  "null_input": false
+ },
+ {
+  "name": "iterator in condition",
+  "query": "if .. then [] else {} end",
+  "input": "{ \"foo\": false }",
+  "null_input": false
+ },
+ {
+  "name": "try",
+  "query": "map(try utf8bytelength)",
+  "input": "[[], {}, [1,2], \"hello\", 55, true, false]",
+  "null_input": false
+ },
+ {
+  "name": "try catch",
+  "query": "map(try utf8bytelength catch .)",
+  "input": "[[], {}, [1,2], \"hello\", 55, true, false]",
+  "null_input": false
+ },
+ {
+  "name": "try catch with function declaration",
+  "query": "def f: fromjson; try ({} | f) catch ., 1",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "try and comma operator precedence",
+  "query": "1, try error(2), 3",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "try and alternative operator precedence",
+  "query": "try error(0) // 1",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "try and update operator precedence",
+  "query": "try error(0) = 1",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "try and arithmetic operator precedence",
+  "query": "try 0 * error(0)",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "try and indexing precedence",
+  "query": "try 0 .[error(0)]",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "try catch and arithmetic operator precedence",
+  "query": "1 + try 2 catch 3 + 4",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "try and unary operator",
+  "query": "[-try .]",
+  "input": "1",
+  "null_input": false
+ },
+ {
+  "name": "reduce iterator",
+  "query": "[range(.)] | reduce .[] as $i (0; . + $i)",
+  "input": "10",
+  "null_input": false
+ },
+ {
+  "name": "reduce arrays",
+  "query": "reduce .[] as [$i,$j] (0; . + $i * $j)",
+  "input": "[[1,2,10], [3,4,10]]",
+  "null_input": false
+ },
+ {
+  "name": "reduce objects",
+  "query": "reduce .[] as {$i, j:$j} (0; . + $i - $j)",
+  "input": "[{\"i\":2, \"j\":1}, {\"i\":5, \"j\":3}, {\"i\":6, \"j\":4}]",
+  "null_input": false
+ },
+ {
+  "name": "reduce null",
+  "query": "reduce . as $n (.; .)",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "reduce precedence",
+  "query": ". + reduce . as $n (. + [2]; [.]) + .",
+  "input": "[1]",
+  "null_input": false
+ },
+ {
+  "name": "reduce with unary operator",
+  "query": "[-reduce -.[] as $i (0; . + $i)]",
+  "input": "[1,2,3]",
+  "null_input": false
+ },
+ {
+  "name": "reduce with binary operator",
+  "query": "reduce .[] / .[] as $i (0; . + $i)",
+  "input": "[1,2]",
+  "null_input": false
+ },
+ {
+  "name": "reduce with select in update",
+  "query": "reduce range(5) as $x (0; . + $x | select($x != 2))",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "reduce with query in start",
+  "query": "reduce range(5) as $x (range(3); . + $x)",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "reduce with variable binding",
+  "query": "reduce .[] as $x (0; . + $x) as $x | $x",
+  "input": "[1,2,3]",
+  "null_input": false
+ },
+ {
+  "name": "reduce variable scope",
+  "query": ". as $x | reduce .[] as $x (.; . + .) | [., $x]",
+  "input": "[1]",
+  "null_input": false
+ },
+ {
+  "name": "foreach iterator",
+  "query": "foreach range(5) as $item (0; $item)",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "foreach arrays",
+  "query": "foreach .[] as [$i, $j] (0; . + $i - $j)",
+  "input": "[[2,1], [5,3], [6,4]]",
+  "null_input": false
+ },
+ {
+  "name": "foreach objects",
+  "query": "foreach .[] as {a:$a} (0; . + $a; -.)",
+  "input": "[{\"a\":1}, {\"b\":2}, {\"a\":3, \"b\":4}]",
+  "null_input": false
+ },
+ {
+  "name": "foreach with iterator in update",
+  "query": "foreach .[] as $i (1; ., . + $i, range(.))",
+  "input": "[1, 2, 3]",
+  "null_input": false
+ },
+ {
+  "name": "foreach with select in update",
+  "query": "foreach range(5) as $i (0; . + $i | select($i != 2); [$i, .])",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "foreach with query in start",
+  "query": "foreach range(3) as $i (range(3); . + $i; [$i, .])",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "foreach with unary operator",
+  "query": "[-foreach -.[] as $i (0; . + $i)]",
+  "input": "[1,2,3]",
+  "null_input": false
+ },
+ {
+  "name": "foreach with binary operator",
+  "query": "[foreach .[] / .[] as $i (0; . + $i)]",
+  "input": "[1,2]",
+  "null_input": false
+ },
+ {
+  "name": "foreach with variable binding",
+  "query": "[foreach .[] as $x (0; . + $x) as $x | $x]",
+  "input": "[1,2,3]",
+  "null_input": false
+ },
+ {
+  "name": "foreach variable scope",
+  "query": ". as $x | foreach .[] as $x (.; . + .) | [., $x]",
+  "input": "[1]",
+  "null_input": false
+ },
+ {
+  "name": "label and break syntax",
+  "query": "[(label $x | .[] | if . > 2 then break $x else . end), 0]",
+  "input": "[1,2,3,2,1]",
+  "null_input": false
+ },
+ {
+  "name": "label and break in foreach syntax",
+  "query": "[range(.)] | label $x | foreach .[] as $i (0; if . > 5 then break $x else . + $i end)",
+  "input": "10",
+  "null_input": false
+ },
+ {
+  "name": "label and break in try catch syntax",
+  "query": "label $x | (label $y | try break $y catch .), .",
+  "input": "10",
+  "null_input": false
+ },
+ {
+  "name": "label and break in function argument",
+  "query": "range(.) | label $out | limit(3; 1, if . > 1 then break $out end, 2)",
+  "input": "3",
+  "null_input": false
+ },
+ {
+  "name": "label and break in function argument with foreach",
+  "query": "label $out | last(foreach range(0; 10) as $i ({x: 1}; if .x > 10 then break $out else .x += 1 end))",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "label in recursive call",
+  "query": "def f: label $x | if . < 5 then ., (. + 1 | f, break $x, .) else . end; f",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "duplicate label names",
+  "query": "label $x | (label $x | break $x), .",
+  "input": "1",
+  "null_input": false
+ },
+ {
+  "name": "invalid label name",
+  "query": "label foo | .",
+  "input": "1",
+  "null_input": false
+ },
+ {
+  "name": "label not defined error for break without label",
+  "query": "break $test",
+  "input": "1",
+  "null_input": false
+ },
+ {
+  "name": "label not defined error for break with label in parenthesis",
+  "query": "(label $x | 1) | break $x",
+  "input": "1",
+  "null_input": false
+ },
+ {
+  "name": "invalid break name",
+  "query": "label $x | break x",
+  "input": "1",
+  "null_input": false
+ },
+ {
+  "name": "invalid break syntax",
+  "query": "label $x | break",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "variable and label name conflict",
+  "query": ". as $x | (label $x | break $x), $x",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "string interpolation",
+  "query": "[\"\\(.foo[])_\\(.bar[])_\\(.baz[])\"]",
+  "input": "{ \"foo\": [0, 1], \"bar\": [\"x\", \"y\"], \"baz\": [{\"a\": 1}, [1], null] }",
+  "null_input": false
+ },
+ {
+  "name": "string interpolation in object",
+  "query": "[{a:\"\\(.foo[])\"}, {\"\\(.foo[])\": 1}, {\"\\(.bar[])\"}]",
+  "input": "{ \"foo\": [0, 1], \"bar\": [\"x\", \"y\"], \"x\": 10, \"y\": 20 }",
+  "null_input": false
+ },
+ {
+  "name": "string interpolation nested",
+  "query": "\" \\(\"(\") \\(\"x\" + \"\\(1 + 2)\") \\(\"\\\\\") \\(\"\\(\"\\\\\")\") \\(\")\") \"",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "string interpolation nested deeply",
+  "query": "\"\\(\"\\(\"\\(\"\\(\"\\(\"\\(\"\\(\"\\(\"\\(\"\\(\"\\(\"\\(\"\\(\"\\(\"\\(\"\\(\"\\(\"\\(\"\\(\"\\(\"\\(\"\\(\"\\(\"\\(1+2)\")\")\")\")\")\")\")\")\")\")\")\")\")\")\")\")\")\")\")\")\")\")\")\"",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "string interpolation multiple lines",
+  "query": "\"\\( # \"\n  \"\\(\n    \"\\(2 * (4 # \"\n        +#\n        6))\"\n  )\"  # \"\n  # \"\n  + (def f: \"\\(\"\\(\"(\" + \"\\\\\\((1 + 2) * 3)\\\"\" + \")\")\")\"; f)\n  # \"\n  #  \"\n  #   \"\n)\"\n",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "string interpolation parse error",
+  "query": "\"\\(1 +)\"",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "tojson function",
+  "query": "tojson",
+  "input": "null\nfalse\ntrue\n4722366482869645213696\n\"foo\"\n[\"foo\"]\n{\"a\": [1,2,3]}\n",
+  "null_input": false
+ },
+ {
+  "name": "fromjson function",
+  "query": "fromjson",
+  "input": "\"null\"\n\"false\"\n\"true\"\n\"4722366482869645213696\"\n\"\\\"foo\\\"\"\n\"[\\\"foo\\\"]\"\n\"{\\\"a\\\":[1,2,3]}\"\n",
+  "null_input": false
+ },
+ {
+  "name": "fromjson function error",
+  "query": "fromjson",
+  "input": "\"[0\"",
+  "null_input": false
+ },
+ {
+  "name": "variable definition",
+  "query": ".foo.bar as $foo | .foo.bar as $bar | {$foo} + {bar: ($bar / 2)} * { baz: 20 }",
+  "input": "{\"foo\":{\"bar\":10}}\n",
+  "null_input": false
+ },
+ {
+  "name": "variable definition",
+  "query": ".ys as $ys | .xs[] | {a, b: $ys[.b]}",
+  "input": "{\"xs\":[{\"a\":\"a0\",\"b\":\"b0\"},{\"a\":\"a1\",\"b\":\"b1\"}],\"ys\":{\"b0\":\"bb0\",\"b1\":\"bb1\"}}\n",
+  "null_input": false
+ },
+ {
+  "name": "variable name error",
+  "query": ".foo as foo | {$bar}",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "variable name not found error",
+  "query": ".foo as $foo | {$bar}",
+  "input": "{\"foo\":10}\n",
+  "null_input": false
+ },
+ {
+  "name": "binding an array",
+  "query": ". as [$i, $j] | [$j, $i]",
+  "input": "[]\n[10]\n[20,30]\n",
+  "null_input": false
+ },
+ {
+  "name": "binding an array deeply",
+  "query": ". as [$i, [$j], [[$k]]] | [$i, $j, $k]",
+  "input": "[]\n[10]\n[20,[30],[[40]]]\n",
+  "null_input": false
+ },
+ {
+  "name": "binding an array error",
+  "query": ". as [$i, $j] | [$j, $i]",
+  "input": "{\"foo\":10}\n",
+  "null_input": false
+ },
+ {
+  "name": "binding an object",
+  "query": ". as {$foo, bar: $bar} | {$bar, $foo}",
+  "input": "{}\n{\"foo\":10}\n{\"foo\":20,\"bar\":30}\n",
+  "null_input": false
+ },
+ {
+  "name": "binding an object deeply",
+  "query": ". as {$foo, bar: {\"baz\": {$qux}, \"\": $quy}} | {$foo, $qux, $quy}",
+  "input": "{}\n{\"foo\":10}\n{\"foo\":20,\"bar\":{\"baz\":{\"qux\":30},\"\":-1}}\n",
+  "null_input": false
+ },
+ {
+  "name": "binding an object with expression",
+  "query": ". as {as: $foo, (\"e\"+\"x\"+\"p\"): $bar, (.foo): $baz, \"\\(.qux)\": $qux} | [$foo, $bar, $baz, $qux]",
+  "input": "{\"as\":1,\"exp\":2,\"foo\":\"bar\",\"bar\":3,\"qux\":\"quux\",\"quux\":4}\n",
+  "null_input": false
+ },
+ {
+  "name": "binding an object error",
+  "query": ". as {$i} | [$i]",
+  "input": "[10]\n",
+  "null_input": false
+ },
+ {
+  "name": "binding object and array deeply",
+  "query": ". as {$a, $b: [$c, $d]} | [$a, $b, $c, $d]",
+  "input": "{\"a\":1,\"b\":[2,{\"d\":3}]}\n",
+  "null_input": false
+ },
+ {
+  "name": "binding variable scope in parenthesis",
+  "query": ". as $x | (.foo as $x | [$x]) | .+[$x]",
+  "input": "{\"foo\": 42}\n",
+  "null_input": false
+ },
+ {
+  "name": "binding variable scope in array",
+  "query": ". as $x | [.foo as $x | $x] | $x",
+  "input": "{\"foo\":42}\n",
+  "null_input": false
+ },
+ {
+  "name": "binding variable scope in object",
+  "query": ". as $x | {bar: (.foo as $x | $x)} | $x",
+  "input": "{\"foo\":\"bar\"}\n",
+  "null_input": false
+ },
+ {
+  "name": "binding variable scope in object key",
+  "query": ". as $x | {(.foo as $x | $x): $x}",
+  "input": "{\"foo\":\"bar\"}\n",
+  "null_input": false
+ },
+ {
+  "name": "binding variable scope in condition",
+  "query": ". as $x | if (.foo,.bar) as $x | $x then 1 as $x | $x else 2 as $x | $x end | [., $x]",
+  "input": "{\"foo\":\"bar\"}\n",
+  "null_input": false
+ },
+ {
+  "name": "binding variable scope in reduce",
+  "query": "[range(.)] | 3 as $x | reduce .[] as $i (.[5] as $x | $x; . + $x + $i)",
+  "input": "10",
+  "null_input": false
+ },
+ {
+  "name": "binding variable scope in foreach",
+  "query": "[2 as $x | foreach range(.) as $item (. as $x | $x; . + $item * $x; . + $x)]",
+  "input": "5",
+  "null_input": false
+ },
+ {
+  "name": "binding variable scope error in parenthesis",
+  "query": "(. as $i | $i) | $i",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "binding variable scope error in array",
+  "query": "[. as $i | $i] | $i",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "binding variable scope error in object",
+  "query": "{x: (. as $i | $i)} | $i",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "binding variable scope error in object key",
+  "query": "{(. as $i | $i): $i}",
+  "input": "\"x\"",
+  "null_input": false
+ },
+ {
+  "name": "binding variable scope with function declaration",
+  "query": "\"x\" as $v | def f: $v; \"y\" as $v | [., f, $v]",
+  "input": "",
+  "null_input": true
+ },
+ {
+  "name": "function scope in parenthesis",
+  "query": "def f: 1; . | (def f: 2; f) | f, .",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "function scope in array",
+  "query": "def f: 1; . | [def f: 2; f] | f, .",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "function scope in object",
+  "query": "def f: 1; . | {bar: (def f: .foo; f)} | f, .",
+  "input": "{\"foo\":\"bar\"}\n",
+  "null_input": false
+ },
+ {
+  "name": "function scope in object key",
+  "query": "def f: 1; . | {(def f: \"foo\"; f): f}",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "function scope error in parenthesis",
+  "query": "(def f: 1; f) | f",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "function scope error in array",
+  "query": "[def f: 1; f] | f",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "function scope error in object",
+  "query": "{x: (def f: 1; f)} | f",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "function scope error in object key",
+  "query": "{(def f: 1; f): f}",
+  "input": "\"x\"",
+  "null_input": false
+ },
+ {
+  "name": "first/0, last/0, nth/1 functions",
+  "query": "[first, last, nth(-6,-5,-1,0,2,5)]",
+  "input": "[1,2,3,4,5]",
+  "null_input": false
+ },
+ {
+  "name": "first/1, last/1, nth/2 functions",
+  "query": "[first(.[]), last(.[]), nth(0,3,5;.[]), nth(9;range(infinite))]",
+  "input": "[1,2,3,4,5]",
+  "null_input": false
+ },
+ {
+  "name": "first/1, last/1, nth/2 functions on empty",
+  "query": "[first(.[]), last(.[]), nth(0;.[])]",
+  "input": "[]",
+  "null_input": false
+ },
+ {
+  "name": "first/1 function with optional operator",
+  "query": "first(.), first(.?), first(.,.), first(.?,.), first(.,.?), first(.?,.?)",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "first/1 function nested",
+  "query": "first((null, null) | first(null))",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "nth/2 function with negative index",
+  "query": "nth(-1;.[])",
+  "input": "[]",
+  "null_input": false
+ },
+ {
+  "name": "nth/2 function with infinite range",
+  "query": "nth(range(3); range(infinite))",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "nth/2 function with error",
+  "query": "nth(1; 0,1,error)",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "all/2 function in first/1 argument",
+  "query": "first(range(1; 200) | . as $x | select(all(range(1; 7); $x % . == 0)))",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "limit/2 function",
+  "query": "[limit(0,3,13; range(infinite))]",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "limit/2 function with negative count",
+  "query": "limit(-1; range(3))",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "skip/2 function",
+  "query": "[skip(0,3,5,7; range(5))]",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "skip/2 function with negative count",
+  "query": "skip(-1; range(3))",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "all/0, any/0 functions",
+  "query": "[all, any]",
+  "input": "[]\n[false, false]\n[false, true]\n[true, true]\n",
+  "null_input": false
+ },
+ {
+  "name": "all/1, any/1 functions",
+  "query": "[all(not), any(not)]",
+  "input": "[]\n[false, false]\n[false, true]\n[true, true]\n",
+  "null_input": false
+ },
+ {
+  "name": "all/2, any/2 functions",
+  "query": "[all(range(.); not), any(range(.); not)]",
+  "input": "0 1",
+  "null_input": false
+ },
+ {
+  "name": "isempty function",
+  "query": "[isempty(empty), isempty(range(infinite)), isempty(1,error(\"foo\"))]",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "isempty function nested",
+  "query": "isempty(isempty(empty))",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "first/1 in isempty function",
+  "query": "isempty(first(null))",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "sin, cos, tan functions",
+  "query": "map(sin), map(cos), map(tan) | map(. * 1000000000 | floor / 1000000000)",
+  "input": "[0, 1, 2]",
+  "null_input": false
+ },
+ {
+  "name": "asin, acos, atan functions",
+  "query": "map(asin), map(acos), map(atan) | map(. * 1000000000 | floor / 1000000000)",
+  "input": "[0, 1, 2]",
+  "null_input": false
+ },
+ {
+  "name": "sinh, cosh, tanh functions",
+  "query": "map(sinh), map(cosh), map(tanh) | map(. * 1000000000 | floor / 1000000000)",
+  "input": "[0, 1, 2]",
+  "null_input": false
+ },
+ {
+  "name": "asinh, acosh, atanh functions",
+  "query": "map(asinh), map(acosh), map(atanh) | map(. * 1000000000 | floor / 1000000000)",
+  "input": "[0, 1, 2]",
+  "null_input": false
+ },
+ {
+  "name": "floor, ceil, trunc, fabs functions",
+  "query": "map(floor), map(ceil), map(trunc), map(fabs)",
+  "input": "[-3.7, -3.3, -2.5, -1.7, -1.0, -0.7, -0.3, 0.0, 0.3, 0.5, 0.7, 1.0, 1.7, 2.5, 3.3, 3.7]",
+  "null_input": false
+ },
+ {
+  "name": "round, nearbyint, rint functions",
+  "query": "map(round), map(nearbyint), map(rint)",
+  "input": "[-2.5, -1.7, -1.5, -1.2, -0.7, -0.5, -0.3, 0.0, 0.3, 0.5, 0.7, 1.2, 1.5, 1.7, 2.5]",
+  "null_input": false
+ },
+ {
+  "name": "sqrt and cbrt functions",
+  "query": "map(sqrt), map(cbrt) | map(. * 1000000000 | floor / 1000000000)",
+  "input": "[-8, -3.375, 0, 0.125, 1, 4, 8, 9, 16.777216]",
+  "null_input": false
+ },
+ {
+  "name": "significand function",
+  "query": "map(significand)",
+  "input": "[0, -0.5, 1, -1.5, 2, 10, 64, 100, 5e-324, -5e-324]",
+  "null_input": false
+ },
+ {
+  "name": "exp, exp10, exp2, expm1 functions",
+  "query": "map(exp), map(exp10), map(exp2), map(expm1) | map(. * 1000000000 | floor / 1000000000)",
+  "input": "[0, -0.5, 1, -1.5, 2, 10, 20]",
+  "null_input": false
+ },
+ {
+  "name": "frexp, modf function",
+  "query": "map(frexp), map(modf)",
+  "input": "[0, 0.25, -0.5, 1, -1.5, 2, 3.125]",
+  "null_input": false
+ },
+ {
+  "name": "modf against infinite",
+  "query": "infinite, -infinite | modf",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "log, log10, log1p, log2, logb functions",
+  "query": "map(log), map(log10), map(log1p), map(log2), map(logb) | map(. * 1000000000 | floor / 1000000000)",
+  "input": "[0, -0.5, 1, 1.5, 2, 10, 64, 100]",
+  "null_input": false
+ },
+ {
+  "name": "gamma, tgamma, lgamma functions",
+  "query": "map(gamma), map(tgamma), map(lgamma) | map(. * 1000000000 | floor / 1000000000)",
+  "input": "[0, -0.5, 1, -1.5, 2, 10]",
+  "null_input": false
+ },
+ {
+  "name": "erf, erfc, j0, j1, y0, y1 functions",
+  "query": "map(erf), map(erfc), map(j0), map(j1), map(y0), map(y1) | map(. * 1000000000 | floor / 1000000000)",
+  "input": "[0, -0.5, 1, -1.5, 2, 10]",
+  "null_input": false
+ },
+ {
+  "name": "fdim/2, fmax/2, fmin/2 functions",
+  "query": "[fdim(0.25,0.625; 0.125,0.375)], [fmax(0.1,0.3; 0.2,0.4)], [fmin(0.1,0.3; 0.2,0.4)]",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "fdim/2, fmax/2, fmin/2 functions with nan",
+  "query": "[fdim(1,nan; 1,nan)], [fmax(1,nan; 1,nan)], [fmin(1,nan; 1,nan)]",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "copysign/2, drem/2, fmod/2, remainder/2 functions",
+  "query": "[copysign(0,0.5,-1.5; 0,1,-3.5)], [drem(0.5,-0.75,1.125; 0.5,-0.25)], [fmod(0.5,-0.75,1.125; 0.5,-0.25)], [remainder(0.5,-0.75,1.125; 0.5,-0.25)]",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "nextafter/2, nexttoward/2 functions",
+  "query": "[nextafter(0,0.5,-0.75; 0.5,-0.25)], [nexttoward(0,0.5,-0.75; 0.5,-0.25)]",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "atan2/2, hypot/2 functions",
+  "query": "[atan2(0,1; 0,1,-3)], [hypot(0,-3.75,12; 0,5,-16)] | map(. * 1000000000 | floor / 1000000000)",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "ldexp/2, scalb/2, scalbln/2 functions",
+  "query": "[ldexp(0,0.5,2; 0,0.5,-2,3,10)], [scalb(0,0.5,2; 0,0.5,-2,3,10)], [scalbln(0,0.5,2; 0,0.5,-2,3,10)]",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "jn/2, pow/2, yn/2 functions",
+  "query": "[jn(0,0.5,2; 0,0.5,-2,3,10)], [pow(0,0.5,2; 0,0.5,-2,3,10)], [yn(0,0.5,2; 0.5,-2,3,10)] | map(. * 1000000000 | floor / 1000000000)",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "fma/3 function",
+  "query": "[fma(1.5,2.5; 3.5,4.5; 5.25,6.75)]",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "infinite function",
+  "query": "[infinite, -infinite] | (.[], .[]+.[], .[]-.[], .[]*.[], .[]/.[], .[]%.[]%256, 1/.[], -1/.[], .[]-1e300, .[]+1e300) | [., . == infinite, . == -infinite, contains(infinite)]",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "isfinite and isinfinite functions",
+  "query": "infinite | ., -., 1/., 1/(-.), nan, null, \"\", {}, [] | [., isfinite, isinfinite]",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "finites function",
+  "query": "nan, infinite, -infinite | ., -., 1/. | finites",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "nan and isnan functions",
+  "query": "nan, infinite-infinite, infinite/infinite, 0, null | [., .+1, isnan]",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "nan and comparison",
+  "query": "nan | [.<., .>., .<0, .>0, .==., .!=.], ([., 1, ., 2, .] | [min, max], sort, group_by(.))",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "isnormal function",
+  "query": "0, 2.2250738585072011e-308, 2.2250738585072014e-308, 1, 1.7976931348623157e+308, nan, infinite, \"\", [], {} | isnormal",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "normals function",
+  "query": "0, 2.2250738585072011e-308, 2.2250738585072014e-308, 1, 1.7976931348623157e+308, nan, infinite | ., -. | normals",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "normals with nextafter function",
+  "query": "0, 2.2250738585072014e-308, 1.7976931348623157e+308, nan, infinite | nextafter(.; 0, infinite) | normals",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "stringify nan and infinite",
+  "query": "nan, infinite, -infinite | [., tostring]",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "truncate_stream function",
+  "query": "[truncate_stream([[0],1],[[1,0],2],[[1,0]],[[1]])]",
+  "input": "0 1 2",
+  "null_input": false
+ },
+ {
+  "name": "fromstream function",
+  "query": "fromstream(range(5) | truncate_stream({x:[1,{y:[2]},3],z:[4]} | tostream))",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "tostream function",
+  "query": "tostream",
+  "input": "[0,[1,{\"a\":1},{\"b\":2}]]",
+  "null_input": false
+ },
+ {
+  "name": "setpath function",
+  "query": "setpath([[\"a\",\"b\",0,1,2],[1,2,\"a\",\"b\"]][]; 1,2)",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "setpath function deeply",
+  "query": "setpath([\"a\",\"b\",0,1]; 1,2)",
+  "input": "{\"a\":{\"b\":[]}}",
+  "null_input": false
+ },
+ {
+  "name": "setpath function negative index",
+  "query": "setpath(-2,0,2 | [.]; 4,5)",
+  "input": "[1,2,3]",
+  "null_input": false
+ },
+ {
+  "name": "setpath function empty path",
+  "query": "setpath([]; 10)",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "setpath function error",
+  "query": "setpath([-1]; 10)",
+  "input": "[]",
+  "null_input": false
+ },
+ {
+  "name": "setpath function error",
+  "query": "setpath([\"a\",\"b\",\"c\"]; 10)",
+  "input": "{\"a\":{\"b\":[]}}",
+  "null_input": false
+ },
+ {
+  "name": "setpath function error",
+  "query": "setpath([\"a\",1]; 10)",
+  "input": "{\"a\":{\"b\":[]}}",
+  "null_input": false
+ },
+ {
+  "name": "setpath function error",
+  "query": "setpath([{}]; 10)",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "setpath function error",
+  "query": "setpath([{start:0}]; 10)",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "setpath function error",
+  "query": "setpath([[]]; 10)",
+  "input": "[]",
+  "null_input": false
+ },
+ {
+  "name": "setpath function error",
+  "query": "setpath([{start:0,end:1}]; 10)",
+  "input": "[]",
+  "null_input": false
+ },
+ {
+  "name": "setpath function error",
+  "query": "setpath([{start:\"x\",end:2}]; [9])",
+  "input": "[1,2,3]",
+  "null_input": false
+ },
+ {
+  "name": "delpaths function",
+  "query": "delpaths([[\"a\",1,\"b\",1]])",
+  "input": "{\"a\":[{},{\"b\":[1,2,3]}]}",
+  "null_input": false
+ },
+ {
+  "name": "delpaths function against array",
+  "query": "delpaths([[2],[6],[4]])",
+  "input": "[1,2,3,4,5]",
+  "null_input": false
+ },
+ {
+  "name": "delpaths function not found key",
+  "query": "delpaths([[\"a\",\"b\",\"c\"]])",
+  "input": "{}",
+  "null_input": false
+ },
+ {
+  "name": "delpaths function out of index",
+  "query": "delpaths([[2],[-10],[10],[-3]])",
+  "input": "[1,2,3,4,5]",
+  "null_input": false
+ },
+ {
+  "name": "delpaths function with overlapping paths",
+  "query": "delpaths([[\"x\"],[\"x\",0,\"y\"]], [[\"x\",0],[\"x\",0,\"y\"]], [[\"x\"],[\"x\",{\"start\":0}]])",
+  "input": "{\"x\":[{\"y\":0}]}",
+  "null_input": false
+ },
+ {
+  "name": "delpaths function against null",
+  "query": "delpaths([[\"a\"]]), delpaths([[\"a\",\"b\"]]), delpaths([[0]]), delpaths([[-1]]), delpaths([[{start:1,end:2}]])",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "delpaths function error",
+  "query": "delpaths([{}])",
+  "input": "[]",
+  "null_input": false
+ },
+ {
+  "name": "delpaths function error",
+  "query": "delpaths([[\"x\"]])",
+  "input": "[]",
+  "null_input": false
+ },
+ {
+  "name": "delpaths function error",
+  "query": "delpaths([[{\"start\":1,\"end\":{}}]])",
+  "input": "[1,2,3]",
+  "null_input": false
+ },
+ {
+  "name": "getpath function",
+  "query": "getpath([\"a\",1,\"b\",2])",
+  "input": "{\"a\":[{},{\"b\":[1,2,3]}]}",
+  "null_input": false
+ },
+ {
+  "name": "getpath function empty path",
+  "query": "getpath([])",
+  "input": "{\"a\":[{},{\"b\":[1,2,3]}]}",
+  "null_input": false
+ },
+ {
+  "name": "getpath function error",
+  "query": "getpath([\"a\",1,\"b\",\"c\"])",
+  "input": "{\"a\":[{},{\"b\":[1,2,3,4,5,6,7]}]}",
+  "null_input": false
+ },
+ {
+  "name": "setpath, delpaths, getpath functions",
+  "query": "[\"foo\",1] as $p | getpath($p), setpath($p; 2), delpaths([$p]), .",
+  "input": "{\"foo\":[0,1]}\n{\"bar\":false}\n",
+  "null_input": false
+ },
+ {
+  "name": "setpath to getpath",
+  "query": ".[] | try (getpath([\"a\",0,\"b\"]) |= 5) catch .",
+  "input": "[null,{\"b\":0},{\"a\":0},{\"a\":null},{\"a\":[0,1]},{\"a\":{\"b\":1}},{\"a\":[{}]},{\"a\":[{\"c\":3}]}]",
+  "null_input": false
+ },
+ {
+  "name": "pick function",
+  "query": "pick(.x, .y[2], .y[0], .z)",
+  "input": "{\"x\":1, \"y\": [1,2,3]}",
+  "null_input": false
+ },
+ {
+  "name": "map_values function",
+  "query": "map_values(.*2)",
+  "input": "[1,2,3]",
+  "null_input": false
+ },
+ {
+  "name": "map_values function with optional operator",
+  "query": "map_values(tonumber? // .)",
+  "input": "{\"x\": \"1\", \"y\": \"1.5\", \"z\": \"z\"}",
+  "null_input": false
+ },
+ {
+  "name": "del function",
+  "query": "del(.), del(empty), del((.foo,.bar,.baz) | .[2,3,0]), del(.foo[0], .bar[0], .foo, .baz.bar[0].x), del(.foo[1:][:3][1:], .bar[:2][1:])",
+  "input": "{\"foo\": [0,1,2,3,4], \"bar\": [0,1]}",
+  "null_input": false
+ },
+ {
+  "name": "del function with array slicing",
+  "query": "del(.[1], .[-6], .[2], .[-3:9])",
+  "input": "[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]",
+  "null_input": false
+ },
+ {
+  "name": "del function against large array with select",
+  "query": "[range(.)] | (5,7) as $x | del(.[] | select(. % $x == 0)) | add",
+  "input": "50000",
+  "null_input": false
+ },
+ {
+  "name": "del function against large array with slicing",
+  "query": "[range(.)] | del(.[range(length) | {start:.,end:(.+1)}])",
+  "input": "50000",
+  "null_input": false
+ },
+ {
+  "name": "del function against null",
+  "query": "del(.a), del(.a.b), del(.[0]), del(.[-1]), del(.[1:2])",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "assignment operator against object",
+  "query": ".foo.bar = 1",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "assignment operator against array",
+  "query": ".[-1,0] = 3",
+  "input": "[0,1,2]",
+  "null_input": false
+ },
+ {
+  "name": "assignment operator against number",
+  "query": ". = 1",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "assignment operator against number error",
+  "query": ".foo = 1",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "assignment operator against object with multiple paths",
+  "query": "(.foo,.bar,.baz) = 1",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "assignment operator against array with slicing",
+  "query": ".[2:4] = ([], [0], [4,3,2]), .[1:-1] = [3,2], .[2:0] = [.[]], .[10:] = [1], .[-20:-10] = [1], .[0:5] = [9], .[1:][1:] = [9], .[1:][:3] = [6,7,8], .[:4][1:][:3] = [9], .[1:][1:-2] = [9], .[:4][-3:][:5] = [9], (null | .[:1][2:] = [9])",
+  "input": "[1,2,3,4,5]",
+  "null_input": false
+ },
+ {
+  "name": "assignment operator with object and array indexing",
+  "query": ".foo.[0].bar.[1] = 1",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "assignment operator against array with suffix array indexing",
+  "query": ".[2][2] = 1",
+  "input": "[1]",
+  "null_input": false
+ },
+ {
+  "name": "assignment operator against array with suffix object indexing",
+  "query": ".[2].foo = 1",
+  "input": "[1]",
+  "null_input": false
+ },
+ {
+  "name": "assignment operator against object with multiple suffix indexing",
+  "query": ".foo[2].bar = 2",
+  "input": "{\"foo\":[1], \"bar\":3}",
+  "null_input": false
+ },
+ {
+  "name": "assignment operator with query and suffix object indexing",
+  "query": "(.foo).bar = 1",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "assignment operator with object indexing and iterator suffix",
+  "query": ".foo[].bar = 1",
+  "input": "{\"foo\":[null,null]}",
+  "null_input": false
+ },
+ {
+  "name": "assignment operator with overlapping paths",
+  "query": "[(.x,.x.y,.x.y.z) = {}, (.x.y.z,.x.y,.x) = {}]",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "assignment operator with query value",
+  "query": ".foo = .bar",
+  "input": "{\"bar\":42}",
+  "null_input": false
+ },
+ {
+  "name": "assignment operator with multiple paths and query values",
+  "query": "(.foo,.bar,.baz) = .bar[]",
+  "input": "{\"bar\":[0,1,2]}",
+  "null_input": false
+ },
+ {
+  "name": "assignment operator with overlapping paths and multiple values",
+  "query": ".. = ..",
+  "input": "{\"x\":{\"y\":{}}} [[[]]]",
+  "null_input": false
+ },
+ {
+  "name": "assignment operator with overlapping and slicing paths",
+  "query": "..[:0] = ..",
+  "input": "[[[]]]",
+  "null_input": false
+ },
+ {
+  "name": "assignment operator array index negative error",
+  "query": ".[-1,0] = 1",
+  "input": "[]",
+  "null_input": false
+ },
+ {
+  "name": "assignment operator array index limit error",
+  "query": ".[999999999] = 1",
+  "input": "[]",
+  "null_input": false
+ },
+ {
+  "name": "assignment operator with select",
+  "query": "(.[] | select(.k == \"b\") | .v) = 0",
+  "input": "[{\"k\": \"a\", \"v\": 1}, {\"k\": \"b\", \"v\": 2}, {\"k\": \"c\", \"v\": 3}]",
+  "null_input": false
+ },
+ {
+  "name": "assignment operator with fork",
+  "query": "[range(3)] | .[] = 0 | [.[] = 1, .[] = 2]",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "assignment operator against large array",
+  "query": "[range(.)] | .[] = 1 | add",
+  "input": "50000",
+  "null_input": false
+ },
+ {
+  "name": "assignment operator against large array with select",
+  "query": "[range(.)] | (.[] | select(. % 2 > 0)) = 1 | add",
+  "input": "50000",
+  "null_input": false
+ },
+ {
+  "name": "assignment operator against large array with range",
+  "query": "[range(.)] | .[range(length)] = 1 | add",
+  "input": "50000",
+  "null_input": false
+ },
+ {
+  "name": "assignment operator against large array with slicing",
+  "query": "[range(.)] | .[range(length) | {start:.,end:(.+1)}] = [1] | add",
+  "input": "50000",
+  "null_input": false
+ },
+ {
+  "name": "assignment operator against large object",
+  "query": "[{key:range(.)|tostring}] | from_entries | .[] = 1 | add",
+  "input": "50000",
+  "null_input": false
+ },
+ {
+  "name": "assignment operator constructing large array",
+  "query": ".[range(50000)] = 1 | add",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "update-assignment operator",
+  "query": ".foo |= .+1",
+  "input": "{\"foo\": 1}",
+  "null_input": false
+ },
+ {
+  "name": "update-assignment operator deeply",
+  "query": ".[0].a |= {\"old\":., \"new\":(.+1)}",
+  "input": "[{\"a\":1,\"b\":2}]",
+  "null_input": false
+ },
+ {
+  "name": "update-assignment operator in function",
+  "query": "def inc(x): x |= .+1; inc(.[].a)",
+  "input": "[{\"a\":1,\"b\":2},{\"a\":2,\"b\":4},{\"a\":7,\"b\":8}]",
+  "null_input": false
+ },
+ {
+  "name": "update-assignment operator with empty",
+  "query": ".foo |= empty",
+  "input": "{\"foo\": 42, \"bar\": 48}",
+  "null_input": false
+ },
+ {
+  "name": "update-assignment operator with repeat",
+  "query": ".foo |= repeat(.)",
+  "input": "{\"foo\": 42, \"bar\": 48}",
+  "null_input": false
+ },
+ {
+  "name": "update-assignment operator with same paths",
+  "query": "(.foo,.foo,.foo) |= .+1",
+  "input": "{\"foo\": 0}",
+  "null_input": false
+ },
+ {
+  "name": "update-assignment operator against array with empty function",
+  "query": "(.[] | select(. % 2 > 0)) |= empty",
+  "input": "[1,2,3,4,5]",
+  "null_input": false
+ },
+ {
+  "name": "update-assignment operator against array with conditional empty function",
+  "query": "[range(.)] | .[] |= if . % 2 == 0 then empty else [., -.] end",
+  "input": "10",
+  "null_input": false
+ },
+ {
+  "name": "update-assignment operator with fork",
+  "query": "[range(3)] | .[] |= 0 | [.[] |= 1, .[] |= 2]",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "update-assignment operator against large array",
+  "query": "[range(.)] | .[] |= . * 2 | add",
+  "input": "50000",
+  "null_input": false
+ },
+ {
+  "name": "update-assignment operator against large array with select",
+  "query": "[range(.)] | (.[] | select(. % 2 > 0)) |= (. * 2) | add",
+  "input": "50000",
+  "null_input": false
+ },
+ {
+  "name": "update-assignment operator against large object",
+  "query": "[range(.) | {key:tostring,value:.}] | from_entries | .[] |= . * 2 | add",
+  "input": "50000",
+  "null_input": false
+ },
+ {
+  "name": "update-assignment operator against array with overlapping paths",
+  "query": "(.[1:3][],.[2:4][],.[2]) |= .+1",
+  "input": "[1,2,3,4,5]",
+  "null_input": false
+ },
+ {
+  "name": "update-assignment operator with optional operator",
+  "query": ".foo |= .?",
+  "input": "{\"foo\": 42}",
+  "null_input": false
+ },
+ {
+  "name": "update-assignment operator with infinite range",
+  "query": "[range(.)] | .[] |= range(infinite)",
+  "input": "5",
+  "null_input": false
+ },
+ {
+  "name": "update-assignment operator with try catch",
+  "query": ". |= try . catch .",
+  "input": "1",
+  "null_input": false
+ },
+ {
+  "name": "update-assignment operator with alternative operator",
+  "query": ".foo |= (fromjson? // \"x\")",
+  "input": "{\"foo\": 42}\n{\"foo\": \"42\"}\n{\"foo\": \"a\"}\n{\"foo\": \"0 a\"}\n{\"foo\": \"true\"}\n{\"foo\": \"[{}]\"}\n{\"foo\": \"[][]\"}\n",
+  "null_input": false
+ },
+ {
+  "name": "update operators",
+  "query": ".[] += 2, .[] -= 2, .[] *= 2, .[] /= 2, .[] %= 2",
+  "input": "[1,2,3]",
+  "null_input": false
+ },
+ {
+  "name": "update operator with query in right hand side",
+  "query": ".foo += .foo, .bar //= .foo, .[] /= .foo, .[] = .foo",
+  "input": "{\"foo\":2}",
+  "null_input": false
+ },
+ {
+  "name": "update operators associativity error",
+  "query": ". += 1 -= 2",
+  "input": "1",
+  "null_input": false
+ },
+ {
+  "name": "error/0 function",
+  "query": ".foo[] | error",
+  "input": "{ \"foo\": [\"error message\", \"bar\"] }",
+  "null_input": false
+ },
+ {
+  "name": "error/0 function with null",
+  "query": "error",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "error/0 function on string and try catch",
+  "query": "try error catch .",
+  "input": "\"foo\"",
+  "null_input": false
+ },
+ {
+  "name": "error/0 function on values and try catch",
+  "query": "null,1,[],{x:42} | try error catch .",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "error/1 function",
+  "query": ".foo | error(\"error message\")",
+  "input": "{ \"foo\": 1 }",
+  "null_input": false
+ },
+ {
+  "name": "error/1 function and try catch",
+  "query": "try error({ x: 42 }) catch .",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "error/1 function with null",
+  "query": "error(null)",
+  "input": "1",
+  "null_input": false
+ },
+ {
+  "name": "path function identity",
+  "query": "path(.)",
+  "input": "{}",
+  "null_input": false
+ },
+ {
+  "name": "path function deep",
+  "query": "path(.a|.[1,2:3,4].b[5,6])",
+  "input": "{}",
+  "null_input": false
+ },
+ {
+  "name": "path function select",
+  "query": "[path(.[] | select(. > 3))]",
+  "input": "[1,3,5,7,3,8,9,1]",
+  "null_input": false
+ },
+ {
+  "name": "path function recurse",
+  "query": "[path(..)]",
+  "input": "{\"a\":{\"b\":[0,1,2]},\"c\":[3,4]}",
+  "null_input": false
+ },
+ {
+  "name": "path function and pattern",
+  "query": "(.a as $x | (.b,.c)) = \"b\"",
+  "input": "{\"a\":null,\"b\":null}",
+  "null_input": false
+ },
+ {
+  "name": "path function result",
+  "query": ".a[path(.b)[0]]",
+  "input": "{\"a\":{\"b\":0}}",
+  "null_input": false
+ },
+ {
+  "name": "path function with select",
+  "query": "path(.[] | select(.id | startswith(\"x\")) | .id)",
+  "input": "[{\"id\": \"xy\"}, {\"id\": \"yx\"}]",
+  "null_input": false
+ },
+ {
+  "name": "path function with getpath",
+  "query": "[path(getpath([[0]] | .[0],.[]))]",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "path function against nan",
+  "query": "[nan,{x:nan}] | path(.[1].x)",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "path function nested",
+  "query": "path(.a[path(.b[.a:.b])[0]])",
+  "input": "{\"a\":{\"b\":0}}",
+  "null_input": false
+ },
+ {
+  "name": "path function error with arithmetic operator",
+  "query": "path(. + 1)",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "path function error with object indexing",
+  "query": "path({}.x)",
+  "input": "{}",
+  "null_input": false
+ },
+ {
+  "name": "path function error with array indexing",
+  "query": "path([0][0 + 0])",
+  "input": "[0]",
+  "null_input": false
+ },
+ {
+  "name": "path function error with array slicing",
+  "query": "path([0][0:1])",
+  "input": "[0]",
+  "null_input": false
+ },
+ {
+  "name": "path function error with getpath function",
+  "query": "path({} | getpath([]))",
+  "input": "{}",
+  "null_input": false
+ },
+ {
+  "name": "path function with binding array slicing",
+  "query": ".[:1] as $x | path($x.[0])",
+  "input": "[0]",
+  "null_input": false
+ },
+ {
+  "name": "path function error with binding array slicing",
+  "query": ".[:0] as $x | path($x.[0])",
+  "input": "[0]",
+  "null_input": false
+ },
+ {
+  "name": "path function with function declaration",
+  "query": "def f($x): .y; path(f(.x))",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "path function with assignment operator",
+  "query": "path(. = .x)",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "path function iterate error of array",
+  "query": "[.[]][].a = 1",
+  "input": "[{\"a\":0}]",
+  "null_input": false
+ },
+ {
+  "name": "path function iterate error of object",
+  "query": "{}[] = 10",
+  "input": "{}",
+  "null_input": false
+ },
+ {
+  "name": "paths/0 function",
+  "query": "paths",
+  "input": "[1,[[1,{\"a\":2},3],{\"a\":[2]}]]",
+  "null_input": false
+ },
+ {
+  "name": "paths/1 function",
+  "query": "paths(. > 2)",
+  "input": "[1,[[1,{\"a\":2},3],{\"a\":[2]}]]",
+  "null_input": false
+ },
+ {
+  "name": "bsearch function",
+  "query": "bsearch(0,1,2,3,4,5,6)",
+  "input": "[1,3,5]",
+  "null_input": false
+ },
+ {
+  "name": "bsearch function with objects",
+  "query": "[{x:range(.),y:range(.)}] | bsearch({x:1,y:1})",
+  "input": "3",
+  "null_input": false
+ },
+ {
+  "name": "gmtime, localtime functions",
+  "query": "gmtime, localtime | map(. * 1000000 | floor / 1000000)",
+  "input": "1500000000 1567890123.456 1600000000.111",
+  "null_input": false
+ },
+ {
+  "name": "mktime, strftime, strflocaltime, todate functions",
+  "query": "(.,mktime | .,strftime(\"%Y-%m-%dT%H:%M:%SZ\"),strflocaltime(\"%Y-%m-%dT%H:%M:%S%z\")), todate",
+  "input": "[2017,6,14,2,40,0,5,194]\n[2019,8,7,21,2,3.456,6,249]\n[2020,8,13,12,26,40.111,0,256]\n[2024,7,20]\n[2025]\n",
+  "null_input": false
+ },
+ {
+  "name": "strptime, fromdate functions",
+  "query": "strptime(\"%Y-%m-%dT%H:%M:%S%z\"), fromdate",
+  "input": "\"2017-07-14T02:40:00Z\"\n\"2019-09-08T06:02:03+0900\"\n\"2020-09-13T07:26:40-05:00\"\n",
+  "null_input": false
+ },
+ {
+  "name": "strftime, strptime functions",
+  "query": "strptime(\"%c\") | strftime(\"%c\")",
+  "input": "\"Thu Jul 23 20:41:06 2020\"\n",
+  "null_input": false
+ },
+ {
+  "name": "now function",
+  "query": "now | type",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "debug/0 function",
+  "query": "recurse(debug|.[]?)",
+  "input": "[{}]\n[1,{\"a\":[2,\"b\"]}]\n",
+  "null_input": false
+ },
+ {
+  "name": "debug/1 function",
+  "query": "debug(\"value: \\(.)\", [.,.])",
+  "input": "null false \"test\" [] {}",
+  "null_input": false
+ },
+ {
+  "name": "stderr function",
+  "query": "recurse(stderr|.[]?)",
+  "input": "[{}]\n[1,{\"a\":[2,\"b\"]}]\n\"DEBUG:\"\n",
+  "null_input": false
+ },
+ {
+  "name": "debug and stderr in builtins",
+  "query": "builtins | sort[] | select(test(\"debug|stderr\"))",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "input_filename function with stdin input",
+  "query": "input_filename",
+  "input": "0 1 2",
+  "null_input": false
+ },
+ {
+  "name": "input_filename function with null input option",
+  "query": "input_filename",
+  "input": "",
+  "null_input": true
+ },
+ {
+  "name": "input_filename in builtins",
+  "query": "builtins[] | select(test(\"input_filename\"))",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "halt function",
+  "query": "def f($n): if $n > 0 then $n, f($n - 1) else halt end; f(.), .",
+  "input": "3",
+  "null_input": false
+ },
+ {
+  "name": "halt_error/0 function",
+  "query": "halt_error",
+  "input": "1",
+  "null_input": false
+ },
+ {
+  "name": "halt_error/0 function on nan",
+  "query": "nan | halt_error",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "halt_error/0 function on string",
+  "query": "halt_error",
+  "input": "\"foo\\nbar\\nbaz\\n\"",
+  "null_input": false
+ },
+ {
+  "name": "halt_error/0 function and try catch",
+  "query": "range(5) | try halt_error catch .",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "halt_error/0 function with null input and try catch",
+  "query": "try halt_error catch .",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "halt_error/0 function with multiple input values",
+  "query": "halt_error",
+  "input": "1\n2\n3\n",
+  "null_input": false
+ },
+ {
+  "name": "halt_error/1 function",
+  "query": "halt_error(42)",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "halt_error/1 function on string",
+  "query": "halt_error(42)",
+  "input": "\"foo\\nbar\\nbaz\\n\"",
+  "null_input": false
+ },
+ {
+  "name": "halt_error/1 function with multiple input values",
+  "query": "halt_error(.)",
+  "input": "1\n2\n3\n",
+  "null_input": false
+ },
+ {
+  "name": "builtins function",
+  "query": "builtins | length > 100",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "env function",
+  "query": "env|length > 0",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "env in function",
+  "query": "def f: env; f|length > 0",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "env in builtins",
+  "query": "builtins[] | select(test(\"env\"))",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "$ENV variable",
+  "query": "[$ENV|length > 0, 1 as $ENV | $ENV]",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "env arguments count error",
+  "query": "env(0)",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "input function",
+  "query": "input, input",
+  "input": "",
+  "null_input": true
+ },
+ {
+  "name": "input function with binomial operator",
+  "query": "input + input[0]",
+  "input": "",
+  "null_input": true
+ },
+ {
+  "name": "input function in function",
+  "query": "def f: [def f: input; range(3) | f]; f",
+  "input": "",
+  "null_input": true
+ },
+ {
+  "name": "input function without null input option",
+  "query": ". + input",
+  "input": "1 2",
+  "null_input": false
+ },
+ {
+  "name": "inputs function",
+  "query": "reduce inputs as $x (0; . + $x)",
+  "input": "",
+  "null_input": true
+ },
+ {
+  "name": "match function",
+  "query": "[match(\"bcd\")], [match(\"☆★\"; \"g\")], ((\"\",\"g\",\"i\",\"ig\") as $flag | [match(\"bcd\"; $flag)]), [match(\"ABC.?D.?E\"; \"mg\")], [match(\"A(?<bar>B(C)(.?D))(?<foo>.?E)\")], [match(\"b(?<foo>c)(d)\"; \"igm\")], [match(\"bc(c(.*))?d\")]",
+  "input": "\"abcde☆★abcde☆★ABCDE☆ABC\\nD\\nE\"",
+  "null_input": false
+ },
+ {
+  "name": "match function type error",
+  "query": "match(\"x\"; \"g\")",
+  "input": "{}",
+  "null_input": false
+ },
+ {
+  "name": "match function flag error",
+  "query": "match(\"x\"; \"a\")",
+  "input": "\"\"",
+  "null_input": false
+ },
+ {
+  "name": "match function regular expression error",
+  "query": "match(\"[\"; \"g\")",
+  "input": "\"\"",
+  "null_input": false
+ },
+ {
+  "name": "test function",
+  "query": "[test(\"xyz\"), test(\"bcd\"), test(\"efg\"), test(\"efg\"; \"i\"), test(\"☆★\")]",
+  "input": "\"abcde☆★abcde☆★ABCDEFG\"",
+  "null_input": false
+ },
+ {
+  "name": "capture function",
+  "query": "capture(\"bcd\"), capture(\"b(?<foo>c.?(?<bar>d..))\"), [capture(\"(?<a>b(?<foo>c).?(?<bar>d..))\"; \"gmi\")]",
+  "input": "\"abcdeABCDEabcde\"",
+  "null_input": false
+ },
+ {
+  "name": "scan function",
+  "query": "scan(\"abc\"), scan(\"abc\"; \"i\"), scan(\"(b(c*)(d*))\"), scan(\"(b(c*)(d*))\"; \"i\")",
+  "input": "\"abcdeABCCDDEabcce\"",
+  "null_input": false
+ },
+ {
+  "name": "split/2 function",
+  "query": "split(\"a\"), split(\"a+\"), split(\"a+\"; \"\"), split(\"a+\"; \"i\"), split(\"\"; \"\")",
+  "input": "\"abaacaAad\"",
+  "null_input": false
+ },
+ {
+  "name": "splits function",
+  "query": "[splits(\"a\")], [splits(\"a+\")], [splits(\"a+\"; \"\")], [splits(\"a+\"; \"i\")], [splits(\"\"; \"\")]",
+  "input": "\"abaacaAad\"",
+  "null_input": false
+ },
+ {
+  "name": "sub function",
+  "query": "sub(\"a\"; \"b\"), sub(\"aaa\"; \"b\"), sub(\"a\"; \"b\",\"c\"), sub(\"a(?<a>.)\"; \"\\(.a)b\\(.a)\"; \"ig\"), sub(\"(?<foo>★)\"; \"\\(.foo)☆\\(.foo)\"), sub(\"^\"; \"b\"), sub(\"a\"; empty)",
+  "input": "\"abc☆★☆ABC\"",
+  "null_input": false
+ },
+ {
+  "name": "gsub function",
+  "query": "gsub(\"a\"; \"b\"), gsub(\"a.c\"; \"b\"), gsub(\"a\"; \"b\",\"c\"), gsub(\"a(?<a>..)\"; \"\\(.a+.a)\"; \"i\"), gsub(\"(?<foo>★)\"; \"\\(.foo)☆\\(.foo)\"), gsub(\"^\"; \"a\"), gsub(\"a\"; empty)",
+  "input": "\"abcABC☆★☆ABCabc\"",
+  "null_input": false
+ },
+ {
+  "name": "INDEX function",
+  "query": "INDEX(range(5); .*2)",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "JOIN function",
+  "query": "[range(5)] | JOIN(map(.*3); .*2)",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "IN function",
+  "query": "[range(5; 13)|IN(range(0; 10; 3))]",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "format function",
+  "query": "format(\"html\",\"uri\",\"csv\",\"tsv\",\"sh\",\"base64\")",
+  "input": "[1,2,3]",
+  "null_input": false
+ },
+ {
+  "name": "format function error",
+  "query": "format(\"t\")",
+  "input": "",
+  "null_input": true
+ },
+ {
+  "name": "format strings @text",
+  "query": "@text",
+  "input": "",
+  "null_input": true
+ },
+ {
+  "name": "format strings @json",
+  "query": "@json",
+  "input": "{\"a\":42}",
+  "null_input": false
+ },
+ {
+  "name": "format strings @json with string interpolation",
+  "query": "@json \"0\\(.)1\\(. + .)2\\([2])3\"",
+  "input": "[1]",
+  "null_input": false
+ },
+ {
+  "name": "format strings @html",
+  "query": "@html",
+  "input": "{\"foo\": \"<div>&'\\\"</div>\"}\n",
+  "null_input": false
+ },
+ {
+  "name": "format strings @html with string interpolation",
+  "query": "@html \"x\\(.)x\\(.+.)x\\(\"<>\")x\"",
+  "input": "[\"<>\"]\n",
+  "null_input": false
+ },
+ {
+  "name": "format strings @uri",
+  "query": "@uri",
+  "input": "[1, {\"foo\": \"<div>&'\\\"()+</div>\"}]\n",
+  "null_input": false
+ },
+ {
+  "name": "format strings @uri with string interpolation",
+  "query": "@uri \"q=\\(.)&q=\\(. + .)\"",
+  "input": "[\"<>\", \"{&}\"]\n",
+  "null_input": false
+ },
+ {
+  "name": "format strings @urid",
+  "query": "@urid",
+  "input": "\"%5B1%2C%7B%22foo%22%3A%22%3Cdiv%3E%26%27%5C%22%28%29%2B%3C%2Fdiv%3E%22%7D%5D\"\n",
+  "null_input": false
+ },
+ {
+  "name": "format strings @urid error",
+  "query": "@urid",
+  "input": "\"%5B1%2C%\"\n",
+  "null_input": false
+ },
+ {
+  "name": "format strings @csv",
+  "query": "@csv",
+  "input": "[1, \"foo\", null, \"foo,\\n\\\"bar\\\"\\tbaz\\u0000\\\\0\"]\n",
+  "null_input": false
+ },
+ {
+  "name": "format strings @csv with string interpolation",
+  "query": "@csv \"\\(.),\\(. + .),\\([nan])\"",
+  "input": "[1, \"foo\", null, 2]\n",
+  "null_input": false
+ },
+ {
+  "name": "format strings @csv error",
+  "query": "@csv",
+  "input": "null",
+  "null_input": false
+ },
+ {
+  "name": "format strings @csv row error",
+  "query": "@csv",
+  "input": "[1, \"foo\", null, {\"foo\":1}]\n",
+  "null_input": false
+ },
+ {
+  "name": "format strings @tsv",
+  "query": "@tsv",
+  "input": "[1, \"foo\", null, \"foo,\\n\\\"bar\\\"\\tbaz\\u0000\\\\0\"]\n",
+  "null_input": false
+ },
+ {
+  "name": "format strings @tsv with string interpolation",
+  "query": "@tsv \"\\(.),\\(. + .),\\([nan])\"",
+  "input": "[1, \"foo\", null, 2]\n",
+  "null_input": false
+ },
+ {
+  "name": "format strings @tsv error",
+  "query": "@tsv",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "format strings @tsv row error",
+  "query": "@tsv",
+  "input": "[1, \"foo\", null, [\"foo\"]]\n",
+  "null_input": false
+ },
+ {
+  "name": "format strings @sh",
+  "query": "@sh",
+  "input": "null\ntrue\n[1, \"f'o'o\\u0000\\\\0\", null, false]\n",
+  "null_input": false
+ },
+ {
+  "name": "format strings @sh error",
+  "query": "@sh",
+  "input": "[{\"foo\": \"<>\"}]\n",
+  "null_input": false
+ },
+ {
+  "name": "format strings @base64",
+  "query": "@base64",
+  "input": "{\"foo\":\"bar\"}",
+  "null_input": false
+ },
+ {
+  "name": "format strings @base64 with string interpolation",
+  "query": "@base64 \"\\(.),\\(. + .),\\(. + . + .)\"",
+  "input": "[1,2]",
+  "null_input": false
+ },
+ {
+  "name": "format strings @base64d error",
+  "query": "@base64d",
+  "input": "\":\"\n",
+  "null_input": false
+ },
+ {
+  "name": "format strings not defined error",
+  "query": "@foo",
+  "input": "",
+  "null_input": true
+ },
+ {
+  "name": "format strings not defined error with numeric characters",
+  "query": "@0",
+  "input": "",
+  "null_input": true
+ },
+ {
+  "name": "format strings not defined error with optional operator",
+  "query": "@foo?, @bar\"\\(0|debug)\"?, 1",
+  "input": "",
+  "null_input": true
+ },
+ {
+  "name": "destructuring alternative operator",
+  "query": ". as {$a} ?// [$a] ?// $a | $a",
+  "input": "[1] [2] {\"a\":3} 4",
+  "null_input": false
+ },
+ {
+  "name": "destructuring alternative operator with error backtrack",
+  "query": ". as {$a} ?// [$a] ?// $a | if 1 < $a and $a < 4 then $a|error else $a end",
+  "input": "[1] [2] {\"a\":3} 4",
+  "null_input": false
+ },
+ {
+  "name": "destructuring alternative operator with multiple variables",
+  "query": ". as {$a, b: [$c, {$d}]} ?// [$a, {$b}, $e] ?// $f | [$a, $b, $c, $d, $e, $f]",
+  "input": "{\"a\":1,\"b\":[2,{\"d\":3}]} [4,{\"b\":5,\"c\":6},7,8,9] \"foo\"",
+  "null_input": false
+ },
+ {
+  "name": "destructuring alternative operator with array pattern against string",
+  "query": ". as [$a] ?// $a | $a",
+  "input": "null \"\" \"abc\" [] [\"abc\"]",
+  "null_input": false
+ },
+ {
+  "name": "compact output option",
+  "query": ".",
+  "input": "{ \"foo\": [\"hello\", \"world\"] }",
+  "null_input": false
+ },
+ {
+  "name": "raw string output short option",
+  "query": ".foo[]",
+  "input": "{ \"foo\": [\"hello\", \"world\", \"multiple\\nline\"] }",
+  "null_input": false
+ },
+ {
+  "name": "raw string output option against non-string",
+  "query": ".",
+  "input": "{ \"foo\": \"multiple\\nline\" }",
+  "null_input": false
+ },
+ {
+  "name": "NO_COLOR environment variable",
+  "query": ".",
+  "input": "{\"foo\":42}",
+  "null_input": false
+ },
+ {
+  "name": "null input value option",
+  "query": "[.]",
+  "input": "",
+  "null_input": true
+ },
+ {
+  "name": "null input value option with compact output option",
+  "query": "[.,.]",
+  "input": "",
+  "null_input": true
+ },
+ {
+  "name": "invalid query",
+  "query": ">abc",
+  "input": "{}",
+  "null_input": false
+ },
+ {
+  "name": "invalid query",
+  "query": ".abc[",
+  "input": "{}",
+  "null_input": false
+ },
+ {
+  "name": "invalid query",
+  "query": "[ .[] | { .id } ]",
+  "input": "{}",
+  "null_input": false
+ },
+ {
+  "name": "invalid query",
+  "query": "if 0then. else. end",
+  "input": "{}",
+  "null_input": false
+ },
+ {
+  "name": "invalid query",
+  "query": ".foo & .bar",
+  "input": "{}",
+  "null_input": false
+ },
+ {
+  "name": "invalid query",
+  "query": "foo☆",
+  "input": "{}",
+  "null_input": false
+ },
+ {
+  "name": "invalid query",
+  "query": "\\/",
+  "input": "{}",
+  "null_input": false
+ },
+ {
+  "name": "invalid query",
+  "query": "{\n[]}",
+  "input": "{}",
+  "null_input": false
+ },
+ {
+  "name": "invalid multiple line query",
+  "query": "[\n  .[]\n  | { id } }\n]\n",
+  "input": "{}",
+  "null_input": false
+ },
+ {
+  "name": "query file not specified",
+  "query": "-f",
+  "input": "",
+  "null_input": false
+ },
+ {
+  "name": "json input error json with multibyte character in the error line",
+  "query": ".",
+  "input": "{\n  \"a\": \"This is a test for multibyte character in the error line of JSON. Since the first buffer size of JSON decoder is 512 (see encoding/json/stream.go) and the decoder stops reading bytes on encountering an error, the error line can be an invalid UTF-8 string even if the complete input is a valid UTF-8 string. Note that the error happens before 512 bytes and the corresponding line continues beyond 512 bytes with a multibyte character at the boundary.\",\n  \"abcde\": :★★★★★★★★★★★★★★★\n",
+  "null_input": false
+ },
+ {
+  "name": "module directory option parse error",
+  "query": "include \"m\"; f",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "module directory option without argument",
+  "query": "-L",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "search directory in query",
+  "query": "include \"m2\" { search: \"testdata/m2\" }; g",
+  "input": "0",
+  "null_input": false
+ },
+ {
+  "name": "module in query",
+  "query": "module {}; .",
+  "input": "",
+  "null_input": true
+ },
+ {
+  "name": "query with leading hyphen",
+  "query": "-.",
+  "input": "1",
+  "null_input": false
+ },
+ {
+  "name": "query with leading hyphen",
+  "query": "-j0",
+  "input": "0 1 2",
+  "null_input": false
+ },
+ {
+  "name": "query with leading hyphen after a flag",
+  "query": "-.",
+  "input": "1",
+  "null_input": false
+ }
+]

@@ -61,6 +61,8 @@ func withFunction(name string, minarity, maxarity int, iter bool, f func(any, []
 		panic(fmt.Sprintf("invalid arity for %q: %d, %d", name, minarity, maxarity))
 	}
 	argcount := 1<<(maxarity+1) - 1<<minarity
+	// lazy: custom functions are written against the native types.
+	f = withLazyPolicy(lazyMaterialize, f)
 	return func(c *compiler) {
 		if c.customFuncs == nil {
 			c.customFuncs = make(map[string]function)

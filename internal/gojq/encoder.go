@@ -71,6 +71,10 @@ func (e *encoder) encode(v any) {
 		e.encodeArray(v)
 	case map[string]any:
 		e.encodeObject(v)
+	case LazyArray: // lazy
+		e.encodeArray(v.Slice(0, v.Len()))
+	case LazyObject: // lazy
+		e.encodeObject(v.Map())
 	default:
 		panic(fmt.Sprintf("invalid type: %[1]T (%[1]v)", v))
 	}
