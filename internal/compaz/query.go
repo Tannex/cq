@@ -16,7 +16,6 @@ import (
 
 	"github.com/Tannex/cq/internal/events"
 	"github.com/Tannex/cq/internal/query"
-	"github.com/Tannex/cq/internal/record"
 	"github.com/Tannex/cq/internal/zosmf"
 )
 
@@ -26,7 +25,8 @@ const queryResultCap = 1_000_000
 // single-line expression input over a scrollable results pane. A query always
 // runs over the whole data set as one JSON array: the records are downloaded
 // once into the workspace's bulk cache (reused across runs while the same
-// records are browsed) and the expression is evaluated in a single pass.
+// records are browsed) and the expression is evaluated over them in place,
+// decoding only the members it reads (see package recordset).
 type queryPopup struct {
 	historyIndex       int
 	historyDraft       string
@@ -44,7 +44,7 @@ type queryPopup struct {
 	lines    []string // retained result lines, capped
 	matches  int      // all outputs emitted, including past the cap
 	errored  int      // records skipped for decode errors
-	searched int      // records decoded into the array input
+	searched int      // records read from the download
 
 	scroll    int
 	running   bool
@@ -493,7 +493,7 @@ func (m *Model) runQuery() tea.Cmd {
 	popup.elapsed = 0
 	popup.ctx, popup.cancel = context.WithCancel(context.Background())
 	if path := ws.bulkRecords(); path != "" {
-		return tea.Batch(popup.spin.Tick, evalQueryArrayFile(popup.ctx, compiled, ws.overlay, path, ws.profile, popup.generation, popup.resultCap))
+		return tea.Batch(popup.spin.Tick, evalQuery(popup.ctx, compiled, ws.overlay, ws.bulkRecordsFile, ws.profile, popup.generation, popup.resultCap))
 	}
 	streamer, ok := ws.browser.(zosmf.RecordStreamer)
 	if !ok {
@@ -559,65 +559,6 @@ func (m *Model) moveQueryHistory(delta int) {
 	} else {
 		popup.input.SetValue(m.queryHistory[next])
 		popup.input.CursorEnd()
-	}
-}
-
-// decodeQueryValue turns raw record bytes into the jq input value, counting
-// decode failures on the message instead of failing the search.
-func decodeQueryValue(ov *overlay, data []byte, msg *queryEvalMsg) (any, bool) {
-	decoded, err := ov.Decoder.DecodeDisplay(data)
-	if err != nil {
-		msg.Errors++
-		return nil, false
-	}
-	return decodedQueryValue(decoded.Value), true
-}
-
-// decodedQueryValue converts the decoder's ordered values to gojq's native
-// containers without serializing and reparsing every record. Scalars are already
-// valid UTF-8 strings or validated json.Number values; retaining them preserves
-// exact numeric tokens. Like JSON decoding, the last duplicate field wins.
-func decodedQueryValue(value record.Value) any {
-	switch value := value.(type) {
-	case record.Object:
-		object := make(map[string]any, len(value))
-		for _, member := range value {
-			object[member.Name] = decodedQueryValue(member.Value)
-		}
-		return object
-	case record.Array:
-		array := make([]any, len(value))
-		for i, item := range value {
-			array[i] = decodedQueryValue(item)
-		}
-		return array
-	default:
-		return value
-	}
-}
-
-// runQueryArray runs the expression once over the collected values, mapping
-// halt/cancel/errors onto the message. Evaluation is local work off the UI
-// loop and deliberately has no time budget: the popup context cancels it on
-// esc, close, and quit, which is the only bound a long-running expression
-// needs.
-func runQueryArray(ctx context.Context, compiled *query.Query, values []any, resultCap int, msg *queryEvalMsg) {
-	err := compiled.RunContext(ctx, values, func(out any) error {
-		msg.Matches++
-		if len(msg.Lines) < resultCap {
-			msg.Lines = append(msg.Lines, query.Marshal(out))
-		}
-		return nil
-	})
-	if err != nil {
-		var halt *query.Halt
-		switch {
-		case errors.As(err, &halt):
-		case ctx.Err() != nil:
-			msg.Canceled = true
-		default:
-			msg.LastError = err.Error()
-		}
 	}
 }
 

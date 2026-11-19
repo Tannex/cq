@@ -65,7 +65,7 @@ layout output. Records are fixed-length, derived from the copybook; pass
 | `-codepage` | Zowe profile `encoding`, else `cp037` | EBCDIC codepage (`cp037`, `cp277`, `cp1047`, `cp1140`, `cp1142`; `ascii`/`latin1` for testing) |
 | `-format` | `auto` | copybook source format: `fixed` (cols 7–72), `free`, `auto` |
 | `-record` | first | which 01-level record to decode |
-| `-q` | — | jq expression (full jq via [gojq](https://github.com/itchyny/gojq)) |
+| `-q` | — | jq expression (full jq via a fork of [gojq](https://github.com/itchyny/gojq), see `internal/gojq`) |
 | `-r` | off | with `-q`, print raw strings instead of JSON |
 | `-where` | — | keep only records matching a level-88 condition; `!`/`not` negates; repeat to AND |
 | `-max` | all | decode at most N records |
@@ -122,9 +122,12 @@ results.
 The popup evaluates each query against one array of decoded records from the
 whole data set/member. `length`, `unique`, sorting, and grouping therefore operate
 across all successfully decoded records. Raw records are cached in a temporary
-file for repeated queries; each run decodes that file into memory. Decoded
-objects, aggregate operations, and retained result text can use substantially
-more RAM than the raw data, so memory use still grows with the input and output.
+file for repeated queries and queried in place: the file is mapped into memory
+(read into memory on Windows) and a record's fields are decoded only when an
+expression reads them, so a filter on one field costs one field per record.
+Expressions of the form `.[] | …` are evaluated on all cores. Memory grows with
+what an expression keeps — the values it collects, sort and group keys, and
+retained result text — not with the size of the data set.
 
 Every z/OSMF list/read request is capped at `2×` the visible rows; cached rows
 persist per screen so paging back never refetches. `e` opens a sequential
@@ -209,14 +212,16 @@ field offsets. See `SOURCES.md` there for origins and license text.
 
 ## Query benchmarks
 
-Compa/z benchmarks generate 10,000 and 100,000 mixed COBOL records (192 bytes
-each), including nested groups, OCCURS, packed decimals, and 20-digit integers.
-They measure cached-file decoding, jq evaluation, and result serialization;
-host downloads and UI rendering are excluded. Fixtures and expected aggregate
-results are defined in `internal/compaz/query_benchmark_test.go`.
+Compa/z benchmarks generate 10,000, 100,000 and 1,000,000 mixed COBOL records
+(192 bytes each), including nested groups, OCCURS, packed decimals, and 20-digit
+integers. `BenchmarkQueryArrayFile` measures jq evaluation over the cached file
+and result serialization; `BenchmarkQueryIndex` measures the one-time record
+index a new download or copybook needs first. Host downloads and UI rendering
+are excluded. Fixtures and expected aggregate results are defined in
+`internal/compaz/query_benchmark_test.go`.
 
 ```sh
-go test ./internal/compaz -run '^$' -bench 'Benchmark(DecodeQueryValue|QueryArrayFile)' -benchmem -benchtime=200ms -count=3
+go test ./internal/compaz -run '^$' -bench 'Benchmark(DecodeQueryValue|QueryIndex|QueryArrayFile)' -benchmem -benchtime=200ms -count=3
 
 # Peak process RAM on Linux, excluding compilation:
 go test -c -o /tmp/cq-query.test ./internal/compaz

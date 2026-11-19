@@ -1,0 +1,519 @@
+package recordset
+
+import (
+	"bytes"
+	"context"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/Tannex/cq/internal/copybook"
+	"github.com/Tannex/cq/internal/decode"
+	"github.com/Tannex/cq/internal/layout"
+	"github.com/Tannex/cq/internal/query"
+	"github.com/Tannex/cq/internal/record"
+)
+
+const fixedCopybook = `01 TRANSACTION-RECORD.
+ 05 ID PIC 9(8).
+ 05 NAME PIC X(12).
+ 05 REGION PIC X(4).
+ 05 STATUS PIC X.
+ 05 AMOUNT PIC 9(5)V99.
+ 05 BALANCE PIC S9(5)V99 COMP-3.
+ 05 CUSTOMER.
+  10 CITY PIC X(10).
+  10 TIER PIC 9(2).
+ 05 ITEMS OCCURS 2 TIMES.
+  10 CODE PIC X(4).
+  10 QUANTITY PIC 9(3).
+`
+
+const variableCopybook = `01 ORDER-RECORD.
+ 05 ID PIC 9(6).
+ 05 KIND PIC X(2).
+ 05 CNT PIC 9.
+ 05 LINES OCCURS 0 TO 3 TIMES DEPENDING ON CNT.
+  10 SKU PIC X(3).
+  10 QTY PIC 9(2).
+`
+
+func testView(t testing.TB, source string) *record.QueryView {
+	t.Helper()
+	items, err := copybook.Parse(source, copybook.FormatFree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recs, err := layout.Build(items)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cm, err := decode.Codepage("latin1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoder, err := record.NewDecoder(recs[0], cm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return decoder.QueryView()
+}
+
+func fixedRecord(i int) []byte {
+	status := 'I'
+	if i%10 == 0 {
+		status = 'A'
+	}
+	// Records repeat every 5000 ids apart from the id itself, so sorts,
+	// groups and uniques have real ties to keep stable.
+	k := i % 5000
+	data := fmt.Appendf(nil, "%08d%-12sR%03d%c%07d", i, fmt.Sprintf("Cust %05d", k), k%4, status, k%700*125)
+	data = append(data, 0x00, 0x12, byte(k%10)<<4|byte(k%7), 0x4c|byte(k%2)) // 4 bytes: S9(5)V99 COMP-3
+	data = fmt.Appendf(data, "%-10s%02d", []string{"Oslo", "Bergen", "Aarhus"}[k%3], k%5)
+	for j := range 2 {
+		data = fmt.Appendf(data, "IT%02d%03d", (k+j)%20, (k*(j+1))%1000)
+	}
+	return data
+}
+
+func variableRecord(i int) []byte {
+	count := i % 4
+	data := fmt.Appendf(nil, "%06d%-2s%d", i, []string{"A", "B", "C"}[i%3], count)
+	for j := range count {
+		data = fmt.Appendf(data, "S%02d%02d", (i+j)%50, j+1)
+	}
+	return data
+}
+
+func writeFrames(t testing.TB, records [][]byte) string {
+	t.Helper()
+	var file bytes.Buffer
+	for _, data := range records {
+		var header [4]byte
+		binary.BigEndian.PutUint32(header[:], uint32(len(data)))
+		file.Write(header[:])
+		file.Write(data)
+	}
+	path := filepath.Join(t.TempDir(), "frames.records")
+	if err := os.WriteFile(path, file.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func openSet(t testing.TB, path string, view *record.QueryView) *Set {
+	t.Helper()
+	set, err := Open(context.Background(), path, view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = set.Close() })
+	return set
+}
+
+// reference evaluates the expression the way the console did before lazy
+// records: over every decodable record fully decoded into one array.
+func reference(t testing.TB, view *record.QueryView, records [][]byte, expr string, lineCap int) Result {
+	t.Helper()
+	compiled, err := query.Compile(expr)
+	if err != nil {
+		t.Fatalf("%s: %v", expr, err)
+	}
+	var values []any
+	for _, data := range records {
+		if view.Check(data) == nil {
+			values = append(values, view.Value(data))
+		}
+	}
+	var result Result
+	err = compiled.RunContext(context.Background(), values, func(out any) error {
+		result.Matches++
+		if len(result.Lines) < lineCap {
+			result.Lines = append(result.Lines, query.Marshal(out))
+		}
+		return nil
+	})
+	finish(context.Background(), &result, err)
+	return result
+}
+
+func sameResult(got, want Result) string {
+	if got.Matches != want.Matches {
+		return fmt.Sprintf("matches = %d, want %d", got.Matches, want.Matches)
+	}
+	if (got.Err == nil) != (want.Err == nil) || got.Err != nil && got.Err.Error() != want.Err.Error() {
+		return fmt.Sprintf("error = %v, want %v", got.Err, want.Err)
+	}
+	if got.Canceled != want.Canceled {
+		return fmt.Sprintf("canceled = %v, want %v", got.Canceled, want.Canceled)
+	}
+	if !reflect.DeepEqual(got.Lines, want.Lines) {
+		for i := range min(len(got.Lines), len(want.Lines)) {
+			if got.Lines[i] != want.Lines[i] {
+				return fmt.Sprintf("line %d = %s, want %s", i, got.Lines[i], want.Lines[i])
+			}
+		}
+		return fmt.Sprintf("%d lines, want %d", len(got.Lines), len(want.Lines))
+	}
+	return ""
+}
+
+var fixedExpressions = []string{
+	`length`,
+	`.[]`,
+	`.[] | select(.STATUS == "A")`,
+	`.[] | select(.STATUS == "A") | {ID, NAME, AMOUNT, BALANCE}`,
+	`.[] | select(.ID == 12345)`,
+	`.[] | select(.AMOUNT > 800) | .ID`,
+	`.[] | select(.BALANCE < 0) | [.ID, .BALANCE]`,
+	`.[] | select(.CUSTOMER.TIER == 3 and .ITEMS[1].QUANTITY > 990) | .ID`,
+	`.[] | select(.NAME | test("0000[12]$")) | "\(.ID) \(.NAME) \(.CUSTOMER.CITY)"`,
+	`.[] | select(.MISSING != null)`,
+	`.[] | select(.ID % 4001 == 0) | to_entries | length`,
+	`.[] | select(.ID % 4001 == 0) | keys`,
+	`.[] | select(.ID % 4001 == 0) | del(.ITEMS) | .NEW = .ID + 1`,
+	`.[] | select(.ID % 4001 == 0) | [., .] | unique | length`,
+	`.[] | select(.ID % 4001 == 0) | tojson | fromjson | .CUSTOMER`,
+	`.[] | select(.ID % 4001 == 0) | [paths] | length`,
+	`.[] | select(.ID % 4001 == 0) | with_entries(select(.value | type == "string"))`,
+	`.[] | .ITEMS[] | select(.QUANTITY == 999) | .CODE`,
+	`.[] | if .ID == 15000 then error("boom at \(.ID)") else empty end`,
+	`.[] | if .ID > 15000 then error("late") elif .ID % 5000 == 0 then .ID else empty end`,
+	`.[] | if .ID == 9000 then halt else select(.ID % 3000 == 0) | .ID end`,
+	`.[] | if .ID == 9000 then halt_error else empty end`,
+	`.[] | .NAME | ascii_downcase | select(startswith("cust 0000"))`,
+	`.[] | try (if .ID % 6000 == 0 then error(.) else empty end) catch .ID`,
+	`.[] | .ID as $id | select($id % 7000 == 0) | [$id, (.NAME | length)]`,
+	`.[] | reduce .ITEMS[] as $i (0; . + $i.QUANTITY) | select(. > 1990)`,
+	`.[] | label $done | (.ITEMS[] | if .QUANTITY > 995 then ., break $done else empty end)`,
+	`.[] | first(.ITEMS[] | select(.QUANTITY > 998)) | .CODE`,
+	`.[] | limit(1; .ITEMS[] | select(.QUANTITY > 998))`,
+	`.[0]`, `.[-1].ID`, `.[100:103] | map(.ID)`, `.[:2]`, `.[19998:] | map(.ID)`, `first`, `last | .NAME`, `.[5].CUSTOMER.CITY`,
+	`first(.[] | select(.STATUS == "A" and .ID > 100)) | .ID`,
+	`limit(3; .[] | select(.REGION == "R002")) | .ID`,
+	`[limit(3; .[])] | map(.ID)`,
+	`isempty(.[] | select(.ID == 77))`,
+	`any(.[]; .ID == 19999)`, `all(.[]; .ID < 20000)`,
+	`map(.REGION) | unique`,
+	`map(.AMOUNT) | add`,
+	`[.[] | .BALANCE] | min, max`,
+	`map(select(.STATUS == "A")) | length`,
+	`map(.CUSTOMER.CITY) | unique | length`,
+	`group_by(.REGION) | map({region: .[0].REGION, count: length})`,
+	`group_by(.CUSTOMER.CITY) | map([.[0].CUSTOMER.CITY, length, (map(.AMOUNT) | add)])`,
+	`group_by(.STATUS) | map(.[0:2] | map(.ID))`,
+	`sort_by(.AMOUNT) | .[0:3] | map(.ID)`,
+	`sort_by(.AMOUNT, .NAME) | .[-3:] | map([.ID, .AMOUNT])`,
+	`sort_by(.NAME) | .[0].ID`,
+	`sort_by(.CUSTOMER) | .[0:2] | map(.ID)`,
+	`sort | .[0:2] | map(.ID)`,
+	`sort | .[0]`,
+	`unique | length`,
+	`unique_by(.NAME) | length`,
+	`unique_by(.CUSTOMER) | map(.CUSTOMER.TIER) | length`,
+	`unique_by(.REGION) | map(.ID)`,
+	`min_by(.AMOUNT) | .ID`, `max_by(.BALANCE) | [.ID, .BALANCE]`, `min | .ID`, `max | .ID`,
+	`reduce .[] as $r ({}; .[$r.REGION] += 1)`,
+	`reduce .[] as $r (0; . + $r.AMOUNT)`,
+	`[foreach .[] as $r (0; . + 1; select(. % 6000 == 0) | [., $r.ID])]`,
+	`. as $all | .[100] | [.ID, ($all | length)]`,
+	`.[3] == .[3]`, `.[3] == .[5003]`, `.[3] < .[4]`, `.[3] == (.[3] | tojson | fromjson)`, `[.[3], .[5003]] | unique | length`,
+	`[.[1], .[5001], .[1]] | group_by(.) | map(length)`,
+	`index(.[7])`, `[.[] | select(.ID < 3)] | indices(.[1])`, `.[0:3] | contains([{"REGION": "R001"}])`,
+	`.[0:3] | map(has("NAME"))`, `.[0:2] | add | keys | length`, `.[0:2] | map(keys) | add | unique | length`,
+	`.[0] + .[1] | .ID`, `.[0] * {CUSTOMER: {EXTRA: 1}} | .CUSTOMER`, `.[0:2] - .[0:1] | map(.ID)`, `.[0:4] | INDEX(.ID) | keys`,
+	`.[0:3] | map(.NAME |= ascii_downcase) | map(.NAME)`, `.[0].NAME |= "x" | .[0:2] | map(.NAME)`, `del(.[1:]) | map(.ID)`,
+	`.[0:2] | to_entries | map(.value.ID)`, `.[0:2] | tostream | select(length == 2) | .[0] | join("/")?`, `path(.[2].CUSTOMER.CITY)`,
+	`[paths] | length`, `.[0:2] | [paths(scalars)] | length`, `getpath([4, "ITEMS", 1, "CODE"])`, `.[0:2] | walk(if type == "number" then 0 else . end) | .[1].ID`,
+	`.[0:3] | flatten | length`, `[.[0:2], .[2:4]] | transpose | map(map(.ID))`, `.[0:3] | @json | length`, `.[0] | @text | length`,
+	`.[0:2] | map(tostring | length)`, `.[0:3] | map(type)`, `type`, `.[0] | type`, `.[0:2] | reverse | map(.ID)`, `tojson | length`,
+	`.[0] | error`, `.[0] | .[0]`, `.[0] | implode`, `.[0] - 1`, `.NAME`, `.[0] | .NAME.x`, `.[] | .NAME.x`, `.[] | error(.ID)`, `keys | length`,
+	`.["a"]`, `.[0] | has(0)`, `.[0] | join(",")`, `.[0] | @csv`, `ascii_downcase`, `.[0] | test("a")`, `.[] | {(.CUSTOMER): 1}`, `.[true]`,
+	// Staged shapes. The set has 20000 records, so chunks start at ids 0,
+	// 8192 and 16384; errors are placed in late chunks, on chunk edges, and
+	// in two chunks at once with different messages so the earliest has to
+	// win.
+	`map(.ID)`, `map(.ID) | add`, `map(.)`, `map(.) | .[12345].ID`, `map(.ID, .REGION) | .[-4:]`, `map(.ITEMS[] | .CODE) | length`,
+	`map(select(.ID % 997 == 0) | .ID)`, `map(empty)`, `map(.ID) | map(. * 2) | add`, `map(.ID) | limit(3; .[])`, `map(.) | path(.[0])`,
+	`map(if .ID == 17000 then error("late \(.ID)") else .ID end) | length`,
+	`map(if .ID == 17000 then error("second") elif .ID == 9000 then error("first") else .ID end)`,
+	`map(if .ID == 17001 then error({id: .ID}) elif .ID == 9001 then error([.ID]) else .ID end)`,
+	`map(if .ID == 8191 then error("edge") elif .ID == 8192 then error("next") else .ID end)`,
+	`map(if .ID == 9000 then halt else .ID end)`, `map(if .ID == 17000 then error("x") elif .ID == 12000 then halt_error else .ID end)`,
+	`map(if .ID == 3000 then error("early") elif .ID == 17000 then ("late" | halt_error) else .ID end)`,
+	`map(.NAME.x)`, `map(.NAME.x?) | length`, `map((.NAME.x)?) | length`, `map(try .NAME.x catch "c") | unique`,
+	`map(try (if .ID % 6000 == 0 then error("e\(.ID)") else empty end) catch .)`, `map(.ID | tostring | tonumber) | add`,
+	`map(label $f | .ITEMS[] | ., break $f) | length`, `map(first(.ITEMS[])) | length`, `map(limit(0; .ID)) | length`,
+	`map(reduce .ITEMS[] as $i (0; . + $i.QUANTITY)) | max`, `map(path(.ITEMS[0].CODE)) | unique`, `map($ENV | length) | unique`,
+	`map(.ID) | .[] | select(. % 1000 == 0)`, `map(.ID) | error("rest failed \(length)")`,
+	`map(.ID) | .[] | if . == 15000 then error("rest late") else select(. % 2500 == 0) end`, `map(.ID) | .[] | if . == 2000 then halt else . end`,
+	`[.[] | .ID] | add`, `[.[] | select(.STATUS == "A") | .ID] | length`, `[.[] | .AMOUNT]`, `[.[] | .ID, .NAME] | length`,
+	`[.[] | if .ID == 16500 then error("arr") elif .ID == 16499 then error("arr first") else . end] | length`,
+	`[.[] | .ID] | . as [$a, $b] | [$a, $b]`, `[.[] | .ID] | .[] | select(. % 999 == 0)`,
+	`group_by(.ID % 3) | map(length)`, `group_by(.ITEMS[].CODE) | length`, `group_by(empty) | map(length)`, `group_by(.ID % 3, .REGION) | length`,
+	`group_by(if .ID == 17000 then error("g2") elif .ID == 9000 then error("g1") else .REGION end)`,
+	`group_by(if .ID == 12000 then halt else .REGION end)`, `group_by(.REGION) | .[] | .[] | .ID | select(. % 500 == 0)`,
+	`sort_by(.BALANCE) | map(.ID) | .[0:5]`, `sort_by(.BALANCE, .ID) | .[-1].ID`, `sort_by(-.ID) | .[0].ID`, `sort_by(.NAME.x)`,
+	`sort_by(.NAME.x?) | .[0].ID`, `sort_by(.ID) | .[] | .ID | select(. % 3000 == 0)`, `sort_by(.REGION) | first | .ID`,
+	`sort_by(.AMOUNT) | error("rest \(length)")`, `sort_by(if .ID == 19999 then error("last") else .AMOUNT end)`, `sort_by(.) | .[0].ID`,
+	`unique_by(.CUSTOMER.CITY) | map(.ID)`, `unique_by(.ITEMS[].CODE) | length`, `unique_by(if .ID == 19999 then error("u") else .REGION end)`,
+	`min_by(.BALANCE) | .ID`, `max_by(.ID % 7000) | .ID`, `min_by(empty) | .ID`, `max_by(.ITEMS[].QUANTITY) | .ID`, `min_by(.ID) | .ID`,
+	`min_by(if .ID == 8191 then error("edge") else .ID end)`, `max_by(if .ID == 16383 then error("e3") elif .ID == 8192 then error("e2") else .ID end)`,
+	`max_by(if .ID == 9999 then halt_error else .ID end)`, `max_by(try error(.ID) catch .) | .ID`,
+	// Near misses: same parts, but a shape that must not be staged.
+	`def map(f): [.[] | [f]]; map(.ID) | .[0:2]`, `def map(f; g): [.[] | f, g]; map(.ID; 2) | length`, `def f: .ID; map(f) | add`,
+	`.[] as $x | $x.ID | select(. % 5000 == 0)`, `[.[] as $x | $x.ID] | length`, `.[0:5] | map(.ID)`, `{a: map(.ID) | length}`,
+	`first(map(.ID)[])`, `map(.ID)[3]`, `map(.ID)? | length`, `(map(.ID)) | length`, `map(.ID) as $x | $x | length`, `map(.ID), length`,
+	`[.[]] | length`, `[.[]?] | length`, `try map(.NAME.x) catch .`, `label $l | map(.ID) | length`, `reduce map(.ID)[] as $i (0; . + $i)`,
+	`map(.ID) | length, (map(.REGION) | unique)`, `limit(1; group_by(.REGION)) | length`,
+	// The variable that carries the staged values, bound by the user.
+	`. as $__cq_each | map(.ID) | length`, `map(. as $__cq_each | $__cq_each.ID) | add`, `map(.ID) | . as $__cq_each | $__cq_each | length`,
+	`sort_by(.ID) | . as $__cq_each | $__cq_each[0].ID`, `group_by(. as $__cq_each | $__cq_each.REGION) | length`,
+	// Groups and OCCURS tables below a record, in every role.
+	`.[] | select(.ID % 997 == 0) | .CUSTOMER`, `.[] | select(.ID % 997 == 0) | .ITEMS`, `.[] | select(.ID % 997 == 0) | .ITEMS[1]`,
+	`.[] | select(.ID % 997 == 0) | [.ITEMS[-1].CODE, .ITEMS[-2].QUANTITY, .ITEMS[-3], .ITEMS[2], .ITEMS[5].CODE, .CUSTOMER.MISSING]`,
+	`.[] | select(.ID % 997 == 0) | [.ITEMS[1:], .ITEMS[:1], .ITEMS[-1:], .ITEMS[5:9], .ITEMS[0:2]]`,
+	`.[] | select(.ID % 997 == 0) | [.ITEMS[] | .CODE], [.CUSTOMER[]], [.ITEMS[0][]]`,
+	`.[] | select(.ID % 997 == 0) | [(.CUSTOMER | length), (.ITEMS | length), (.ITEMS[0] | length), (.ITEMS[0].CODE | length)]`,
+	`.[] | select(.ID % 997 == 0) | [(.CUSTOMER | keys), (.ITEMS | keys), (.ITEMS[1] | keys)]`,
+	`.[] | select(.ID % 997 == 0) | [(.CUSTOMER | has("TIER")), (.CUSTOMER | has("X")), (.ITEMS | has(1)), (.ITEMS | has(2)), (.ITEMS[0] | has("CODE"))]`,
+	`.[] | select(.ID % 997 == 0) | [(.CUSTOMER | to_entries), (.ITEMS | to_entries | map(.key)), (.ITEMS[1] | to_entries)]`,
+	`.[] | select(.ID % 997 == 0) | [(.CUSTOMER | type), (.ITEMS | type), (.ITEMS[0] | type), (.ITEMS[0].QUANTITY | type)]`,
+	`.[] | select(.ID % 997 == 0) | [.CUSTOMER == .CUSTOMER, .ITEMS[0] == .ITEMS[1], .ITEMS[0] < .ITEMS[1], .ITEMS == .ITEMS, .ITEMS[0] == .CUSTOMER, .CUSTOMER < .ITEMS]`,
+	`.[] | select(.ID % 997 == 0) | [.CUSTOMER == {CITY: .CUSTOMER.CITY, TIER: .CUSTOMER.TIER}, .ITEMS == [.ITEMS[0], .ITEMS[1]], .ITEMS[0] != {}, .CUSTOMER > null]`,
+	`[.[3].CUSTOMER == .[5003].CUSTOMER, .[3].ITEMS == .[5003].ITEMS, .[3].CUSTOMER < .[4].CUSTOMER, .[3].ITEMS[1] > .[4].ITEMS[0], .[7].ITEMS < .[8].ITEMS, .[9].ITEMS[0] == .[10].ITEMS[1]]`,
+	`.[] | select(.ITEMS[0].CODE == .ITEMS[1].CODE or .ITEMS[0] == .ITEMS[1]) | .ID`, `.[] | select(.ITEMS[1].QUANTITY == 2 * .ITEMS[0].QUANTITY) | .ID`,
+	`map(.CUSTOMER) | unique | length`, `map(.ITEMS) | unique | length`, `map(.ITEMS[]) | unique | length`, `map(.ITEMS[0]) | sort | .[0:3]`,
+	`sort_by(.ITEMS) | .[0:3] | map(.ID)`, `sort_by(.CUSTOMER, .ID) | .[-3:] | map(.ID)`, `sort_by(.ITEMS[1]) | .[-3:] | map(.ID)`, `sort_by(.CUSTOMER, .ITEMS) | .[0:3] | map(.ID)`,
+	`group_by(.CUSTOMER) | map([.[0].CUSTOMER, length]) | .[0:5]`, `group_by(.ITEMS[1]) | length`, `group_by(.ITEMS) | map(length) | max`,
+	`unique_by(.ITEMS) | length`, `unique_by(.CUSTOMER) | map(.CUSTOMER)`, `min_by(.ITEMS) | .ID`, `max_by(.CUSTOMER) | .ID`, `min_by(.ITEMS[1]) | .ID`, `max_by(.ITEMS) | .ITEMS`,
+	`map(.ITEMS) | sort | .[0:2]`, `map(.CUSTOMER) | max`, `map(.ITEMS) | min`, `sort | .[-2:] | map(.ID)`, `unique | .[0:2] | map(.ID)`, `.[0:50] | sort | map(.ID)`, `.[0:6000] | unique | length`,
+	`[.[0:3][] | .ITEMS] | flatten | length`, `[.[0:3][] | .ITEMS] | flatten(1) | map(.CODE)`, `[.[0:2][] | .ITEMS] | transpose`, `[.[0:3][] | .ITEMS] | add`, `[.[0:3][] | .CUSTOMER] | add`, `.[0].ITEMS | add`,
+	`.[0].CUSTOMER | contains({CITY: "Oslo"})`, `.[0].ITEMS | contains([{CODE: "IT00"}])`, `[.[0:3][] | .ITEMS | inside([{CODE: "IT01", QUANTITY: 1}, {CODE: "IT00", QUANTITY: 0}, {CODE: "IT02", QUANTITY: 4}])]`,
+	`.[1] | [paths]`, `.[1] | [paths(type == "number")]`, `.[1].ITEMS | [paths]`, `path(.[1].ITEMS[1].QUANTITY)`, `[path(.[1].ITEMS[])]`, `[path(.[1].CUSTOMER[])]`, `[path(.[1] | ..)] | length`, `[path(.[1].ITEMS[1:][0])]`,
+	`getpath([1, "ITEMS", 0])`, `getpath([1, "CUSTOMER", "TIER"])`, `getpath([1, "ITEMS", 7, "CODE"])`, `getpath([1, "ITEMS", -1])`, `[.[1] | getpath(["ITEMS", 0, "CODE"], ["CUSTOMER"])]`,
+	`.[1] | setpath(["ITEMS", 1, "QUANTITY"]; 7) | .ITEMS`, `.[1] | setpath(["CUSTOMER", "NEW"]; 1) | .CUSTOMER`, `.[1] | del(.ITEMS[0]) | .ITEMS`, `.[1] | del(.CUSTOMER.CITY)`, `.[1] | delpaths([["ITEMS", 1, "CODE"]]) | .ITEMS`,
+	`.[1] | .ITEMS[1].QUANTITY |= . + 1 | .ITEMS`, `.[1] | .CUSTOMER.TIER += 10 | .CUSTOMER`, `.[1] | .ITEMS |= map(.CODE) | .ITEMS`, `.[0:2] | map(.ITEMS[] |= .QUANTITY) | map(.ITEMS)`, `.[1] | .ITEMS[5] = 1 | .ITEMS | length`,
+	`.[1] | .ITEMS[0] |= with_entries(.key |= ascii_downcase) | .ITEMS`, `.[1:3] | map(.CUSTOMER |= keys)`, `.[1] | to_entries | map(select(.value | type == "object")) | from_entries`,
+	`.[1] | [(.CUSTOMER | tojson), (.ITEMS | tostring), (.ITEMS[0] | @json), (.ITEMS | tojson | fromjson == .), (.CUSTOMER | @text)]`,
+	`.[1] | .. | numbers`, `.[1].ITEMS | .. | strings`, `.[1] | [paths(scalars)] | length`, `.[1].ITEMS | tostream | select(length == 2)`, `.[1] | [.. | objects | length]`,
+	`.[1].CUSTOMER | with_entries(.value |= tostring)`, `.[1].ITEMS | map(to_entries)`, `.[1].ITEMS | first, last`, `.[1].ITEMS | reverse`, `.[1].ITEMS | index(.[1])`, `.[1].ITEMS | any(.QUANTITY > 0)`, `.[1] | .ITEMS | indices(.[0])`,
+	`.[1] | {(.CUSTOMER.CITY): .ITEMS[0]}`, `.[1] | [.CUSTOMER, .ITEMS] | tojson`, `.[1].CUSTOMER * {TIER: 0}`, `.[1].ITEMS - [.[1].ITEMS[0]]`, `.[1].ITEMS + .[2].ITEMS | length`, `.[1].CUSTOMER + .[2].CUSTOMER`,
+	`.[1].CUSTOMER[0]`, `.[1].ITEMS["CODE"]`, `.[1].ITEMS.CODE`, `.[1].ITEMS[0][0]`, `.[1].CUSTOMER.TIER.X`, `.[1].CUSTOMER | .[1:2]`, `.[1].CUSTOMER - 1`, `.[1].ITEMS | implode`,
+	`.[1].CUSTOMER | join(",")`, `.[1].ITEMS | @csv`, `.[1].ITEMS | .[true]`, `.[1].CUSTOMER | has(0)`, `.[1].ITEMS | has("a")`, `.[] | .ITEMS | error`, `.[1].CUSTOMER | error`, `.[1].ITEMS | test("a")`,
+	`.[1].ITEMS[0] | ltrimstr("x")`, `.[1].ITEMS | .[{}]`, `.[1].CUSTOMER | keys[0] as $k | .[$k] | .[0]`, `.[] | .CUSTOMER | .[.TIER]`, `.[] | .ITEMS[.ID]`,
+}
+
+func TestSetMatchesFullDecode(t *testing.T) {
+	view := testView(t, fixedCopybook)
+	records := make([][]byte, 20000)
+	for i := range records {
+		records[i] = fixedRecord(i)
+	}
+	set := openSet(t, writeFrames(t, records), view)
+	if set.Len() != len(records) || set.Skipped() != 0 || set.offsets != nil {
+		t.Fatalf("fixed set: len=%d skipped=%d explicit offsets=%v", set.Len(), set.Skipped(), set.offsets != nil)
+	}
+	for _, lineCap := range []int{1 << 20, 7} {
+		for _, expr := range fixedExpressions {
+			compiled, err := query.Compile(expr)
+			if err != nil {
+				t.Fatalf("%s: %v", expr, err)
+			}
+			want := reference(t, view, records, expr, lineCap)
+			for _, workers := range []int{1, 4} {
+				Workers = func(int) int { return workers }
+				got := set.Query(context.Background(), compiled, lineCap)
+				if diff := sameResult(got, want); diff != "" {
+					t.Errorf("%s (workers=%d, cap=%d): %s", expr, workers, lineCap, diff)
+				}
+			}
+		}
+	}
+}
+
+var variableExpressions = []string{
+	`length`, `.[]`, `.[] | select(.CNT == 3) | .LINES | map(.QTY) | add`, `.[] | select(.KIND == "B") | {ID, n: (.LINES | length)}`,
+	`.[] | .LINES[] | select(.SKU == "S07") | .QTY`, `map(.LINES | length) | add`, `group_by(.CNT) | map(length)`, `unique_by(.LINES) | length`,
+	`sort_by(.LINES) | .[0:2] | map(.ID)`, `sort | .[-1].ID`, `unique | length`, `.[3] == .[3]`, `[.[1], .[2]] | sort | map(.ID)`,
+	`map(select(.LINES | length == 0)) | length`, `.[] | select(.ID == 20123)`, `.[20000:] | map(.ID) | length`, `min_by(.LINES) | .ID`,
+	`.[] | if .ID == 17001 then error("stop") else empty end`, `reduce .[] as $r ({}; .[$r.KIND] += ($r.LINES | length))`,
+	`map(.ID) | length`, `map(.LINES[].SKU) | unique | length`, `[.[] | .LINES | length] | add`, `sort_by(.CNT, -.ID) | .[0:3] | map(.ID)`,
+	`group_by(.KIND) | map([.[0].KIND, length])`, `unique_by(.LINES | length) | map(.ID)`, `max_by(.LINES | map(.QTY) | add) | .ID`,
+	`map(if .ID == 18000 then error("v2") elif .ID == 10000 then error("v1") else .ID end)`, `sort_by(.LINES[0].QTY) | .[0].ID`,
+	// The DEPENDING ON table below a record, in every role.
+	`.[] | select(.ID % 991 == 0) | [.LINES, (.LINES | length), .LINES[-1], .LINES[0].SKU, .LINES[3], .LINES[1:], .LINES[-5]]`,
+	`.[] | select(.ID % 991 == 0) | [(.LINES | keys), (.LINES | has(2)), (.LINES | type), (.LINES | to_entries | length), (.LINES[0] | keys?)]`,
+	`.[] | select(.CNT > 0 and .ID % 499 == 0) | [.LINES[0] == .LINES[-1], .LINES[0] < .LINES[-1], (.LINES[-1] | length), [.LINES[][]]]`,
+	`[.[5].LINES == .[9].LINES, .[5].LINES < .[6].LINES, .[3].LINES > .[7].LINES, .[4].LINES == [], .[1].LINES == .[5].LINES]`,
+	`.[] | select(.LINES[0] == .LINES[1]) | .ID`, `.[] | select(.LINES[-1].QTY == 3) | .LINES[0].SKU`,
+	`group_by(.LINES) | length`, `sort_by(.LINES[0]) | .[0:3] | map(.ID)`, `unique_by(.LINES[-1]) | length`, `max_by(.LINES) | .ID`, `map(.LINES) | unique | length`, `[.[] | .LINES[]] | unique | length`,
+	`.[3] | .LINES |= map(.QTY)`, `.[3] | del(.LINES[0])`, `.[3] | [paths]`, `getpath([3, "LINES", 0, "SKU"])`, `.[3].LINES | tojson`, `[.[0:5][] | .LINES] | flatten | length`,
+	`[.[0:9][] | .LINES] | add | length`, `.[3].LINES | contains([{SKU: "S03"}])`, `.[3].LINES["x"]`, `.[3].LINES[0][0]`, `.[3].LINES.SKU`, `.[4].LINES[0]`, `.[4].LINES | first`,
+}
+
+func TestVariableLengthSetSkipsUndecodableRecords(t *testing.T) {
+	view := testView(t, variableCopybook)
+	var records [][]byte
+	for i := range 21000 {
+		records = append(records, variableRecord(i))
+		switch i % 2500 {
+		case 7:
+			records = append(records, []byte("short")) // shorter than the fixed prefix
+		case 9:
+			records = append(records, []byte("000009A 9")) // counter is not within 0..3
+		case 11:
+			records = append(records, []byte("000011A 3S0101")) // counter promises more lines than follow
+		}
+	}
+	set := openSet(t, writeFrames(t, records), view)
+	if set.Frames() != len(records) || set.Skipped() != 27 || set.Len() != len(records)-27 {
+		t.Fatalf("frames=%d skipped=%d len=%d, want %d frames with 27 skipped", set.Frames(), set.Skipped(), set.Len(), len(records))
+	}
+	for _, expr := range variableExpressions {
+		compiled, err := query.Compile(expr)
+		if err != nil {
+			t.Fatalf("%s: %v", expr, err)
+		}
+		want := reference(t, view, records, expr, 1<<20)
+		for _, workers := range []int{1, 3} {
+			Workers = func(int) int { return workers }
+			if diff := sameResult(set.Query(context.Background(), compiled, 1<<20), want); diff != "" {
+				t.Errorf("%s (workers=%d): %s", expr, workers, diff)
+			}
+		}
+	}
+}
+
+// A file whose frames all share a size but where one record cannot be
+// decoded has to leave the implicit fixed-stride addressing.
+func TestUniformFramesWithAnUndecodableRecord(t *testing.T) {
+	view := testView(t, variableCopybook)
+	records := [][]byte{[]byte("000001A 1S0101"), []byte("000002B 1S0202"), []byte("000003C 9S0303"), []byte("000004A 1S0404")}
+	set := openSet(t, writeFrames(t, records), view)
+	if set.Len() != 3 || set.Skipped() != 1 {
+		t.Fatalf("len=%d skipped=%d, want 3 and 1", set.Len(), set.Skipped())
+	}
+	compiled, _ := query.Compile(`map(.ID)`)
+	got := set.Query(context.Background(), compiled, 10)
+	if len(got.Lines) != 1 || got.Lines[0] != `[1,2,4]` {
+		t.Fatalf("ids = %v", got.Lines)
+	}
+}
+
+func TestOpenRejectsDamagedFrames(t *testing.T) {
+	view := testView(t, variableCopybook)
+	good := []byte{0, 0, 0, 9, '0', '0', '0', '0', '0', '1', 'A', ' ', '0'}
+	for name, tc := range map[string]struct {
+		data []byte
+		want string
+	}{
+		"truncated header": {append(append([]byte{}, good...), 0, 0), "truncated record frame header"},
+		"truncated data":   {append(append([]byte{}, good...), 0, 0, 0, 9, 'x'), "record frame declares 9 bytes but is truncated"},
+		"oversized frame":  {[]byte{0xff, 0xff, 0xff, 0xff}, "exceeds the 16777216 byte bound"},
+	} {
+		path := filepath.Join(t.TempDir(), "damaged.records")
+		if err := os.WriteFile(path, tc.data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Open(context.Background(), path, view); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: error = %v, want one containing %q", name, err, tc.want)
+		}
+	}
+	if _, err := Open(context.Background(), filepath.Join(t.TempDir(), "missing"), view); err == nil {
+		t.Error("opening a missing file succeeded")
+	}
+}
+
+func TestEmptyFile(t *testing.T) {
+	view := testView(t, fixedCopybook)
+	set := openSet(t, writeFrames(t, nil), view)
+	for expr, want := range map[string]string{`length`: `0`, `map(.ID)`: `[]`, `[.[]]`: `[]`, `.[0]`: `null`, `add`: `null`} {
+		compiled, _ := query.Compile(expr)
+		got := set.Query(context.Background(), compiled, 10)
+		if got.Err != nil || len(got.Lines) != 1 || got.Lines[0] != want {
+			t.Errorf("%s over an empty set = %v (err %v), want %s", expr, got.Lines, got.Err, want)
+		}
+	}
+}
+
+func TestQueryHonorsCancellation(t *testing.T) {
+	view := testView(t, fixedCopybook)
+	records := make([][]byte, 60000)
+	for i := range records {
+		records[i] = fixedRecord(i)
+	}
+	set := openSet(t, writeFrames(t, records), view)
+	for _, expr := range []string{`.[] | select(.ID == -1)`, `map(.AMOUNT) | add`} {
+		compiled, _ := query.Compile(expr)
+		for _, workers := range []int{1, 4} {
+			Workers = func(int) int { return workers }
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			got := set.Query(ctx, compiled, 10)
+			if !got.Canceled || got.Err != nil {
+				t.Errorf("%s (workers=%d): canceled=%v err=%v, want a cancellation", expr, workers, got.Canceled, got.Err)
+			}
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := Open(ctx, writeFrames(t, records), view); !errors.Is(err, context.Canceled) {
+		t.Errorf("Open with a cancelled context: %v", err)
+	}
+}
+
+// Field access must not decode the rest of the record: that is the entire
+// performance argument for lazy records.
+func TestFieldAccessAllocatesLittle(t *testing.T) {
+	view := testView(t, fixedCopybook)
+	records := make([][]byte, 2000)
+	for i := range records {
+		records[i] = fixedRecord(i)
+	}
+	set := openSet(t, writeFrames(t, records), view)
+	Workers = func(int) int { return 1 }
+	compiled, _ := query.Compile(`.[] | select(.STATUS == "X")`)
+	perRecord := testing.AllocsPerRun(5, func() { set.Query(context.Background(), compiled, 10) }) / float64(len(records))
+	// One record handle and one decoded one-byte string; a full decode of
+	// this layout costs more than twenty allocations.
+	if perRecord > 6 {
+		t.Fatalf("a one-field filter allocates %.1f times per record", perRecord)
+	}
+}
+
+// Reading a leaf of a group, or of one occurrence of a table, must not decode
+// the rest of the group or the table either.
+func TestNestedFieldAccessAllocatesLittle(t *testing.T) {
+	source := "01 WIDE.\n 05 ID PIC 9(6).\n 05 CUSTOMER.\n"
+	for i := range 20 {
+		source += fmt.Sprintf("  10 F%02d PIC X(3).\n", i)
+	}
+	source += "  10 TIER PIC 9(2).\n 05 ITEMS OCCURS 10 TIMES.\n  10 CODE PIC X(4).\n  10 QUANTITY PIC 9(3).\n  10 PRICE PIC 9(5)V99.\n"
+	view := testView(t, source)
+	records := make([][]byte, 2000)
+	for i := range records {
+		records[i] = fmt.Appendf(nil, "%06d%s%02d%s", i, strings.Repeat("abc", 20), i%5, strings.Repeat("CODE0120012345", 10))
+	}
+	set := openSet(t, writeFrames(t, records), view)
+	Workers = func(int) int { return 1 }
+	for expr, limit := range map[string]float64{
+		// The record, the group and the decoded TIER; decoding the group
+		// costs over forty.
+		`.[] | select(.CUSTOMER.TIER == 99)`: 7,
+		// The record, the table, the occurrence and the decoded QUANTITY;
+		// decoding the table costs over sixty.
+		`.[] | select(.ITEMS[1].QUANTITY == 999)`: 10,
+	} {
+		compiled, _ := query.Compile(expr)
+		perRecord := testing.AllocsPerRun(5, func() { set.Query(context.Background(), compiled, 10) }) / float64(len(records))
+		if perRecord > limit {
+			t.Errorf("%s allocates %.1f times per record", expr, perRecord)
+		}
+	}
+}

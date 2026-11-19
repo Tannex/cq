@@ -10,7 +10,7 @@ import (
 
 // Compare the input and jq outputs to the original JSON round trip. In
 // particular, json.Number spelling and duplicate object keys affect aggregates.
-func TestDecodeQueryValueMatchesJSONRoundTrip(t *testing.T) {
+func TestQueryValueMatchesJSONRoundTrip(t *testing.T) {
 	const book = `01 REC.
  05 NAME PIC X(8).
  05 BIG PIC 9(20).
@@ -63,10 +63,13 @@ func TestDecodeQueryValueMatchesJSONRoundTrip(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var msg queryEvalMsg
-			got, ok := decodeQueryValue(ov, tc.data, &msg)
-			if !ok || !reflect.DeepEqual(got, want) {
-				t.Fatalf("decoded query value = %#v, want %#v; status=%+v", got, want, msg)
+			view := ov.Decoder.QueryView()
+			if err := view.Check(tc.data); err != nil {
+				t.Fatal(err)
+			}
+			var got any = view.Value(tc.data)
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("decoded query value = %#v, want %#v", got, want)
 			}
 			for _, expr := range []string{`length`, `unique`, `unique | length`, `map(.NAME) | unique`, `sort`, `group_by(.NAME) | map(length)`, `map(.BIG) | unique`, `map(.BALANCE) | unique`, `map(.DUP) | unique`, `.[]`} {
 				q, err := query.Compile(expr)
@@ -110,12 +113,11 @@ func TestQueryAggregatesPreserveDistinctNumbers(t *testing.T) {
 		{"12345678901234567890", []byte{0x00, 0x00, 0x12, 0x3d}},
 	} {
 		data := append([]byte(tc.big), tc.amount...)
-		var msg queryEvalMsg
-		value, ok := decodeQueryValue(ov, data, &msg)
-		if !ok {
-			t.Fatalf("decode failed: %+v", msg)
+		view := ov.Decoder.QueryView()
+		if err := view.Check(data); err != nil {
+			t.Fatalf("decode failed: %v", err)
 		}
-		values = append(values, value)
+		values = append(values, view.Value(data))
 		decoded, err := ov.Decoder.DecodeDisplay(data)
 		if err != nil {
 			t.Fatal(err)

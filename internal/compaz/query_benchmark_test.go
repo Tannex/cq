@@ -17,7 +17,9 @@ import (
 // The fixture is 192 bytes per record (196 including its frame header): text,
 // display decimals, a 20-digit integer, packed decimal, a group, and an OCCURS
 // group. IDs vary; four regions and a 10% active subset make the query outputs
-// deterministic. The cached-file benchmarks exclude download and UI rendering.
+// deterministic. The benchmarks exclude download and UI rendering, and
+// BenchmarkQueryArrayFile also excludes the one-time record index, which
+// BenchmarkQueryIndex measures on its own.
 const benchmarkQueryCopybook = `01 TRANSACTION-RECORD.
  05 ID PIC 9(8).
  05 NAME PIC X(32).
@@ -100,17 +102,16 @@ func benchmarkQueryFile(b *testing.B, count int) string {
 func BenchmarkDecodeQueryValue(b *testing.B) {
 	ov := benchmarkQueryOverlay(b)
 	data := benchmarkQueryRecord(0)
+	view := ov.Decoder.QueryView()
+	if err := view.Check(data); err != nil {
+		b.Fatal(err)
+	}
 	var value any
-	var msg queryEvalMsg
-	var ok bool
 	b.ReportAllocs()
 	b.SetBytes(int64(len(data)))
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		value, ok = decodeQueryValue(ov, data, &msg)
-		if !ok {
-			b.Fatalf("decode failed: errors=%d lastError=%q", msg.Errors, msg.LastError)
-		}
+		value = view.Value(data)
 	}
 	b.StopTimer()
 	// Query the result to check both shape and preservation of large integers.
@@ -131,11 +132,35 @@ func BenchmarkDecodeQueryValue(b *testing.B) {
 	}
 }
 
-func BenchmarkQueryArrayFile(b *testing.B) {
+// BenchmarkQueryIndex is the first query's extra cost over a new download or
+// a new copybook: mapping the file and locating its decodable records.
+func BenchmarkQueryIndex(b *testing.B) {
 	ov := benchmarkQueryOverlay(b)
-	for _, count := range []int{10_000, 100_000} {
+	for _, count := range []int{100_000, 1_000_000} {
 		b.Run(strconv.Itoa(count), func(b *testing.B) {
 			path := benchmarkQueryFile(b, count)
+			b.ReportAllocs()
+			b.SetBytes(int64(count * 192))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				bulk := newBulkFile(path)
+				set, err := bulk.open(context.Background(), ov)
+				if err != nil || set.Len() != count {
+					b.Fatalf("index: %v", err)
+				}
+				set.release()
+				bulk.drop()
+			}
+		})
+	}
+}
+
+func BenchmarkQueryArrayFile(b *testing.B) {
+	ov := benchmarkQueryOverlay(b)
+	for _, count := range []int{10_000, 100_000, 1_000_000} {
+		b.Run(strconv.Itoa(count), func(b *testing.B) {
+			bulk := newBulkFile(benchmarkQueryFile(b, count))
+			b.Cleanup(bulk.drop)
 			for _, tc := range []struct {
 				name    string
 				expr    string
@@ -156,6 +181,14 @@ func BenchmarkQueryArrayFile(b *testing.B) {
 						const want = `{"AMOUNT":0.00,"BIGID":12345678901234567890,"ID":0,"NAME":"Customer 000000"}`
 						if lines[0] != want || !strings.Contains(lines[len(lines)-1], fmt.Sprintf(`"ID":%d,`, count-10)) {
 							b.Fatalf("projection endpoints = %s / %s", lines[0], lines[len(lines)-1])
+						}
+					},
+				},
+				{
+					name: "nested_select", expr: `.[] | select(.CUSTOMER.TIER == 3 and .ITEMS[1].QUANTITY == 2) | .ID`, matches: count / 5,
+					check: func(b *testing.B, lines []string) {
+						if lines[0] != "3" || lines[len(lines)-1] != strconv.Itoa(count-2) {
+							b.Fatalf("nested select endpoints = %s / %s", lines[0], lines[len(lines)-1])
 						}
 					},
 				},
@@ -195,13 +228,25 @@ func BenchmarkQueryArrayFile(b *testing.B) {
 						}
 					},
 				},
+				{
+					name: "sort_by", expr: `sort_by(.AMOUNT) | .[0:3] | map(.ID)`, matches: 1,
+					check: func(b *testing.B, lines []string) {
+						want := `[0,1,2]` // amounts repeat every 10000 records
+						if count > 10_000 {
+							want = `[0,10000,20000]`
+						}
+						if lines[0] != want {
+							b.Fatalf("lowest amounts = %s, want %s", lines[0], want)
+						}
+					},
+				},
 			} {
 				b.Run(tc.name, func(b *testing.B) {
 					compiled, err := query.Compile(tc.expr)
 					if err != nil {
 						b.Fatal(err)
 					}
-					cmd := evalQueryArrayFile(context.Background(), compiled, ov, path, "benchmark", 1, queryResultCap)
+					cmd := evalQuery(context.Background(), compiled, ov, bulk, "benchmark", 1, queryResultCap)
 					var msg queryEvalMsg
 					b.ReportAllocs()
 					b.SetBytes(int64(count * 192))

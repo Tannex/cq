@@ -1,23 +1,20 @@
 package compaz
 
 import (
-	"bufio"
 	"context"
-	"encoding/binary"
 	"errors"
-	"fmt"
 	"io"
 	"os"
+	"sync"
+	"sync/atomic"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/Tannex/cq/internal/query"
+	"github.com/Tannex/cq/internal/record"
+	"github.com/Tannex/cq/internal/recordset"
 	"github.com/Tannex/cq/internal/zosmf"
 )
-
-// queryBulkMaxRecord mirrors the transport's per-record bound when parsing
-// frames back out of the downloaded file.
-const queryBulkMaxRecord = 16 << 20
 
 type queryBulkMsg struct {
 	Profile    string
@@ -27,8 +24,8 @@ type queryBulkMsg struct {
 }
 
 // startQueryBulkDownload pulls every record of the browsed data set in one
-// record-mode request into a temp file. The query evaluates from that file,
-// so the host is asked exactly once instead of page by page.
+// record-mode request into a temp file. Queries evaluate from that file, so
+// the host is asked exactly once instead of page by page.
 func (m *Model) startQueryBulkDownload(ws *workspace, streamer zosmf.RecordStreamer) tea.Cmd {
 	popup := m.query
 	target := ws.dataSet.Name
@@ -82,62 +79,112 @@ func (m *Model) handleQueryBulk(msg queryBulkMsg) tea.Cmd {
 		return nil
 	}
 	ws.setBulkRecords(msg.Path)
-	return evalQueryArrayFile(popup.ctx, popup.compiled, ws.overlay, msg.Path, ws.profile, popup.generation, popup.resultCap)
+	return evalQuery(popup.ctx, popup.compiled, ws.overlay, ws.bulkRecordsFile, ws.profile, popup.generation, popup.resultCap)
 }
 
-// readFrame reads one four-byte length-prefixed record. io.EOF marks a clean
-// end between frames.
-func readFrame(r *bufio.Reader) ([]byte, error) {
-	var header [4]byte
-	if _, err := io.ReadFull(r, header[:]); err != nil {
-		if errors.Is(err, io.EOF) {
-			return nil, io.EOF
-		}
-		return nil, fmt.Errorf("truncated record frame header: %w", err)
-	}
-	length := int64(binary.BigEndian.Uint32(header[:]))
-	if length > queryBulkMaxRecord {
-		return nil, fmt.Errorf("record frame of %d bytes exceeds the %d byte bound", length, queryBulkMaxRecord)
-	}
-	data := make([]byte, int(length))
-	if _, err := io.ReadFull(r, data); err != nil {
-		return nil, fmt.Errorf("record frame declares %d bytes but is truncated: %w", length, err)
-	}
-	return data, nil
+// bulkFile is a whole-data-set download as queries use it. The file is mapped
+// and its records are indexed against the copybook on first use; every later
+// query over the same overlay starts evaluating immediately.
+//
+// Evaluations run on their own goroutines and may outlive the workspace's
+// interest in the download (a refresh, a new copybook, quit), so the mapped
+// set is reference counted: it is unmapped when the last query using it ends.
+type bulkFile struct {
+	path string
+
+	mu      sync.Mutex
+	dropped bool
+	set     *sharedSet
+	decoder *record.Decoder // the overlay decoder set was indexed for
 }
 
-// evalQueryArrayFile decodes every frame of the downloaded record file and
-// runs the expression once with the whole data set as one JSON array.
-func evalQueryArrayFile(ctx context.Context, compiled *query.Query, ov *overlay, path, profile string, generation uint64, resultCap int) tea.Cmd {
+type sharedSet struct {
+	*recordset.Set
+	refs atomic.Int32
+}
+
+func (s *sharedSet) release() {
+	if s.refs.Add(-1) == 0 {
+		_ = s.Close()
+	}
+}
+
+func newBulkFile(path string) *bulkFile { return &bulkFile{path: path} }
+
+var errBulkDropped = errors.New("the downloaded records are no longer cached")
+
+// open returns the record set for the overlay, indexing the file if this is
+// the first query with that overlay. The caller must release the set.
+func (b *bulkFile) open(ctx context.Context, ov *overlay) (*sharedSet, error) {
+	b.mu.Lock()
+	if b.dropped {
+		b.mu.Unlock()
+		return nil, errBulkDropped
+	}
+	if b.set != nil && b.decoder == ov.Decoder {
+		set := b.set
+		set.refs.Add(1)
+		b.mu.Unlock()
+		return set, nil
+	}
+	b.mu.Unlock()
+
+	// Index outside the lock: it reads the whole file, and drop must never
+	// wait on it from the UI loop.
+	indexed, err := recordset.Open(ctx, b.path, ov.Decoder.QueryView())
+	if err != nil {
+		return nil, err
+	}
+	set := &sharedSet{Set: indexed}
+	set.refs.Store(2) // the cache and the caller
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.dropped {
+		set.refs.Store(1)
+		set.release()
+		return nil, errBulkDropped
+	}
+	if b.set != nil {
+		b.set.release()
+	}
+	b.set, b.decoder = set, ov.Decoder
+	return set, nil
+}
+
+// drop ends the cache's hold on the set. The caller removes the file.
+func (b *bulkFile) drop() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.dropped = true
+	if b.set != nil {
+		b.set.release()
+		b.set, b.decoder = nil, nil
+	}
+}
+
+// evalQuery runs the expression once with the whole downloaded data set as
+// its input array. Records are decoded lazily, member by member, as the
+// expression reads them.
+func evalQuery(ctx context.Context, compiled *query.Query, ov *overlay, bulk *bulkFile, profile string, generation uint64, resultCap int) tea.Cmd {
 	return func() tea.Msg {
 		msg := queryEvalMsg{Profile: profile, Generation: generation}
-		file, err := os.Open(path)
+		set, err := bulk.open(ctx, ov)
 		if err != nil {
-			msg.LastError = err.Error()
-			return msg
-		}
-		defer file.Close()
-		reader := bufio.NewReaderSize(file, 256<<10)
-		var values []any
-		for {
 			if ctx.Err() != nil {
 				msg.Canceled = true
-				return msg
-			}
-			data, err := readFrame(reader)
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			if err != nil {
+			} else {
 				msg.LastError = err.Error()
-				return msg
 			}
-			msg.Evaluated++
-			if value, ok := decodeQueryValue(ov, data, &msg); ok {
-				values = append(values, value)
-			}
+			return msg
 		}
-		runQueryArray(ctx, compiled, values, resultCap, &msg)
+		defer set.release()
+		msg.Evaluated, msg.Errors = set.Frames(), set.Skipped()
+		result := set.Query(ctx, compiled, resultCap)
+		msg.Lines, msg.Matches, msg.Canceled = result.Lines, result.Matches, result.Canceled
+		if result.Err != nil {
+			msg.LastError = result.Err.Error()
+		}
 		return msg
 	}
 }
