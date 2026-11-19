@@ -222,7 +222,7 @@ func TestDSNCopyResolverPrefersEarlierLibrary(t *testing.T) {
 	}
 }
 
-func TestDSNCopyResolverDoesNotWaitForSlowerLaterLibrary(t *testing.T) {
+func TestDSNCopyResolverDoesNotFetchSlowerLaterLibrary(t *testing.T) {
 	transport := &fakeCopybookFetcher{members: map[string]fakeCopybookMember{
 		"HQL.CPY.SRC(ADDRESS)": {data: []byte("05 ADDRESS PIC X(10).\n")},
 		"HQL.COB.SRC(ADDRESS)": {waitForCancel: true},
@@ -235,6 +235,9 @@ func TestDSNCopyResolverDoesNotWaitForSlowerLaterLibrary(t *testing.T) {
 	}
 	if src != "05 ADDRESS PIC X(10).\n" {
 		t.Fatalf("Resolve() = %q, want the member from HQL.CPY.SRC", src)
+	}
+	if got := transport.requestedDSNs(); !slices.Equal(got, []string{"HQL.CPY.SRC(ADDRESS)"}) {
+		t.Fatalf("data set requests = %q, want only the winning library", got)
 	}
 }
 
@@ -293,11 +296,12 @@ func TestRunReportsDataSetErrorBeforeOutput(t *testing.T) {
 
 func TestRunExpandsNestedCopiesThroughSearchPath(t *testing.T) {
 	fixture := configureTestZOSMF(t, map[string]zosmfServerMember{
-		"HQ.COPYLIB(CUSTOMER)": {text: "01 CUSTOMER.\n   COPY DETAILS.\n"},
+		"HQ.COPYLIB(CUSTOMER)": {text: "01 CUSTOMER.\n   COPY DETAILS.\n   COPY TRAILER.\n"},
 		"HQL.COB.SRC(DETAILS)": {text: "05 NAME PIC X(3).\n COPY FLAGS.\n"},
 		"HQL.CPY.SRC(FLAGS)":   {text: "05 FLAG PIC X(1).\n"},
 		"HQL.COB.SRC(FLAGS)":   {text: "05 FLAG PIC X(9).\n"},
-		"HQ.CUSTOMER.DATA":     {binary: []byte("BOBY")},
+		"HQL.CPY.SRC(TRAILER)": {text: "05 TAIL PIC X(1).\n"},
+		"HQ.CUSTOMER.DATA":     {binary: []byte("BOBYZ")},
 	}, "HQL.CPY.SRC", "HQL.COB.SRC")
 	stdout := captureStdout(t)
 
@@ -310,7 +314,7 @@ func TestRunExpandsNestedCopiesThroughSearchPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run() error = %v", err)
 	}
-	if !strings.Contains(got, `"NAME":"BOB"`) || !strings.Contains(got, `"FLAG":"Y"`) {
+	if !strings.Contains(got, `"NAME":"BOB"`) || !strings.Contains(got, `"FLAG":"Y"`) || !strings.Contains(got, `"TAIL":"Z"`) {
 		t.Fatalf("run() output = %s, want nested COPY fields", got)
 	}
 	required := []string{
@@ -319,18 +323,12 @@ func TestRunExpandsNestedCopiesThroughSearchPath(t *testing.T) {
 		"HQL.COB.SRC(DETAILS)",
 		"HQL.CPY.SRC(DETAILS)",
 		"HQL.CPY.SRC(FLAGS)",
+		"HQL.CPY.SRC(TRAILER)",
 	}
 	dsns := fixture.requestedDSNs()
-	for _, dsn := range required {
-		if !slices.Contains(dsns, dsn) {
-			t.Fatalf("data set requests = %q, want them to include %q", dsns, dsn)
-		}
-	}
-	allowed := append(required, "HQL.COB.SRC(FLAGS)")
-	for _, dsn := range dsns {
-		if !slices.Contains(allowed, dsn) {
-			t.Fatalf("data set requests = %q, want only %q", dsns, allowed)
-		}
+	slices.Sort(required)
+	if !slices.Equal(dsns, required) {
+		t.Fatalf("data set requests = %q, want only %q", dsns, required)
 	}
 }
 
