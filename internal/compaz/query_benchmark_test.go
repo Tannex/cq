@@ -220,6 +220,18 @@ func BenchmarkQueryArrayFile(b *testing.B) {
 						}
 					},
 				},
+				{
+					name: "sort_by", expr: `sort_by(.AMOUNT) | .[0:3] | map(.ID)`, matches: 1,
+					check: func(b *testing.B, lines []string) {
+						want := `[0,1,2]` // amounts repeat every 10000 records
+						if count > 10_000 {
+							want = `[0,10000,20000]`
+						}
+						if lines[0] != want {
+							b.Fatalf("lowest amounts = %s, want %s", lines[0], want)
+						}
+					},
+				},
 			} {
 				b.Run(tc.name, func(b *testing.B) {
 					compiled, err := query.Compile(tc.expr)

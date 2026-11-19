@@ -234,6 +234,46 @@ var fixedExpressions = []string{
 	`.[0:2] | map(tostring | length)`, `.[0:3] | map(type)`, `type`, `.[0] | type`, `.[0:2] | reverse | map(.ID)`, `tojson | length`,
 	`.[0] | error`, `.[0] | .[0]`, `.[0] | implode`, `.[0] - 1`, `.NAME`, `.[0] | .NAME.x`, `.[] | .NAME.x`, `.[] | error(.ID)`, `keys | length`,
 	`.["a"]`, `.[0] | has(0)`, `.[0] | join(",")`, `.[0] | @csv`, `ascii_downcase`, `.[0] | test("a")`, `.[] | {(.CUSTOMER): 1}`, `.[true]`,
+	// Staged shapes. The set has 20000 records, so chunks start at ids 0,
+	// 8192 and 16384; errors are placed in late chunks, on chunk edges, and
+	// in two chunks at once with different messages so the earliest has to
+	// win.
+	`map(.ID)`, `map(.ID) | add`, `map(.)`, `map(.) | .[12345].ID`, `map(.ID, .REGION) | .[-4:]`, `map(.ITEMS[] | .CODE) | length`,
+	`map(select(.ID % 997 == 0) | .ID)`, `map(empty)`, `map(.ID) | map(. * 2) | add`, `map(.ID) | limit(3; .[])`, `map(.) | path(.[0])`,
+	`map(if .ID == 17000 then error("late \(.ID)") else .ID end) | length`,
+	`map(if .ID == 17000 then error("second") elif .ID == 9000 then error("first") else .ID end)`,
+	`map(if .ID == 17001 then error({id: .ID}) elif .ID == 9001 then error([.ID]) else .ID end)`,
+	`map(if .ID == 8191 then error("edge") elif .ID == 8192 then error("next") else .ID end)`,
+	`map(if .ID == 9000 then halt else .ID end)`, `map(if .ID == 17000 then error("x") elif .ID == 12000 then halt_error else .ID end)`,
+	`map(if .ID == 3000 then error("early") elif .ID == 17000 then ("late" | halt_error) else .ID end)`,
+	`map(.NAME.x)`, `map(.NAME.x?) | length`, `map((.NAME.x)?) | length`, `map(try .NAME.x catch "c") | unique`,
+	`map(try (if .ID % 6000 == 0 then error("e\(.ID)") else empty end) catch .)`, `map(.ID | tostring | tonumber) | add`,
+	`map(label $f | .ITEMS[] | ., break $f) | length`, `map(first(.ITEMS[])) | length`, `map(limit(0; .ID)) | length`,
+	`map(reduce .ITEMS[] as $i (0; . + $i.QUANTITY)) | max`, `map(path(.ITEMS[0].CODE)) | unique`, `map($ENV | length) | unique`,
+	`map(.ID) | .[] | select(. % 1000 == 0)`, `map(.ID) | error("rest failed \(length)")`,
+	`map(.ID) | .[] | if . == 15000 then error("rest late") else select(. % 2500 == 0) end`, `map(.ID) | .[] | if . == 2000 then halt else . end`,
+	`[.[] | .ID] | add`, `[.[] | select(.STATUS == "A") | .ID] | length`, `[.[] | .AMOUNT]`, `[.[] | .ID, .NAME] | length`,
+	`[.[] | if .ID == 16500 then error("arr") elif .ID == 16499 then error("arr first") else . end] | length`,
+	`[.[] | .ID] | . as [$a, $b] | [$a, $b]`, `[.[] | .ID] | .[] | select(. % 999 == 0)`,
+	`group_by(.ID % 3) | map(length)`, `group_by(.ITEMS[].CODE) | length`, `group_by(empty) | map(length)`, `group_by(.ID % 3, .REGION) | length`,
+	`group_by(if .ID == 17000 then error("g2") elif .ID == 9000 then error("g1") else .REGION end)`,
+	`group_by(if .ID == 12000 then halt else .REGION end)`, `group_by(.REGION) | .[] | .[] | .ID | select(. % 500 == 0)`,
+	`sort_by(.BALANCE) | map(.ID) | .[0:5]`, `sort_by(.BALANCE, .ID) | .[-1].ID`, `sort_by(-.ID) | .[0].ID`, `sort_by(.NAME.x)`,
+	`sort_by(.NAME.x?) | .[0].ID`, `sort_by(.ID) | .[] | .ID | select(. % 3000 == 0)`, `sort_by(.REGION) | first | .ID`,
+	`sort_by(.AMOUNT) | error("rest \(length)")`, `sort_by(if .ID == 19999 then error("last") else .AMOUNT end)`, `sort_by(.) | .[0].ID`,
+	`unique_by(.CUSTOMER.CITY) | map(.ID)`, `unique_by(.ITEMS[].CODE) | length`, `unique_by(if .ID == 19999 then error("u") else .REGION end)`,
+	`min_by(.BALANCE) | .ID`, `max_by(.ID % 7000) | .ID`, `min_by(empty) | .ID`, `max_by(.ITEMS[].QUANTITY) | .ID`, `min_by(.ID) | .ID`,
+	`min_by(if .ID == 8191 then error("edge") else .ID end)`, `max_by(if .ID == 16383 then error("e3") elif .ID == 8192 then error("e2") else .ID end)`,
+	`max_by(if .ID == 9999 then halt_error else .ID end)`, `max_by(try error(.ID) catch .) | .ID`,
+	// Near misses: same parts, but a shape that must not be staged.
+	`def map(f): [.[] | [f]]; map(.ID) | .[0:2]`, `def map(f; g): [.[] | f, g]; map(.ID; 2) | length`, `def f: .ID; map(f) | add`,
+	`.[] as $x | $x.ID | select(. % 5000 == 0)`, `[.[] as $x | $x.ID] | length`, `.[0:5] | map(.ID)`, `{a: map(.ID) | length}`,
+	`first(map(.ID)[])`, `map(.ID)[3]`, `map(.ID)? | length`, `(map(.ID)) | length`, `map(.ID) as $x | $x | length`, `map(.ID), length`,
+	`[.[]] | length`, `[.[]?] | length`, `try map(.NAME.x) catch .`, `label $l | map(.ID) | length`, `reduce map(.ID)[] as $i (0; . + $i)`,
+	`map(.ID) | length, (map(.REGION) | unique)`, `limit(1; group_by(.REGION)) | length`,
+	// The variable that carries the staged values, bound by the user.
+	`. as $__cq_each | map(.ID) | length`, `map(. as $__cq_each | $__cq_each.ID) | add`, `map(.ID) | . as $__cq_each | $__cq_each | length`,
+	`sort_by(.ID) | . as $__cq_each | $__cq_each[0].ID`, `group_by(. as $__cq_each | $__cq_each.REGION) | length`,
 }
 
 func TestSetMatchesFullDecode(t *testing.T) {
@@ -270,6 +310,9 @@ var variableExpressions = []string{
 	`sort_by(.LINES) | .[0:2] | map(.ID)`, `sort | .[-1].ID`, `unique | length`, `.[3] == .[3]`, `[.[1], .[2]] | sort | map(.ID)`,
 	`map(select(.LINES | length == 0)) | length`, `.[] | select(.ID == 20123)`, `.[20000:] | map(.ID) | length`, `min_by(.LINES) | .ID`,
 	`.[] | if .ID == 17001 then error("stop") else empty end`, `reduce .[] as $r ({}; .[$r.KIND] += ($r.LINES | length))`,
+	`map(.ID) | length`, `map(.LINES[].SKU) | unique | length`, `[.[] | .LINES | length] | add`, `sort_by(.CNT, -.ID) | .[0:3] | map(.ID)`,
+	`group_by(.KIND) | map([.[0].KIND, length])`, `unique_by(.LINES | length) | map(.ID)`, `max_by(.LINES | map(.QTY) | add) | .ID`,
+	`map(if .ID == 18000 then error("v2") elif .ID == 10000 then error("v1") else .ID end)`, `sort_by(.LINES[0].QTY) | .[0].ID`,
 }
 
 func TestVariableLengthSetSkipsUndecodableRecords(t *testing.T) {
