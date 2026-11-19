@@ -28,6 +28,11 @@ Changes are marked in the source with `// lazy:` or `// cq:` comments.
   re-parses number tokens on every comparison.
 - **Cancellation** (`execute.go`). The context is polled on entry and every
   256 instructions instead of on every instruction.
+- **Concurrent runs of one compiled query** (`func.go`, `deleteEmpty`). cq
+  evaluates one `Code` on several goroutines. Upstream's `del`/`delpaths`
+  wrote back into every container it walked, including constants shared by
+  all runs of the compiled code, which is a fatal concurrent map write; the
+  fork writes only the containers the deletion copied.
 
 One behavior can differ from upstream: `sort_by` and friends with several
 `nan` keys. jq orders `nan` below everything including itself, so no sort
@@ -42,6 +47,10 @@ order is defined among them; the two sort algorithms settle it differently.
   on native input and on input where every object and array is lazy, and
   requires identical output and identical errors. The upstream module stays
   in `go.mod` for this purpose only.
+- `lazy_sweep_test.go` applies every builtin, at every arity, to lazy values
+  as input, as arguments, and nested inside containers the program builds,
+  again against upstream. A sample runs by default; `CQ_LAZY_SWEEP=1` runs
+  all of it (about 86,000 programs).
 - `internal/recordset` repeats the comparison with real record sets, running
   each query sequentially and on several workers.
 

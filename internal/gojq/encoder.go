@@ -72,7 +72,16 @@ func (e *encoder) encode(v any) {
 	case map[string]any:
 		e.encodeObject(v)
 	case LazyArray: // lazy
-		e.encodeArray(v.Slice(0, v.Len()))
+		// Element by element: an error message previews only the first 30
+		// bytes of a value, and the value may be a whole data set.
+		e.w.WriteByte('[')
+		for i := range v.Len() {
+			if i > 0 {
+				e.w.WriteByte(',')
+			}
+			e.encode(v.At(i))
+		}
+		e.w.WriteByte(']')
 	case LazyObject: // lazy
 		e.encodeObject(v.Map())
 	default:

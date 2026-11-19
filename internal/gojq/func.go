@@ -1430,13 +1430,27 @@ func mergeSortOrder(order, buffer []int32, compare func(i, j int32) int, depth i
 	mid := n / 2
 	if depth > 0 && n >= mergeSortParallelMin {
 		var wg sync.WaitGroup
+		var fault any
 		wg.Add(1)
 		go func() {
-			defer wg.Done()
+			// cq: a panic in compare (a lazy value failing to decode) must
+			// reach the caller's goroutine, where upstream's sort raised it
+			// and where callers recover; unrecovered here it ends the program.
+			defer func() {
+				fault = recover()
+				wg.Done()
+			}()
 			mergeSortOrder(order[:mid], buffer[:mid], compare, depth-1)
 		}()
-		mergeSortOrder(order[mid:], buffer[mid:], compare, depth-1)
-		wg.Wait()
+		func() {
+			// Wait even when this half panics: the other goroutine must not
+			// outlive the sort, it reads values the caller may release.
+			defer wg.Wait()
+			mergeSortOrder(order[mid:], buffer[mid:], compare, depth-1)
+		}()
+		if fault != nil {
+			panic(fault)
+		}
 	} else {
 		mergeSortOrder(order[:mid], buffer[:mid], compare, 0)
 		mergeSortOrder(order[mid:], buffer[mid:], compare, 0)
@@ -1710,7 +1724,7 @@ func delpaths(v, p any, a allocator) any {
 	var err error
 	u := v
 	for _, q := range paths {
-		path, ok := q.([]any)
+		path, ok := unlazyArray(q).([]any) // lazy: a path may be a lazy array
 		if !ok {
 			return &func1WrapError{"delpaths", v, p, &expectedArrayError{q}}
 		}
@@ -1727,7 +1741,8 @@ func update(v any, path []any, n any, a allocator) (any, error) {
 		return n, nil
 	}
 	v = unlazy(v) // lazy
-	switch p := path[0].(type) {
+	// lazy: a slice path element ({"start":..,"end":..}) may be a lazy object.
+	switch p := unlazy(path[0]).(type) {
 	case string:
 		switch v := v.(type) {
 		case nil:
@@ -1907,33 +1922,57 @@ func updateArraySlice(v []any, m map[string]any, path []any, n any, a allocator)
 	}
 }
 
+// cq: deleteEmpty writes back only the containers that held a deletion mark.
+// Upstream rewrote every map and array it walked, including ones the update
+// left shared with the input or with the compiled program's constants; with
+// one compiled query evaluated on several goroutines that is a concurrent
+// map write, which the runtime treats as fatal. Containers holding marks
+// were copied (or allocated) by this very update, so writing them is safe.
 func deleteEmpty(v any) any {
+	v, _ = deleteEmptyChanged(v)
+	return v
+}
+
+func deleteEmptyChanged(v any) (any, bool) {
 	switch v := v.(type) {
 	case struct{}:
-		return nil
+		return nil, true
 	case map[string]any:
+		var changed bool
 		for k, w := range v {
 			if w == struct{}{} {
 				delete(v, k)
-			} else {
-				v[k] = deleteEmpty(w)
+				changed = true
+			} else if u, ok := deleteEmptyChanged(w); ok {
+				v[k] = u
+				changed = true
 			}
 		}
-		return v
+		return v, changed
 	case []any:
 		var j int
-		for _, w := range v {
-			if w != struct{}{} {
-				v[j] = deleteEmpty(w)
-				j++
+		var changed bool
+		for i, w := range v {
+			if w == struct{}{} {
+				changed = true
+				continue
 			}
+			u, ok := deleteEmptyChanged(w)
+			if ok || i != j {
+				v[j] = u
+				changed = true
+			}
+			j++
+		}
+		if !changed {
+			return v, false
 		}
 		for i := j; i < len(v); i++ {
 			v[i] = nil
 		}
-		return v[:j]
+		return v[:j], true
 	default:
-		return v
+		return v, false
 	}
 }
 
@@ -2246,7 +2285,7 @@ func funcCaptures(v any) any {
 	}
 	w := make(map[string]any, len(captures))
 	for _, capture := range captures {
-		if capture, ok := capture.(map[string]any); ok {
+		if capture, ok := unlazy(capture).(map[string]any); ok { // lazy
 			if name, ok := capture["name"].(string); ok {
 				w[name] = capture["string"]
 			}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"math/rand/v2"
 	"reflect"
+	"runtime"
 	"sort"
 	"testing"
 )
@@ -64,5 +65,28 @@ func TestSortKeysCompareLikeCompare(t *testing.T) {
 	}
 	if untouched := []any{"a", 1, nil}; &sortKeys(untouched)[0] != &untouched[0] {
 		t.Error("sortKeys copied keys that needed no preparing")
+	}
+}
+
+// A comparator that panics on one of the parallel halves (a lazy value that
+// fails to decode, say) must raise the panic in the caller's goroutine, as
+// upstream's sort.SliceStable did, so that callers can recover from it. On a
+// worker goroutine it would end the process.
+func TestStableOrderPanicReachesCaller(t *testing.T) {
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(8))
+	for _, bad := range []int32{0, 99_999} { // first half (worker goroutine), second half (caller)
+		func() {
+			defer func() {
+				if r := recover(); r != "bad key" {
+					t.Errorf("bad=%d: recovered %v, want the comparator's panic", bad, r)
+				}
+			}()
+			stableOrder(100_000, func(i, j int32) int {
+				if i == bad || j == bad {
+					panic("bad key")
+				}
+				return int(j - i)
+			})
+		}()
 	}
 }
