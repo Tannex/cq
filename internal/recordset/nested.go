@@ -21,8 +21,8 @@ type node struct {
 	set    *Set
 	offset int64
 	shape  *record.Shape
-	base   int32
-	count  int32 // occurrences, for a table
+	base   int
+	count  int // occurrences, for a table
 }
 
 func (n *node) bytes() []byte { return n.set.recordAt(n.offset) }
@@ -47,9 +47,9 @@ var (
 func (s *Set) member(offset int64, rec []byte, m *record.Shape, base int) any {
 	switch {
 	case m.Table():
-		return &Table{node{set: s, offset: offset, shape: m, base: int32(base), count: int32(s.view.Count(rec, m))}}
+		return &Table{node{set: s, offset: offset, shape: m, base: base, count: s.view.Count(rec, m)}}
 	case m.Group():
-		return &Group{node{set: s, offset: offset, shape: m, base: int32(base)}}
+		return &Group{node{set: s, offset: offset, shape: m, base: base}}
 	default:
 		return s.view.Element(rec, m, base)
 	}
@@ -61,12 +61,12 @@ func (g *Group) Get(key string) any {
 	if m == nil {
 		return nil
 	}
-	return g.set.member(g.offset, g.bytes(), m, m.Base(int(g.base)))
+	return g.set.member(g.offset, g.bytes(), m, m.Base(g.base))
 }
 
 // Map implements gojq.LazyObject: it decodes the whole group.
 func (g *Group) Map() map[string]any {
-	return g.set.view.Element(g.bytes(), g.shape, int(g.base)).(map[string]any)
+	return g.set.view.Element(g.bytes(), g.shape, g.base).(map[string]any)
 }
 
 // CompareLazy implements gojq.LazyComparer for two occurrences of the same
@@ -76,17 +76,17 @@ func (g *Group) CompareLazy(other any) (int, bool) {
 	if !ok || o.shape != g.shape {
 		return 0, false
 	}
-	return g.set.compareOne(g.shape, g.bytes(), int(g.base), o.bytes(), int(o.base)), true
+	return g.set.compareOne(g.shape, g.bytes(), g.base, o.bytes(), o.base), true
 }
 
 // Len implements gojq.LazyArray.
-func (t *Table) Len() int { return int(t.count) }
+func (t *Table) Len() int { return t.count }
 
 // At implements gojq.LazyArray.
 func (t *Table) At(i int) any {
-	base := int(t.base) + i*t.shape.Field.Length
+	base := t.base + i*t.shape.Field.Length
 	if t.shape.Group() {
-		return &Group{node{set: t.set, offset: t.offset, shape: t.shape, base: int32(base)}}
+		return &Group{node{set: t.set, offset: t.offset, shape: t.shape, base: base}}
 	}
 	return t.set.view.Element(t.bytes(), t.shape, base)
 }
@@ -96,7 +96,7 @@ func (t *Table) Slice(start, end int) []any {
 	rec, view := t.bytes(), t.set.view
 	elements := make([]any, end-start)
 	for i := range elements {
-		elements[i] = view.Element(rec, t.shape, int(t.base)+(start+i)*t.shape.Field.Length)
+		elements[i] = view.Element(rec, t.shape, t.base+(start+i)*t.shape.Field.Length)
 	}
 	return elements
 }
@@ -108,7 +108,7 @@ func (t *Table) CompareLazy(other any) (int, bool) {
 	if !ok || o.shape != t.shape {
 		return 0, false
 	}
-	return t.set.compareTable(t.shape, t.bytes(), int(t.base), int(t.count), o.bytes(), int(o.base), int(o.count)), true
+	return t.set.compareTable(t.shape, t.bytes(), t.base, t.count, o.bytes(), o.base, o.count), true
 }
 
 // The comparisons below order members as gojq.Compare orders their decoded
