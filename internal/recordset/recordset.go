@@ -179,19 +179,22 @@ var (
 )
 
 // Bytes returns the record's raw data. It aliases the mapping.
-func (r *Record) Bytes() []byte {
-	data := r.set.data
-	length := int64(binary.BigEndian.Uint32(data[r.offset-frameHeader:]))
-	return data[r.offset : r.offset+length]
+func (r *Record) Bytes() []byte { return r.set.recordAt(r.offset) }
+
+// recordAt returns the data of the record at offset.
+func (s *Set) recordAt(offset int64) []byte {
+	length := int64(binary.BigEndian.Uint32(s.data[offset-frameHeader:]))
+	return s.data[offset : offset+length]
 }
 
-// Get implements gojq.LazyObject: it decodes the one member asked for.
+// Get implements gojq.LazyObject: it decodes the one member asked for, or
+// for a group or a table, nothing until a member of it is read.
 func (r *Record) Get(key string) any {
-	field := r.set.view.Member(key)
-	if field == nil {
+	m := r.set.view.Member(key)
+	if m == nil {
 		return nil
 	}
-	return r.set.view.Field(r.Bytes(), field)
+	return r.set.member(r.offset, r.Bytes(), m, m.Base(0))
 }
 
 // Map implements gojq.LazyObject: it decodes the whole record.
@@ -213,14 +216,5 @@ func (r *Record) CompareLazy(other any) (int, bool) {
 	if bytes.Equal(left, right) {
 		return 0, true
 	}
-	view := r.set.view
-	for _, field := range view.Members() {
-		if start, end, fixed := view.Span(field); fixed && bytes.Equal(left[start:end], right[start:end]) {
-			continue
-		}
-		if order := gojq.Compare(view.Field(left, field), view.Field(right, field)); order != 0 {
-			return order, true
-		}
-	}
-	return 0, true
+	return r.set.compareMembers(r.set.view.Root(), left, 0, right, 0), true
 }

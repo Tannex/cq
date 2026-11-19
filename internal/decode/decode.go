@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"golang.org/x/text/encoding/charmap"
 )
@@ -27,6 +28,11 @@ type Charmap struct {
 	name string
 	to   [256]rune
 	from map[rune]byte
+
+	// display is the rune DisplayString emits for each byte, as UTF-8
+	// encoding leaves it: control characters made visible and runes that
+	// cannot be encoded replaced, so CompareDisplay needs no decoding.
+	display [256]rune
 }
 
 // Name returns the canonical name of the codepage, e.g. "cp277".
@@ -34,6 +40,12 @@ func (c *Charmap) Name() string { return c.name }
 
 func newCharmap(name string, to [256]rune) *Charmap {
 	c := &Charmap{name: name, to: to}
+	for b, r := range to {
+		if r = displayRune(r); !utf8.ValidRune(r) {
+			r = utf8.RuneError
+		}
+		c.display[b] = r
+	}
 	c.from = make(map[rune]byte, 256)
 	for b, r := range to {
 		if _, dup := c.from[r]; !dup { // first mapping wins on duplicates
@@ -175,6 +187,41 @@ func DisplayString(b []byte, cm *Charmap) string {
 	}
 	return sb.String()
 }
+
+// CompareDisplay orders two text fields as their DisplayString decodings
+// order as Go strings, without decoding them. Every
+// byte decodes to exactly one rune and UTF-8 preserves code point order, so
+// comparing the runes of the untrimmed parts, then their lengths, is
+// comparing the decoded strings byte by byte.
+func CompareDisplay(a, b []byte, cm *Charmap) int {
+	endA, endB := len(a), len(b)
+	for endA > 0 && cm.to[a[endA-1]] == ' ' {
+		endA--
+	}
+	for endB > 0 && cm.to[b[endB-1]] == ' ' {
+		endB--
+	}
+	for i := range min(endA, endB) {
+		if ra, rb := cm.display[a[i]], cm.display[b[i]]; ra != rb {
+			if ra < rb {
+				return -1
+			}
+			return 1
+		}
+	}
+	switch {
+	case endA < endB:
+		return -1
+	case endA > endB:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// Rune returns the rune byte b decodes to, before any trimming or display
+// substitution.
+func (c *Charmap) Rune(b byte) rune { return c.to[b] }
 
 // DisplayBytes decodes a complete raw record without trimming fixed-width
 // padding. LOW-VALUE and decoded control characters are rendered visibly so a

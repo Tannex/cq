@@ -185,6 +185,14 @@ func BenchmarkQueryArrayFile(b *testing.B) {
 					},
 				},
 				{
+					name: "nested_select", expr: `.[] | select(.CUSTOMER.TIER == 3 and .ITEMS[1].QUANTITY == 2) | .ID`, matches: count / 5,
+					check: func(b *testing.B, lines []string) {
+						if lines[0] != "3" || lines[len(lines)-1] != strconv.Itoa(count-2) {
+							b.Fatalf("nested select endpoints = %s / %s", lines[0], lines[len(lines)-1])
+						}
+					},
+				},
+				{
 					name: "whole_records", expr: `.[]`, matches: count,
 					check: func(b *testing.B, lines []string) {
 						if !strings.Contains(lines[0], `"BIGID":12345678901234567890,`) ||

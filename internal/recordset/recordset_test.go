@@ -274,6 +274,39 @@ var fixedExpressions = []string{
 	// The variable that carries the staged values, bound by the user.
 	`. as $__cq_each | map(.ID) | length`, `map(. as $__cq_each | $__cq_each.ID) | add`, `map(.ID) | . as $__cq_each | $__cq_each | length`,
 	`sort_by(.ID) | . as $__cq_each | $__cq_each[0].ID`, `group_by(. as $__cq_each | $__cq_each.REGION) | length`,
+	// Groups and OCCURS tables below a record, in every role.
+	`.[] | select(.ID % 997 == 0) | .CUSTOMER`, `.[] | select(.ID % 997 == 0) | .ITEMS`, `.[] | select(.ID % 997 == 0) | .ITEMS[1]`,
+	`.[] | select(.ID % 997 == 0) | [.ITEMS[-1].CODE, .ITEMS[-2].QUANTITY, .ITEMS[-3], .ITEMS[2], .ITEMS[5].CODE, .CUSTOMER.MISSING]`,
+	`.[] | select(.ID % 997 == 0) | [.ITEMS[1:], .ITEMS[:1], .ITEMS[-1:], .ITEMS[5:9], .ITEMS[0:2]]`,
+	`.[] | select(.ID % 997 == 0) | [.ITEMS[] | .CODE], [.CUSTOMER[]], [.ITEMS[0][]]`,
+	`.[] | select(.ID % 997 == 0) | [(.CUSTOMER | length), (.ITEMS | length), (.ITEMS[0] | length), (.ITEMS[0].CODE | length)]`,
+	`.[] | select(.ID % 997 == 0) | [(.CUSTOMER | keys), (.ITEMS | keys), (.ITEMS[1] | keys)]`,
+	`.[] | select(.ID % 997 == 0) | [(.CUSTOMER | has("TIER")), (.CUSTOMER | has("X")), (.ITEMS | has(1)), (.ITEMS | has(2)), (.ITEMS[0] | has("CODE"))]`,
+	`.[] | select(.ID % 997 == 0) | [(.CUSTOMER | to_entries), (.ITEMS | to_entries | map(.key)), (.ITEMS[1] | to_entries)]`,
+	`.[] | select(.ID % 997 == 0) | [(.CUSTOMER | type), (.ITEMS | type), (.ITEMS[0] | type), (.ITEMS[0].QUANTITY | type)]`,
+	`.[] | select(.ID % 997 == 0) | [.CUSTOMER == .CUSTOMER, .ITEMS[0] == .ITEMS[1], .ITEMS[0] < .ITEMS[1], .ITEMS == .ITEMS, .ITEMS[0] == .CUSTOMER, .CUSTOMER < .ITEMS]`,
+	`.[] | select(.ID % 997 == 0) | [.CUSTOMER == {CITY: .CUSTOMER.CITY, TIER: .CUSTOMER.TIER}, .ITEMS == [.ITEMS[0], .ITEMS[1]], .ITEMS[0] != {}, .CUSTOMER > null]`,
+	`[.[3].CUSTOMER == .[5003].CUSTOMER, .[3].ITEMS == .[5003].ITEMS, .[3].CUSTOMER < .[4].CUSTOMER, .[3].ITEMS[1] > .[4].ITEMS[0], .[7].ITEMS < .[8].ITEMS, .[9].ITEMS[0] == .[10].ITEMS[1]]`,
+	`.[] | select(.ITEMS[0].CODE == .ITEMS[1].CODE or .ITEMS[0] == .ITEMS[1]) | .ID`, `.[] | select(.ITEMS[1].QUANTITY == 2 * .ITEMS[0].QUANTITY) | .ID`,
+	`map(.CUSTOMER) | unique | length`, `map(.ITEMS) | unique | length`, `map(.ITEMS[]) | unique | length`, `map(.ITEMS[0]) | sort | .[0:3]`,
+	`sort_by(.ITEMS) | .[0:3] | map(.ID)`, `sort_by(.CUSTOMER, .ID) | .[-3:] | map(.ID)`, `sort_by(.ITEMS[1]) | .[-3:] | map(.ID)`, `sort_by(.CUSTOMER, .ITEMS) | .[0:3] | map(.ID)`,
+	`group_by(.CUSTOMER) | map([.[0].CUSTOMER, length]) | .[0:5]`, `group_by(.ITEMS[1]) | length`, `group_by(.ITEMS) | map(length) | max`,
+	`unique_by(.ITEMS) | length`, `unique_by(.CUSTOMER) | map(.CUSTOMER)`, `min_by(.ITEMS) | .ID`, `max_by(.CUSTOMER) | .ID`, `min_by(.ITEMS[1]) | .ID`, `max_by(.ITEMS) | .ITEMS`,
+	`map(.ITEMS) | sort | .[0:2]`, `map(.CUSTOMER) | max`, `map(.ITEMS) | min`, `sort | .[-2:] | map(.ID)`, `unique | .[0:2] | map(.ID)`, `.[0:50] | sort | map(.ID)`, `.[0:6000] | unique | length`,
+	`[.[0:3][] | .ITEMS] | flatten | length`, `[.[0:3][] | .ITEMS] | flatten(1) | map(.CODE)`, `[.[0:2][] | .ITEMS] | transpose`, `[.[0:3][] | .ITEMS] | add`, `[.[0:3][] | .CUSTOMER] | add`, `.[0].ITEMS | add`,
+	`.[0].CUSTOMER | contains({CITY: "Oslo"})`, `.[0].ITEMS | contains([{CODE: "IT00"}])`, `[.[0:3][] | .ITEMS | inside([{CODE: "IT01", QUANTITY: 1}, {CODE: "IT00", QUANTITY: 0}, {CODE: "IT02", QUANTITY: 4}])]`,
+	`.[1] | [paths]`, `.[1] | [paths(type == "number")]`, `.[1].ITEMS | [paths]`, `path(.[1].ITEMS[1].QUANTITY)`, `[path(.[1].ITEMS[])]`, `[path(.[1].CUSTOMER[])]`, `[path(.[1] | ..)] | length`, `[path(.[1].ITEMS[1:][0])]`,
+	`getpath([1, "ITEMS", 0])`, `getpath([1, "CUSTOMER", "TIER"])`, `getpath([1, "ITEMS", 7, "CODE"])`, `getpath([1, "ITEMS", -1])`, `[.[1] | getpath(["ITEMS", 0, "CODE"], ["CUSTOMER"])]`,
+	`.[1] | setpath(["ITEMS", 1, "QUANTITY"]; 7) | .ITEMS`, `.[1] | setpath(["CUSTOMER", "NEW"]; 1) | .CUSTOMER`, `.[1] | del(.ITEMS[0]) | .ITEMS`, `.[1] | del(.CUSTOMER.CITY)`, `.[1] | delpaths([["ITEMS", 1, "CODE"]]) | .ITEMS`,
+	`.[1] | .ITEMS[1].QUANTITY |= . + 1 | .ITEMS`, `.[1] | .CUSTOMER.TIER += 10 | .CUSTOMER`, `.[1] | .ITEMS |= map(.CODE) | .ITEMS`, `.[0:2] | map(.ITEMS[] |= .QUANTITY) | map(.ITEMS)`, `.[1] | .ITEMS[5] = 1 | .ITEMS | length`,
+	`.[1] | .ITEMS[0] |= with_entries(.key |= ascii_downcase) | .ITEMS`, `.[1:3] | map(.CUSTOMER |= keys)`, `.[1] | to_entries | map(select(.value | type == "object")) | from_entries`,
+	`.[1] | [(.CUSTOMER | tojson), (.ITEMS | tostring), (.ITEMS[0] | @json), (.ITEMS | tojson | fromjson == .), (.CUSTOMER | @text)]`,
+	`.[1] | .. | numbers`, `.[1].ITEMS | .. | strings`, `.[1] | [paths(scalars)] | length`, `.[1].ITEMS | tostream | select(length == 2)`, `.[1] | [.. | objects | length]`,
+	`.[1].CUSTOMER | with_entries(.value |= tostring)`, `.[1].ITEMS | map(to_entries)`, `.[1].ITEMS | first, last`, `.[1].ITEMS | reverse`, `.[1].ITEMS | index(.[1])`, `.[1].ITEMS | any(.QUANTITY > 0)`, `.[1] | .ITEMS | indices(.[0])`,
+	`.[1] | {(.CUSTOMER.CITY): .ITEMS[0]}`, `.[1] | [.CUSTOMER, .ITEMS] | tojson`, `.[1].CUSTOMER * {TIER: 0}`, `.[1].ITEMS - [.[1].ITEMS[0]]`, `.[1].ITEMS + .[2].ITEMS | length`, `.[1].CUSTOMER + .[2].CUSTOMER`,
+	`.[1].CUSTOMER[0]`, `.[1].ITEMS["CODE"]`, `.[1].ITEMS.CODE`, `.[1].ITEMS[0][0]`, `.[1].CUSTOMER.TIER.X`, `.[1].CUSTOMER | .[1:2]`, `.[1].CUSTOMER - 1`, `.[1].ITEMS | implode`,
+	`.[1].CUSTOMER | join(",")`, `.[1].ITEMS | @csv`, `.[1].ITEMS | .[true]`, `.[1].CUSTOMER | has(0)`, `.[1].ITEMS | has("a")`, `.[] | .ITEMS | error`, `.[1].CUSTOMER | error`, `.[1].ITEMS | test("a")`,
+	`.[1].ITEMS[0] | ltrimstr("x")`, `.[1].ITEMS | .[{}]`, `.[1].CUSTOMER | keys[0] as $k | .[$k] | .[0]`, `.[] | .CUSTOMER | .[.TIER]`, `.[] | .ITEMS[.ID]`,
 }
 
 func TestSetMatchesFullDecode(t *testing.T) {
@@ -313,6 +346,15 @@ var variableExpressions = []string{
 	`map(.ID) | length`, `map(.LINES[].SKU) | unique | length`, `[.[] | .LINES | length] | add`, `sort_by(.CNT, -.ID) | .[0:3] | map(.ID)`,
 	`group_by(.KIND) | map([.[0].KIND, length])`, `unique_by(.LINES | length) | map(.ID)`, `max_by(.LINES | map(.QTY) | add) | .ID`,
 	`map(if .ID == 18000 then error("v2") elif .ID == 10000 then error("v1") else .ID end)`, `sort_by(.LINES[0].QTY) | .[0].ID`,
+	// The DEPENDING ON table below a record, in every role.
+	`.[] | select(.ID % 991 == 0) | [.LINES, (.LINES | length), .LINES[-1], .LINES[0].SKU, .LINES[3], .LINES[1:], .LINES[-5]]`,
+	`.[] | select(.ID % 991 == 0) | [(.LINES | keys), (.LINES | has(2)), (.LINES | type), (.LINES | to_entries | length), (.LINES[0] | keys?)]`,
+	`.[] | select(.CNT > 0 and .ID % 499 == 0) | [.LINES[0] == .LINES[-1], .LINES[0] < .LINES[-1], (.LINES[-1] | length), [.LINES[][]]]`,
+	`[.[5].LINES == .[9].LINES, .[5].LINES < .[6].LINES, .[3].LINES > .[7].LINES, .[4].LINES == [], .[1].LINES == .[5].LINES]`,
+	`.[] | select(.LINES[0] == .LINES[1]) | .ID`, `.[] | select(.LINES[-1].QTY == 3) | .LINES[0].SKU`,
+	`group_by(.LINES) | length`, `sort_by(.LINES[0]) | .[0:3] | map(.ID)`, `unique_by(.LINES[-1]) | length`, `max_by(.LINES) | .ID`, `map(.LINES) | unique | length`, `[.[] | .LINES[]] | unique | length`,
+	`.[3] | .LINES |= map(.QTY)`, `.[3] | del(.LINES[0])`, `.[3] | [paths]`, `getpath([3, "LINES", 0, "SKU"])`, `.[3].LINES | tojson`, `[.[0:5][] | .LINES] | flatten | length`,
+	`[.[0:9][] | .LINES] | add | length`, `.[3].LINES | contains([{SKU: "S03"}])`, `.[3].LINES["x"]`, `.[3].LINES[0][0]`, `.[3].LINES.SKU`, `.[4].LINES[0]`, `.[4].LINES | first`,
 }
 
 func TestVariableLengthSetSkipsUndecodableRecords(t *testing.T) {
@@ -442,5 +484,36 @@ func TestFieldAccessAllocatesLittle(t *testing.T) {
 	// this layout costs more than twenty allocations.
 	if perRecord > 6 {
 		t.Fatalf("a one-field filter allocates %.1f times per record", perRecord)
+	}
+}
+
+// Reading a leaf of a group, or of one occurrence of a table, must not decode
+// the rest of the group or the table either.
+func TestNestedFieldAccessAllocatesLittle(t *testing.T) {
+	source := "01 WIDE.\n 05 ID PIC 9(6).\n 05 CUSTOMER.\n"
+	for i := range 20 {
+		source += fmt.Sprintf("  10 F%02d PIC X(3).\n", i)
+	}
+	source += "  10 TIER PIC 9(2).\n 05 ITEMS OCCURS 10 TIMES.\n  10 CODE PIC X(4).\n  10 QUANTITY PIC 9(3).\n  10 PRICE PIC 9(5)V99.\n"
+	view := testView(t, source)
+	records := make([][]byte, 2000)
+	for i := range records {
+		records[i] = fmt.Appendf(nil, "%06d%s%02d%s", i, strings.Repeat("abc", 20), i%5, strings.Repeat("CODE0120012345", 10))
+	}
+	set := openSet(t, writeFrames(t, records), view)
+	Workers = func(int) int { return 1 }
+	for expr, limit := range map[string]float64{
+		// The record, the group and the decoded TIER; decoding the group
+		// costs over forty.
+		`.[] | select(.CUSTOMER.TIER == 99)`: 7,
+		// The record, the table, the occurrence and the decoded QUANTITY;
+		// decoding the table costs over sixty.
+		`.[] | select(.ITEMS[1].QUANTITY == 999)`: 10,
+	} {
+		compiled, _ := query.Compile(expr)
+		perRecord := testing.AllocsPerRun(5, func() { set.Query(context.Background(), compiled, 10) }) / float64(len(records))
+		if perRecord > limit {
+			t.Errorf("%s allocates %.1f times per record", expr, perRecord)
+		}
 	}
 }
